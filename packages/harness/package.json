@@ -1,0 +1,28 @@
+{
+  "name": "@actor0/harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json --tsBuildInfoFile dist/.tsbuildinfo",
+    "prepack": "node -e \"require('fs').rmSync('dist/.tsbuildinfo',{force:true})\"",
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.20",
+    "typescript": "^5.9"
+  }
+}

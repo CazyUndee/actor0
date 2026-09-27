@@ -1,0 +1,12 @@
+/node_modules/
+/target/
+/apps/web/.next/
+/packages/harness/dist/
+/coverage/
+.env
+.env.*
+!.env.example
+.boundary-pattern
+*.log
+*.tsbuildinfo
+.DS_Store

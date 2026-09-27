@@ -1,0 +1,24 @@
+{
+  "name": "actor0",
+  "version": "0.1.0",
+  "private": false,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run typecheck && npm --workspace @actor0/harness run build",
+    "typecheck": "npm --workspace @actor0/harness run typecheck",
+    "test": "npm --workspace @actor0/harness run test",
+    "lint": "eslint .",
+    "check:boundaries": "bash scripts/check-boundaries.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "eslint": "^9",
+    "tsx": "^4.20",
+    "typescript": "^5.9"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
