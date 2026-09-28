@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAnswerFilter } from "./answer-filter.js";
-import { parseToolCallBlock } from "./tool-call-block.js";
+import { parseToolCallBlock, scanJsonObjects } from "./tool-call-block.js";
 
 const TOOLS = ["set_title", "search", "fetch_page", "save_note"];
 
@@ -182,4 +182,127 @@ test("a code block the user asked for is never mistaken for a call", () => {
   const { answer, calls } = run(inline, inline.length);
   assert.deepEqual(calls, []);
   assert.equal(answer, inline);
+});
+
+// --- <tool_calls> envelopes -------------------------------------------------
+//
+// The shape a proxied endpoint's own system prompt teaches. The same object
+// body, a different envelope: still protocol, still all-or-nothing.
+
+const ENVELOPE =
+  '<tool_calls>\n{"type": "tool_call", "name": "set_title", "arguments": {"title": "How IPS Panels Work"}}\n</tool_calls>\n';
+
+test("a <tool_calls> envelope is executed and never shown", () => {
+  const { answer, calls } = run("The answer is 42.\n" + ENVELOPE, 6);
+  assert.deepEqual(calls, [{ name: "set_title", args: { title: "How IPS Panels Work" } }]);
+  assert.equal(answer.trimEnd(), "The answer is 42.");
+});
+
+test("an envelope split across deltas leaks nothing", () => {
+  const filter = createAnswerFilter(TOOLS);
+  let answer = filter.push("The answer is 42.\n").text;
+  let calls = 0;
+  const collect = (chunk: ReturnType<typeof filter.push>) => {
+    answer += chunk.text;
+    calls += chunk.toolCalls.length;
+  };
+  collect(filter.push("<tool_"));
+  collect(filter.push('calls>\n{"type": "tool_call", "name": "search", "arg'));
+  collect(filter.push('uments": {"query": "x"}}\n</tool_'));
+  collect(filter.push("calls>"));
+  collect(filter.flush());
+  assert.equal(answer.trimEnd(), "The answer is 42.");
+  assert.equal(calls, 1);
+});
+
+test("one envelope can carry several calls", () => {
+  const env =
+    "<tool_calls>\n" +
+    '{"type": "tool_call", "name": "search", "arguments": {"query": "a"}}\n' +
+    '{"type": "tool_call", "name": "set_title", "arguments": {"title": "T"}}\n' +
+    "</tool_calls>\n";
+  const { answer, calls } = run("Working.\n" + env, 13);
+  assert.deepEqual(calls, [
+    { name: "search", args: { query: "a" } },
+    { name: "set_title", args: { title: "T" } },
+  ]);
+  assert.equal(answer.trimEnd(), "Working.");
+});
+
+test("an envelope is all-or-nothing: one unoffered name shows the whole thing", () => {
+  // This is the real-world case — an endpoint that injects its own system
+  // prompt teaches a tool vocabulary this request never offered. Half
+  // executing that would silently drop the user's other intent.
+  const env =
+    "<tool_calls>\n" +
+    '{"type": "tool_call", "name": "set_title", "arguments": {"title": "T"}}\n' +
+    '{"type": "tool_call", "name": "search_memory", "arguments": {}}\n' +
+    "</tool_calls>\n";
+  const { answer, calls } = run(env, 7);
+  assert.deepEqual(calls, []);
+  assert.equal(answer, env);
+});
+
+test("an unclosed <tool_calls> is released as text, never executed", () => {
+  const truncated = '<tool_calls>\n{"type": "tool_call", "name": "search", "arguments": {}}\n';
+  const { answer, calls } = run(truncated, 11);
+  assert.deepEqual(calls, []);
+  assert.equal(answer, truncated);
+});
+
+test("a pathologically long unclosed envelope is released", () => {
+  const filter = createAnswerFilter(TOOLS);
+  let answer = filter.push("<tool_calls>\n{\"pad\": \"").text;
+  answer += filter.push("x".repeat(9_000)).text;
+  answer += filter.push('"}\n').text;
+  answer += filter.flush().text;
+  assert.ok(answer.includes('{"pad"'), "the envelope must come back as text");
+});
+
+test("braces inside a string argument do not end the object scan", () => {
+  const env =
+    '<tool_calls>\n{"type": "tool_call", "name": "set_title", "arguments": {"title": "a } b {"}}\n</tool_calls>\n';
+  const { answer, calls } = run(env, 9);
+  assert.deepEqual(calls, [{ name: "set_title", args: { title: "a } b {" } }]);
+  assert.equal(answer, "");
+});
+
+test("a pretty-printed call inside an envelope still parses", () => {
+  const env =
+    '<tool_calls>\n{\n  "type": "tool_call",\n  "name": "search",\n  "arguments": { "query": "a" }\n}\n</tool_calls>\n';
+  const { calls } = run(env, 5);
+  assert.deepEqual(calls, [{ name: "search", args: { query: "a" } }]);
+});
+
+test("mentions of the tag inside a sentence stay prose", () => {
+  // Line-start plus an offered tool name is what makes this a call; a
+  // sentence that merely names the tag is not a protocol block.
+  const prose = "The endpoint wraps calls in a <tool_calls> envelope.";
+  const { answer, calls } = run(prose, prose.length);
+  assert.deepEqual(calls, []);
+  assert.equal(answer, prose);
+});
+
+test("scanJsonObjects ignores braces in strings and stray closes", () => {
+  assert.deepEqual(scanJsonObjects('{"a": "}"} {"b": 1}'), ['{"a": "}"}', '{"b": 1}']);
+  assert.deepEqual(scanJsonObjects('} {"a": 1}'), ['{"a": 1}']);
+  assert.deepEqual(scanJsonObjects('{"a": "unterminated'), []);
+});
+
+test("a closing fence split across a delta boundary still closes", () => {
+  // The close can land half in what is already buffered and half in the next
+  // delta. Searching only the delta misses it, and the block then grows until
+  // the MAX_TOOL_BLOCK cap releases it as text — the whole call is lost.
+  const filter = createAnswerFilter(TOOLS);
+  let answer = filter.push("Done.\n```json\n").text;
+  let calls = 0;
+  const collect = (chunk: ReturnType<typeof filter.push>) => {
+    answer += chunk.text;
+    calls += chunk.toolCalls.length;
+  };
+  collect(filter.push('{"type": "tool_call", "name": "search", "arguments": {}}\n`'));
+  collect(filter.push("``\n"));
+  collect(filter.flush());
+  assert.equal(answer.trimEnd(), "Done.");
+  assert.equal(calls, 1);
 });

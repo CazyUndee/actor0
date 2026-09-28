@@ -3,20 +3,26 @@
   "version": "0.1.0",
   "private": false,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "scripts": {
-    "build": "npm run typecheck && npm --workspace @actor0/harness run build",
-    "typecheck": "npm --workspace @actor0/harness run typecheck",
-    "test": "npm --workspace @actor0/harness run test",
+    "build": "npm --workspace @actor0/harness run build && npm --workspace @actor0/cli run build",
+    "typecheck": "npm --workspace @actor0/harness run typecheck && npm --workspace @actor0/cli run typecheck",
+    "test": "npm --workspace @actor0/harness run test && npm --workspace @actor0/cli run test",
     "lint": "eslint .",
-    "check:boundaries": "bash scripts/check-boundaries.sh"
+    "check:boundaries": "bash scripts/check-boundaries.sh",
+    "check:theme": "node apps/cli/scripts/generate-theme.mjs --check",
+    "check:tui": "npx tsx apps/cli/scripts/preview-tui.tsx"
   },
   "devDependencies": {
     "@types/node": "^20",
     "eslint": "^9",
+    "eslint-plugin-react": "^7.37.5",
+    "globals": "^17.12.0",
     "tsx": "^4.20",
-    "typescript": "^5.9"
+    "typescript": "^5.9",
+    "typescript-eslint": "^8.70.1"
   },
   "engines": {
     "node": ">=22"

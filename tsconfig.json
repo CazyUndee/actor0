@@ -1,6 +1,38 @@
 {
+  // A solution-style project: it names references and carries the compiler
+  // options every workspace shares. It must not compile anything itself, so
+  // `noEmit` keeps `tsc -b` from writing output next to the sources.
+  //
+  // The `include` is load-bearing and was a trap. `tsx` reads the tsconfig
+  // nearest the *cwd* and applies its compilerOptions only to files the project
+  // actually contains. With the usual `files: []` and no `include`, this project
+  // contains zero files, so every option in it was silently ignored: running
+  // `tsx apps/cli/src/index.ts` from the repo root fell back to the classic JSX
+  // transform, emitted `React.createElement` for every component, and died at
+  // runtime with "React is not defined" — while `npm run dev -w @actor0/cli`
+  // worked, because npm sets the cwd to the workspace and that tsconfig's
+  // `include` does match. Listing the sources here makes the setting apply no
+  // matter which directory the command was typed from.
+  //
+  // The authoritative per-workspace settings are in apps/cli and
+  // packages/harness; these are the subset a bare `tsx` needs.
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["apps/*/src/**/*", "apps/*/scripts/**/*", "packages/*/src/**/*"],
   "files": [],
   "references": [
-    { "path": "./packages/harness" }
+    {
+      "path": "./packages/harness"
+    },
+    {
+      "path": "./apps/cli"
+    }
   ]
 }

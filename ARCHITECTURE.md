@@ -72,4 +72,45 @@ The host retains its provider registry, fallback chain, model selection, tools, 
 - application-specific server routes and deployment architecture;
 - a Rust engine, standalone server, web application, or remote-host protocol.
 
-A future CLI may consume the public harness types and model transport, but its protocol and host architecture are not part of this extraction.
+## Reference consumer: the CLI
+
+`apps/cli` is a terminal client built on the public harness. It exists to prove
+the extraction boundary is real: if a program outside `packages/harness` can
+build a usable agent by supplying only the four ports, the boundary holds.
+
+The CLI owns everything human-facing — rendering, input, configuration,
+sessions, slash commands, and the built-in tools. The harness owns model
+interaction, tool-round sequencing, retries, rewind, abort, and the event
+stream. Neither reaches into the other: the CLI imports `@actor0/harness` and
+the harness imports nothing from the CLI.
+
+```text
+actor0 (apps/cli)
+  ├─ Ink + CronixUI tokens   rendering
+  ├─ config / sessions       persistence
+  ├─ ToolHost + containment  host policy
+  └─ Observer                event sink
+        │
+        ▼
+  @actor0/harness            execution system
+        │
+        ▼
+  OpenAiCompatibleModel      transport
+```
+
+Two consequences worth stating, because they are where a boundary usually
+leaks:
+
+- **Approval is not in the harness.** `ToolHost.execute` returns a string and
+  nothing more, so "may this run?" is necessarily a host question. The CLI
+  answers it in `ToolHost`, and a denial *resolves* rather than throwing, so a
+  user's decision never counts against `maxConsecutiveToolErrors`.
+- **The system prompt is not in the harness.** It is host policy, seeded before
+  a turn and stripped before persistence.
+
+### The CronixUI relationship
+
+The CLI's terminal palette is generated from the installed `cronixui` package
+(`apps/cli/scripts/generate-theme.mjs`), and CI fails if that file drifts. See
+the CLI README for why the design system is consumed as *tokens* rather than
+as components.

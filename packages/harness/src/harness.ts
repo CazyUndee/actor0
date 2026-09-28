@@ -22,8 +22,9 @@ export type HarnessConfig = {
   idleTimeoutMs: number;
   /**
    * Hard cap on tool rounds. Defaults to unbounded — a turn that needs to
-   * research for hours should be allowed to. A caller can still set a finite
-   * value to get the old hard stop.
+   * research for hours should be allowed to. A caller that pays per round
+   * should set it: reaching it ends the turn with `needs_user` and everything
+   * the rounds already produced, never a thrown error.
    */
   maxToolRounds: number;
   /**
@@ -200,9 +201,6 @@ export async function runAgentTurn(options: {
   // failures, which stops to *ask* rather than to give up.
   let consecutiveToolErrors = 0;
   for (let round = 1; ; round++) {
-    if (Number.isFinite(config.maxToolRounds) && round > config.maxToolRounds) {
-      throw new Error(`tool round limit reached (${config.maxToolRounds})`);
-    }
     let roundText = "";
     assertNotAborted(options.signal);
     const result = await runModelRound(
@@ -277,6 +275,27 @@ export async function runAgentTurn(options: {
           rounds: round,
           usage: allUsage,
           reasoning: finalReasoning,
+        };
+      }
+      // The round budget is a *stop*, not a failure. Throwing here threw away
+      // a turn that had already produced files and findings because the model
+      // kept going — which is the case the budget exists for. Stop the way the
+      // error streak stops: report it, keep what was done, let the host say so
+      // in its own words.
+      if (Number.isFinite(config.maxToolRounds) && round >= config.maxToolRounds) {
+        await emit(options.observer, {
+          type: "needs_user",
+          reason: "round_limit",
+          message: `stopped after ${config.maxToolRounds} tool rounds`,
+        });
+        return {
+          messages,
+          text: result.text,
+          complete: result.complete,
+          rounds: round,
+          usage: allUsage,
+          reasoning: finalReasoning,
+          blocked: true,
         };
       }
       continue;

@@ -2,6 +2,7 @@
 /target/
 /apps/web/.next/
 /packages/harness/dist/
+/apps/cli/dist/
 /coverage/
 .env
 .env.*

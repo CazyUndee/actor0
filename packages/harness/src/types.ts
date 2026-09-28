@@ -72,7 +72,7 @@ export type HarnessEvent =
    * harness does not decide to give up here — it reports the condition and the
    * host decides, typically by asking the user whether to keep going.
    */
-  | { type: "needs_user"; reason: "tool_errors"; message: string }
+  | { type: "needs_user"; reason: "tool_errors" | "round_limit"; message: string }
   | { type: "error"; message: string; retriable: boolean };
 
 export type ModelClient = {

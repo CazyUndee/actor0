@@ -132,3 +132,61 @@ test("recovers one empty response", async () => {
   assert.equal(result.rounds, 2);
   assert.ok(result.messages.some((message) => message.content.includes("previous reply was empty")));
 });
+
+test("the tool-round budget stops the turn instead of throwing it away", async () => {
+  // A model that keeps re-issuing the same call is exactly what the budget is
+  // for, and the work the earlier rounds did is still worth keeping. Throwing
+  // discarded the whole turn — the user got an error and no files.
+  const call = (n: number): ToolCall => ({
+    id: `c${n}`,
+    type: "function",
+    function: { name: "list_dir", arguments: "{}" },
+  });
+  const scripts = await Promise.all(
+    Array.from({ length: 10 }, (_, i) => events({ type: "tool_call", tool_calls: [call(i)] }))
+  );
+  const toolHost: ToolHost = {
+    definitions: () => [
+      {
+        type: "function",
+        function: { name: "list_dir", description: "List a directory.", parameters: { type: "object", properties: {} } },
+      },
+    ],
+    execute: async () => "hello.txt",
+  };
+  const observed: HarnessEvent[] = [];
+
+  const result = await runAgentTurn({
+    model: scriptedModel(scripts),
+    messages: [{ role: "user", content: "look around" }],
+    input: "look around",
+    toolHost,
+    signal: new AbortController().signal,
+    observer: { event: (event) => { observed.push(event); } },
+    config: { ...fastConfig, maxToolRounds: 3 },
+  });
+
+  assert.equal(result.blocked, true);
+  assert.equal(result.rounds, 3);
+  // Every round's result is still in the transcript for the next model turn.
+  const toolResults = result.messages.filter((message) => message.role === "tool");
+  assert.equal(toolResults.length, 3);
+  assert.deepEqual(
+    observed.filter((event) => event.type === "needs_user"),
+    [{ type: "needs_user", reason: "round_limit", message: "stopped after 3 tool rounds" }]
+  );
+});
+
+test("the round budget never fires on a turn that answers", async () => {
+  const model = scriptedModel([await events({ type: "token", delta: "done" }, { type: "done" })]);
+  const result = await runAgentTurn({
+    model,
+    messages: [],
+    input: "hi",
+    toolHost: { definitions: () => [], execute: async () => "" },
+    signal: new AbortController().signal,
+    config: { ...fastConfig, maxToolRounds: 1 },
+  });
+  assert.equal(result.text, "done");
+  assert.equal(result.blocked, undefined);
+});

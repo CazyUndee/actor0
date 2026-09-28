@@ -30,7 +30,7 @@ test("releases answer text immediately", () => {
 });
 
 test("extracts status lines but preserves markdown links", () => {
-  const result = run(["[Working]\n[label](https://example.com)"]);
+  const result = run(["[·] Working\n[label](https://example.com)"]);
   assert.deepEqual(result.statuses, ["Working"]);
   assert.equal(result.answer, "[label](https://example.com)");
 });
@@ -47,4 +47,26 @@ test("reset clears held input", () => {
   filter.reset();
   assert.equal(filter.push("fresh").text, "fresh");
   assert.equal(filter.flush().text, "");
+});
+
+test("link text is not mistaken for a status marker", () => {
+  // A landing page is full of these, and eating them deleted the call to
+  // action from the answer.
+  for (const line of [
+    "[**Start Building**]",
+    "[**Request a Demo**]",
+    "[Get Started for Free]",
+    "[`npm install`](https://x.com)",
+    "[__bold__]",
+    "[see docs]",
+  ]) {
+    const result = run([line + "\n", "Body text.\n"]);
+    assert.deepEqual(result.statuses, [], `ate ${line} as a status`);
+    assert.ok(result.answer.includes(line), `dropped ${line} from the answer`);
+  }
+});
+
+test("real status markers still work", () => {
+  const result = run(["[·] Reading files\n", "[·] Compiling\n", "[·] 2 of 5\n"]);
+  assert.deepEqual(result.statuses, ["Reading files", "Compiling", "2 of 5"]);
 });

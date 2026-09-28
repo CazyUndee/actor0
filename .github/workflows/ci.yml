@@ -19,9 +19,25 @@ jobs:
       - run: npm ci
       - name: Repository boundary
         run: npm run check:boundaries
+      - name: CronixUI tokens in sync
+        run: npm run check:theme
       - name: Typecheck
         run: npm run typecheck
+      - name: Lint
+        # This was listed in the README's verify block and in package.json
+        # from the initial commit, but there was no flat config, so it failed
+        # immediately and CI — which never called it — stayed green. Now that
+        # `eslint.config.mjs` exists it has to run here too, or the script can
+        # rot the same way a second time.
+        run: npm run lint
       - name: Test
         run: npm test
+      - name: TUI renders
+        # Run from the repo root on purpose. `tsx` reads the tsconfig nearest the
+        # cwd, so this is what catches a root tsconfig that does not actually
+        # apply its JSX setting — the failure that made the whole app die with
+        # "React is not defined" while `npm run dev -w @actor0/cli` kept working.
+        # The driver exits non-zero if any frame renders an Ink error.
+        run: npx tsx apps/cli/scripts/preview-tui.tsx > /dev/null
       - name: Build
         run: npm run build

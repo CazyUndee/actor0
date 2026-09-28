@@ -1,10 +1,15 @@
 import { extractPlanPrefix, needsMorePlanData } from "./plan-prefix.js";
 import {
   MAX_TOOL_BLOCK,
+  matchCloseEnvelope,
   matchCloseFence,
+  matchOpenEnvelope,
   matchOpenFence,
+  mayBeOpenEnvelope,
   mayBeOpenFence,
   parseToolCallBlock,
+  parseToolCallEnvelope,
+  type BlockKind,
 } from "./tool-call-block.js";
 import type { PlanPrefix, ToolCall } from "./types.js";
 
@@ -13,20 +18,23 @@ const MAX_STATUS_HOLD = 48;
 const MAYBE_STATUS_PREFIX = /^(?:[ \t]*|[ \t]*\[[^\x5d\n]{0,40})$/;
 
 /**
- * Status markers, in both shapes models actually write.
+ * Status markers.
  *
- * `[·] Searching the web` is what the system prompt specifies: the bullet sits
- * alone inside the brackets and the action follows them. `[Searching the web]`
- * puts the action inside. Understanding only the second meant a `[·] …` line
- * was captured as the single character `·`, stripped to nothing, and its
- * action text was left sitting in the answer as an ordinary line — the marker
- * did not register *and* its text leaked.
+ * Only the bullet form is recognised: `[·] Searching the web`. That is the
+ * shape the system prompt specifies, and it is the only one that can be told
+ * apart from content by inspection rather than by guesswork.
  *
- * Markdown after a bracket means content, not a marker: `[label](url)` links,
- * `[text][ref]` references, `[^1]:` footnote definitions.
+ * The bare bracket form, `[Searching the web]`, used to be accepted too. It is
+ * not any more, because it is genuinely indistinguishable from the link text a
+ * model writes: asked for a landing page, it emitted `[Get Started for Free]`
+ * and `[**Start Building**]`, and both were silently deleted from the answer
+ * along with the call to action. Nothing else in prose looks like `[·]`.
+ *
+ * The asymmetry is deliberate. Missing a status leaves a visible `[·] thing`
+ * line in the answer, which is ugly. Eating a link label is silent content
+ * loss. The ugly failure is the better one.
  */
 const STATUS_BULLET_LINE = /^[ \t]*\[·\][ \t]*([^\n]{1,80})/;
-const STATUS_BRACKET_LINE = /^[ \t]*\[([^\]\n]{1,80})\](?![([:])/;
 
 type StatusMatch = { text: string; length: number };
 
@@ -37,7 +45,7 @@ type StatusMatch = { text: string; length: number };
  * not own it, and the prose stays.
  */
 function matchStatus(text: string): StatusMatch | null {
-  const match = STATUS_BULLET_LINE.exec(text) ?? STATUS_BRACKET_LINE.exec(text);
+  const match = STATUS_BULLET_LINE.exec(text);
   if (!match) return null;
   return { text: match[1] ?? "", length: match[0].length };
 }
@@ -48,7 +56,7 @@ export type FilteredChunk = {
   text: string;
   statuses: string[];
   plan: PlanPrefix | null;
-  /** Tool calls the model emitted as fenced JSON blocks (see tool-call-block.ts). */
+  /** Tool calls the model emitted as protocol blocks (see tool-call-block.ts). */
   toolCalls: ToolCall[];
 };
 
@@ -68,12 +76,35 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
   let eatNewline = false;
   let planDone = false;
   /**
-   * Non-null while inside a ```json block. Everything from the opening fence is
+   * Non-null while inside a protocol block — a ```json fence or a
+   * `<tool_calls>` envelope. Everything from the opening delimiter is
    * accumulated here and released in one go, so a block split across arbitrary
    * deltas is never half-shown, and the block's own text is only released if it
    * turns out not to be a tool call.
    */
   let block: string | null = null;
+  let blockKind: BlockKind = "fence";
+
+  /**
+   * Where the block's closer is.
+   *
+   * `pending` is the whole block so far, not just the newest delta: a closing
+   * delimiter can straddle a push boundary, and one that lands half in the
+   * buffer and half in the delta is the normal case for a small-chunked SSE
+   * stream. An envelope resumes its scan where the last one stopped, because
+   * the accumulated half has already been searched and had no close in it.
+   */
+  const findClose = (pending: string, atEnd: boolean) =>
+    blockKind === "envelope"
+      ? matchCloseEnvelope(pending, block?.length ?? 0)
+      : matchCloseFence(pending, atEnd);
+
+  /** The calls a closed block carries: none unless every object is a call. */
+  const parseClosed = (finished: string): ToolCall[] => {
+    if (blockKind === "envelope") return parseToolCallEnvelope(finished, toolNames);
+    const call = parseToolCallBlock(finished, toolNames);
+    return call ? [call] : [];
+  };
 
   /**
    * The one place text is turned into visible answer, statuses and tool calls.
@@ -113,9 +144,10 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
 
       // Inside a candidate block: nothing may be shown until it closes.
       if (block !== null) {
-        const close = matchCloseFence(buffer, atEnd);
+        const pending = block + buffer;
+        const close = findClose(pending, atEnd);
         if (!close) {
-          block += buffer;
+          block = pending;
           buffer = "";
           if (block.length > MAX_TOOL_BLOCK) {
             // Unterminated: give up rather than swallow the rest of the answer.
@@ -125,13 +157,12 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
           }
           continue;
         }
-        block += buffer.slice(0, close.index + close.length);
-        buffer = buffer.slice(close.index + close.length);
-        const finished = block;
+        const finished = pending.slice(0, close.index + close.length);
+        buffer = pending.slice(close.index + close.length);
         block = null;
-        const call = parseToolCallBlock(finished, toolNames);
-        if (call) {
-          toolCalls.push(call);
+        const calls = parseClosed(finished);
+        if (calls.length > 0) {
+          toolCalls.push(...calls);
           // The block owned its line, so drop the newline that ends it.
           eatNewline = ownsLine(buffer, 0);
           atLineStart = true;
@@ -143,16 +174,20 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
       }
 
       if (atLineStart) {
-        const open = matchOpenFence(buffer);
+        const fence = matchOpenFence(buffer);
+        const envelope = fence ? null : matchOpenEnvelope(buffer);
+        const open = fence ?? envelope;
         if (open) {
+          blockKind = fence ? "fence" : "envelope";
           block = buffer.slice(0, open.length);
           buffer = buffer.slice(open.length);
           continue;
         }
-        // A fence split across deltas ("``" then "`json\n"): hold the
-        // half-fence instead of releasing it as text. One or two characters,
-        // released on the next push once this is clearly not a tool block.
-        if (mayBeOpenFence(buffer)) {
+        // A delimiter split across deltas ("``" then "`json\n", or "<tool_"
+        // then "calls>"): hold the half rather than releasing it as text. A
+        // handful of characters, released on the next push once this is
+        // clearly not a tool block.
+        if (mayBeOpenFence(buffer) || mayBeOpenEnvelope(buffer)) {
           held = buffer;
           buffer = "";
           continue;
@@ -207,15 +242,16 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
     // it may never come. Left alone it would be dropped — neither shown nor
     // run — so it is resolved here.
     if (atEnd && block !== null) {
-      const close = matchCloseFence(block, true);
+      const close = findClose(block, true);
+
       const finished = close ? block.slice(0, close.index + close.length) : block;
       const rest = close ? block.slice(close.index + close.length) : "";
       block = null;
       // Never execute a block that never closed: whatever it parses as, it is
       // the model showing the user JSON, not a protocol message.
-      const call = close ? parseToolCallBlock(finished, toolNames) : null;
-      if (call) {
-        toolCalls.push(call);
+      const calls = close ? parseClosed(finished) : [];
+      if (calls.length > 0) {
+        toolCalls.push(...calls);
         // The block is the protocol, not content: it must not also be shown.
         output += rest;
       } else {

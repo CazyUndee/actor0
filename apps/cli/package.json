@@ -1,0 +1,33 @@
+{
+  "name": "@actor0/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "actor0": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json --tsBuildInfoFile dist/.tsbuildinfo",
+    "typecheck": "npm --workspace @actor0/harness run build && tsc -p tsconfig.json --noEmit",
+    "dev": "tsx src/index.ts",
+    "gen:theme": "node scripts/generate-theme.mjs",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "preview": "tsx scripts/preview-tui.tsx",
+    "check:tui": "tsx scripts/preview-tui.tsx"
+  },
+  "dependencies": {
+    "@actor0/harness": "*",
+    "cronixui": "^1.1.5",
+    "ink": "^6",
+    "react": "^19"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "tsx": "^4.20",
+    "typescript": "^5.9"
+  }
+}
