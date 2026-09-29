@@ -77,6 +77,23 @@ export const CLEARABLE_TOOLS: ReadonlySet<string> = new Set(["read", "shell"]);
 /** Prefix of a cleared result, so a second pass can recognise one. */
 const CLEARED_PREFIX = "[result cleared";
 
+/**
+ * Budget for the tool results in ONE message.
+ *
+ * The global budget bounds the whole file, but a single turn can burst past
+ * every per-result cap on its own: several `shell` calls in one round, each
+ * returning a build log, produce a single recent message that outweighs
+ * everything else in the session. Clearing oldest-first does not reach it —
+ * the burst is the newest thing in the history. So one user message's tool
+ * results are bounded directly: its largest clearable payloads go (in whole,
+ * no truncation — see the invariant) until the message's results fit.
+ *
+ * Sized so that a normal parallel round — a handful of reads, a directory
+ * listing — never trips it. 12k chars is an order of magnitude above what
+ * those return and a fraction of a build log.
+ */
+export const PER_MESSAGE_RESULT_BUDGET = 12_000;
+
 export type CompactionOptions = {
   /** Budget for the whole history. */
   maxTokens?: number;
@@ -218,5 +235,76 @@ export function compactHistory(
   // the answer, and it is the only answer consistent with the invariant: what
   // remains is user and assistant text, and there is no honest way to make a
   // conversation that says those things smaller.
+  return result;
+}
+
+/**
+ * The per-message budget, applied on its own.
+ *
+ * The global budget above bounds the whole file, but a single turn can burst
+ * past any per-result cap on its own: several `shell` calls in one round, each
+ * returning a build log, produce one recent message that outweighs everything
+ * else in the session, and oldest-first never reaches it — the burst is the
+ * newest thing in the history. So each message's tool results are bounded
+ * directly: its largest clearable payloads go, whatever their age, until the
+ * group fits. Messages are judged independently, so one huge round does not
+ * clear results in innocent neighbours.
+ *
+ * Runs even when the global budget is met — the two bound different things.
+ * Every invariant holds unchanged: clear-only, marker-prefixed, never a cut,
+ * caller's array untouched.
+ */
+export function compactHistoryPerMessage(
+  messages: ChatMessage[],
+  options: CompactionOptions = {},
+): ChatMessage[] {
+  const clearable = options.clearable ?? CLEARABLE_TOOLS;
+  const marker = options.marker ?? defaultMarker;
+  const names = toolNamesByCallId(messages);
+  const result: ChatMessage[] = messages.slice();
+
+  for (let i = 0; i < result.length; i += 1) {
+    const message = result[i]!;
+    // The call lives on the ASSISTANT message; the harness records it there
+    // and the results follow it. (The tool_use request envelope rides on the
+    // assistant turn — a user message never carries tool_calls.)
+    if (message.role !== "assistant" || !message.tool_calls?.length) continue;
+
+    // The results this message's calls are awaiting, in file order.
+    const awaited = new Set(message.tool_calls.map((call) => call.id));
+    const group: number[] = [];
+    for (let j = i + 1; j < result.length && awaited.size > 0; j += 1) {
+      const next = result[j]!;
+      if (next.role !== "tool" || !next.tool_call_id || !awaited.has(next.tool_call_id)) break;
+      group.push(j);
+      awaited.delete(next.tool_call_id);
+    }
+    if (group.length === 0) continue;
+
+    let used = 0;
+    for (const index of group) used += result[index]?.content.length ?? 0;
+    if (used <= PER_MESSAGE_RESULT_BUDGET) continue;
+
+    // Largest first: the burst is what must give, and clearing many small
+    // results around one huge one would touch history for no gain.
+    const clearableIndexes = group
+      .filter((index) => {
+        const target = result[index]!;
+        if (isCleared(target.content)) return false;
+        const name = names.get(target.tool_call_id ?? "") ?? target.name;
+        return name !== undefined && clearable.has(name);
+      })
+      .sort((a, b) => (result[b]?.content.length ?? 0) - (result[a]?.content.length ?? 0));
+
+    for (const index of clearableIndexes) {
+      if (used <= PER_MESSAGE_RESULT_BUDGET) break;
+      const target = result[index]!;
+      const name = names.get(target.tool_call_id ?? "") ?? target.name ?? "tool";
+      const replacement = marker(name, target.content.length);
+      result[index] = { ...target, content: replacement };
+      used -= target.content.length - replacement.length;
+    }
+  }
+
   return result;
 }

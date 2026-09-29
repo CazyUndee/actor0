@@ -6,6 +6,7 @@ import {
   CHARS_PER_TOKEN,
   CLEARABLE_TOOLS,
   compactHistory,
+  compactHistoryPerMessage,
   defaultMarker,
   isCleared,
   measureHistory,
@@ -450,6 +451,71 @@ test("repair leaves a clean history byte-identical", () => {
 });
 
 // --- staying honest about the tool registry ---------------------------------
+
+test("compactHistoryPerMessage clears a single turn's burst even when globally small", () => {
+  // The case the global budget cannot see: one recent turn whose shell
+  // results burst past any sane size while the whole history is under the
+  // global budget. Oldest-first would clear innocent old results (or nothing,
+  // when under budget) and leave the burst intact.
+  const burst = 'x'.repeat(40_000);
+  const history: ChatMessage[] = [
+    { role: "user", content: "build it" },
+    { role: "assistant", content: "", tool_calls: [call("c1", "shell"), call("c2", "shell")] },
+    { role: "tool", tool_call_id: "c1", content: burst },
+    { role: "tool", tool_call_id: "c2", content: burst },
+  ];
+  const compacted = compactHistoryPerMessage(history);
+  assert.ok(compacted !== history, "the caller's array is never mutated");
+  // The largest of the pair goes first; 80k → one cleared + one 40k leaves the
+  // group at ~40k, still over 12k, so both go.
+  assert.ok(isCleared(compacted[2]!.content));
+  assert.ok(isCleared(compacted[3]!.content));
+  // Structure untouched: pairing, order, and the calls themselves.
+  assert.equal(compacted[1]!.tool_calls?.length, 2);
+  assert.equal(compacted[2]!.tool_call_id, "c1");
+  assert.equal(compacted[3]!.tool_call_id, "c2");
+});
+
+test("compactHistoryPerMessage judges each message independently", () => {
+  // A huge result in one turn must not clear results in its neighbours.
+  const burst = 'y'.repeat(30_000);
+  const history: ChatMessage[] = [
+    { role: "user", content: "q1" },
+    { role: "assistant", content: "", tool_calls: [call("a1", "read")] },
+    { role: "tool", tool_call_id: "a1", content: burst },
+    { role: "user", content: "q2" },
+    { role: "assistant", content: "", tool_calls: [call("a2", "read")] },
+    { role: "tool", tool_call_id: "a2", content: "listing: one file" },
+  ];
+  const compacted = compactHistoryPerMessage(history);
+  assert.ok(isCleared(compacted[2]!.content));
+  assert.equal(compacted[5]!.content, "listing: one file", "the small neighbour is untouched");
+});
+
+test("compactHistoryPerMessage never clears write results in a burst", () => {
+  // The invariant holds per-message too: a write record is the evidence the
+  // work happened, so a burst of shells around it clears around it.
+  const burst = 'z'.repeat(20_000);
+  const history: ChatMessage[] = [
+    { role: "user", content: "do it" },
+    { role: "assistant", content: "", tool_calls: [call("w1", "write"), call("s1", "shell")] },
+    { role: "tool", tool_call_id: "w1", content: "wrote file.txt" },
+    { role: "tool", tool_call_id: "s1", content: burst },
+  ];
+  const compacted = compactHistoryPerMessage(history);
+  assert.equal(compacted[2]!.content, "wrote file.txt");
+  assert.ok(isCleared(compacted[3]!.content));
+});
+
+test("compactHistoryPerMessage leaves a normal history byte-identical", () => {
+  const history: ChatMessage[] = [
+    { role: "user", content: "look" },
+    { role: "assistant", content: "", tool_calls: [call("b1", "read")] },
+    { role: "tool", tool_call_id: "b1", content: "file contents, short" },
+    { role: "assistant", content: "done" },
+  ];
+  assert.deepEqual(compactHistoryPerMessage(history), history);
+});
 
 test("every clearable tool is a real tool", () => {
   // The clearable set is a list of strings, so a rename would otherwise make

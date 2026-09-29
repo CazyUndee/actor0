@@ -207,6 +207,24 @@ export function applyEvent(state: ConversationState, event: HarnessEvent): Conve
       // the thinking becomes history, not the moment the turn ends.
       return flushReasoning(state);
 
+    case "tool_rejected": {
+      // A refused protocol block is a failed call, and it is shown exactly
+      // like one: a cross, the name the model asked for, and the reason. It
+      // must never reach the answer text — the old behaviour released the raw
+      // JSON into the transcript, which taught the model nothing and made the
+      // user read its malformed output. No tool ran, so there is no output to
+      // show beyond the rejection sentence itself.
+      const flushed = flushReasoning(state);
+      const entry: Entry = {
+        kind: "tool",
+        name: event.rejection.name,
+        target: "protocol block",
+        status: "error",
+        output: event.rejection.reason,
+      };
+      return { ...flushed, entries: [...flushed.entries, entry] };
+    }
+
     case "provider":
       return { ...state, live: { ...state.live, status: `via ${event.name}` } };
 

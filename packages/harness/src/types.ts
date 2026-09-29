@@ -43,6 +43,19 @@ export type ModelEvent =
   | { type: "provider"; name: string }
   | { type: "done" };
 
+/**
+ * A protocol block the answer filter refused. `call` is the synthetic call
+ * that carries the error tool result into the transcript (the harness authors
+ * the result itself; no tool host runs), and `reason` is the sentence both
+ * the model and the UI see.
+ */
+export type RejectedToolBlock = {
+  /** The name the model asked for — "unknown" when it emitted none. */
+  name: string;
+  call: ToolCall;
+  reason: string;
+};
+
 export type PlanPrefix = {
   title: string;
   plan: string;
@@ -63,6 +76,12 @@ export type HarnessEvent =
   | { type: "tool_start"; call: ToolCall }
   | { type: "tool_result"; call: ToolCall; output: string; error?: string }
   | { type: "tool_call"; tool_calls: ToolCall[] }
+  /**
+   * A tool-call block was refused (unoffered tool, or arguments that were not
+   * valid JSON). Nothing reaches the answer text; the UI shows a cross and
+   * the model receives the error result next round.
+   */
+  | { type: "tool_rejected"; rejection: RejectedToolBlock }
   | { type: "provider"; name: string }
   | { type: "usage"; usage: Usage }
   | { type: "partial"; text: string }
@@ -95,6 +114,8 @@ export type HarnessObserver = {
 export type RoundResult = {
   text: string;
   toolCalls: ToolCall[];
+  /** Protocol blocks refused this round — see RejectedToolBlock. */
+  rejectedBlocks: RejectedToolBlock[];
   complete: boolean;
   reasoning: ReasoningSummary;
   usage: Usage[];

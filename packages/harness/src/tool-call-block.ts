@@ -1,5 +1,10 @@
 import type { ToolCall } from "./types.js";
 
+/** A thrown value's message, for rejection reasons. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * The explicit tool-call protocol.
  *
@@ -154,39 +159,130 @@ export function blockBody(block: string): string {
   return block.replace(OPEN_FENCE, "").replace(CLOSE_FENCE, "");
 }
 
+/** Sequence for synthetic call ids, so a rejected block still pairs. */
+let rejectSeq = 0;
+
+/**
+ * A protocol block that was recognised but refused: it named a tool this
+ * request never offered, or its arguments were not parseable JSON.
+ *
+ * Rejection is a protocol event, not prose. The old behaviour released the
+ * block as answer text, which taught the model nothing — it re-emitted the
+ * same block, and the user watched raw JSON scroll past. A rejected block now
+ * becomes a synthetic call plus an error tool result, so the next round opens
+ * with the model being told, in its own protocol, that the call was refused
+ * and why. The UI shows the same pair it shows for a failing tool: a cross
+ * against a name, with the reason.
+ */
+export type RejectedBlock = {
+  /** The name the model asked for, offered or not. For the error message. */
+  name: string;
+  /** The synthetic call that will carry the error result. */
+  call: ToolCall;
+  /** One sentence a model (and a user) can act on. */
+  reason: string;
+};
+
+/**
+ * Build the rejection record for a block whose JSON parsed but named a tool
+ * the request did not offer. The reason quotes the offered names so the model
+ * can pick a real one instead of guessing again.
+ */
+export function rejectUnknownTool(name: string, offered: string[]): RejectedBlock {
+  const call: ToolCall = {
+    id: `block_rejected_${++rejectSeq}`,
+    type: "function",
+    function: { name, arguments: "{}" },
+  };
+  const list = offered.length > 0 ? offered.join(", ") : "none";
+  return {
+    name,
+    call,
+    reason:
+      `Rejected: your tool-call block named "${name}", but that tool was not ` +
+      `offered on this request (offered: ${list}). Use one of the offered ` +
+      `tools, or answer in plain text.`,
+  };
+}
+
+/**
+ * Build the rejection record for a block that looked like a tool call but
+ * whose arguments were not valid JSON. The common cause is a raw newline or
+ * tab inside a string literal — the model formatted the command like shell
+ * output instead of escaping it — so the reason names that repair first.
+ */
+export function rejectMalformedArguments(detail: string): RejectedBlock {
+  const call: ToolCall = {
+    id: `block_rejected_${++rejectSeq}`,
+    type: "function",
+    function: { name: "unknown", arguments: "{}" },
+  };
+  return {
+    name: "unknown",
+    call,
+    reason:
+      `Rejected: your tool-call block was not valid JSON (${detail}). ` +
+      `Most often a raw newline inside a string value — JSON strings cannot ` +
+      `contain literal line breaks; use \\n. Re-emit the block with valid JSON ` +
+      `on a single line.`,
+  };
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
+ * A body that opens with the protocol's own shape. A body that fails to parse
+ * is ambiguous — a protocol block the model got wrong, or a JSON code example
+ * holding prose — and only this prefix, verifiable by inspection, turns the
+ * first into a rejection. Anything else is ordinary text.
+ */
+const PROTOCOL_INTENT = /^\s*\{\s*"type"\s*:\s*"tool_call"/;
+
+/**
  * Parse a complete fenced block into a tool call.
  *
  * Returns null — meaning "this is ordinary answer text" — unless the block is
- * a JSON object that says `type: "tool_call"`, carries a string `name`, and
- * that name is one the request actually offered. The name check is what stops
- * a model from inventing a tool; the `type` check is what stops every other
- * JSON example in every answer from being swallowed.
+ * a JSON object that says `type: "tool_call"` and carries a string `name`.
+ * The `type` check is what stops every other JSON example in every answer
+ * from being treated as protocol.
+ *
+ * The result says what happened: a `call` when the name is one the request
+ * actually offered, or a `rejected` record when it is not — including when
+ * the body is protocol-shaped but not valid JSON, the field case being a raw
+ * newline inside a string value. Rejected is not the same as text — the model
+ * addressed the protocol; the harness answers in the same protocol (see
+ * RejectedBlock).
  */
-export function parseToolCallBlock(block: string, toolNames: string[]): ToolCall | null {
+export function parseToolCallBlock(block: string, toolNames: string[]): ToolCall | RejectedBlock | null {
   if (toolNames.length === 0) return null;
 
   let value: unknown;
   try {
     value = JSON.parse(blockBody(block));
-  } catch {
+  } catch (error) {
+    if (PROTOCOL_INTENT.test(blockBody(block))) {
+      return rejectMalformedArguments(errorMessage(error));
+    }
     return null;
   }
   return toToolCall(value, toolNames);
 }
 
-/** One protocol object → one call, or null when it is not a call. */
-function toToolCall(value: unknown, toolNames: string[]): ToolCall | null {
+/** One protocol object → one call, a rejection, or null when it is not a call. */
+function toToolCall(value: unknown, toolNames: string[]): ToolCall | RejectedBlock | null {
   if (!isPlainObject(value)) return null;
   if (value.type !== "tool_call") return null;
-  if (typeof value.name !== "string" || !toolNames.includes(value.name)) return null;
+  if (typeof value.name !== "string") {
+    return rejectMalformedArguments("the object has no string \"name\" field");
+  }
+  if (!toolNames.includes(value.name)) return rejectUnknownTool(value.name, toolNames);
 
   const args = value.arguments;
-  if (args !== undefined && !isPlainObject(args)) return null;
+  if (args !== undefined && !isPlainObject(args)) {
+    return rejectMalformedArguments("\"arguments\" is not a JSON object");
+  }
 
   return {
     id: `block_call_${++callSeq}`,
@@ -245,26 +341,58 @@ export function scanJsonObjects(text: string): string[] {
  * object in it is a call for a tool this request actually offered. One
  * `set_conversation_title` in a `<tool_calls>` envelope is not a partial tool
  * round to half-execute — it is a different assistant's protocol, and
- * swallowing it would hide the mismatch. So a single unoffered name means the
- * whole envelope is released as text.
+ * executing half of it would hide the mismatch. The first non-call object in
+ * the envelope therefore poisons the whole envelope: every call-shaped object
+ * before it becomes a rejection (the model addressed the protocol and is told
+ * so next round), and none of them executes.
  */
-export function parseToolCallEnvelope(block: string, toolNames: string[]): ToolCall[] {
-  if (toolNames.length === 0) return [];
+export function parseToolCallEnvelope(block: string, toolNames: string[]): { calls: ToolCall[]; rejected: RejectedBlock[] } {
+  if (toolNames.length === 0) return { calls: [], rejected: [] };
   const body = block.replace(OPEN_ENVELOPE, "").replace(CLOSE_ENVELOPE, "");
   const candidates = scanJsonObjects(body);
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0) return { calls: [], rejected: [] };
 
-  const calls: ToolCall[] = [];
+  type Parsed = { kind: "call"; call: ToolCall } | { kind: "reject"; block: RejectedBlock };
+  const parsed: Parsed[] = [];
   for (const candidate of candidates) {
     let value: unknown;
     try {
       value = JSON.parse(candidate);
     } catch {
-      return [];
+      // A body that is not valid JSON is not protocol at all — release it as
+      // text, exactly like a fence whose body does not parse. Nothing in an
+      // unparseable body names a tool, so there is nothing to reject either.
+      return { calls: [], rejected: [] };
     }
     const call = toToolCall(value, toolNames);
-    if (!call) return [];
-    calls.push(call);
+    if (call === null) {
+      // An object with the wrong `type` — not protocol. The all-or-nothing
+      // rule releases the whole envelope as text.
+      return { calls: [], rejected: [] };
+    }
+    parsed.push("reason" in call ? { kind: "reject", block: call } : { kind: "call", call });
   }
-  return calls;
+
+  const poison = parsed.find((item): item is { kind: "reject"; block: RejectedBlock } => item.kind === "reject");
+  if (!poison) return { calls: parsed.map((item) => (item as { kind: "call"; call: ToolCall }).call), rejected: [] };
+
+  // All-or-nothing: the first refusal poisons every call in the envelope. A
+  // well-formed call beside a refused one did not run either, and leaving it
+  // silent would hide the refusal — the model would re-emit the whole
+  // envelope next round believing half of it succeeded.
+  const refused = poison.block;
+  const list = toolNames.length > 0 ? toolNames.join(", ") : "none";
+  const rejected = parsed.map((item) =>
+    item.kind === "reject"
+      ? item.block
+      : {
+          name: item.call.function.name,
+          call: item.call,
+          reason:
+            `Rejected: the <tool_calls> envelope also carried "${refused.name}", which was not offered ` +
+            `(offered: ${list}). The envelope is all-or-nothing, so your "${item.call.function.name}" ` +
+            `call did not run either. Use only the offered tools, or answer in plain text.`,
+        },
+  );
+  return { calls: [], rejected };
 }

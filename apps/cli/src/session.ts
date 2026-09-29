@@ -1,7 +1,7 @@
 import type { ChatMessage } from "@actor0/harness";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compactHistory } from "./history.js";
+import { compactHistory, compactHistoryPerMessage } from "./history.js";
 import { sessionsDir } from "./paths.js";
 
 /**
@@ -60,7 +60,11 @@ function assertSessionId(id: string): void {
 export function saveSession(session: StoredSession): void {
   assertSessionId(session.id);
   mkdirSync(sessionsDir(), { recursive: true });
-  const payload: StoredSession = { ...session, messages: compactHistory(session.messages) };
+  // The per-message pass runs first: it bounds a single turn's tool-result
+  // burst whatever the age of the results, and the global pass then clears
+  // remaining stale results oldest-first. Both are clear-only — see history.ts.
+  const messages = compactHistoryPerMessage(session.messages);
+  const payload: StoredSession = { ...session, messages: compactHistory(messages) };
   const target = sessionFile(session.id);
 
   // Write to a sibling, then rename. Rename is atomic on Windows and POSIX, so

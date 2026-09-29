@@ -10,19 +10,19 @@ function run(source: string, size: number) {
   const filter = createAnswerFilter(TOOLS);
   let answer = "";
   const calls: { name: string; args: Record<string, unknown> }[] = [];
-  for (let i = 0; i < source.length; i += size) {
-    const out = filter.push(source.slice(i, i + size));
+  const rejected: { name: string; reason: string }[] = [];
+  const collect = (out: ReturnType<typeof filter.push>) => {
     answer += out.text;
     for (const c of out.toolCalls) {
       calls.push({ name: c.function.name, args: JSON.parse(c.function.arguments) });
     }
+    for (const r of out.rejected) rejected.push({ name: r.name, reason: r.reason });
+  };
+  for (let i = 0; i < source.length; i += size) {
+    collect(filter.push(source.slice(i, i + size)));
   }
-  const tail = filter.flush();
-  answer += tail.text;
-  for (const c of tail.toolCalls) {
-    calls.push({ name: c.function.name, args: JSON.parse(c.function.arguments) });
-  }
-  return { answer, calls };
+  collect(filter.flush());
+  return { answer, calls, rejected };
 }
 
 const CALL_BLOCK =
@@ -86,11 +86,19 @@ test("a JSON block that is not a tool call stays visible verbatim", () => {
   assert.equal(answer, block);
 });
 
-test("a block naming a tool that was not offered is not executed", () => {
+test("a block naming a tool that was not offered is refused, not shown", () => {
+  // Refused, not released: the model addressed the protocol, so it gets an
+  // error tool result next round (see the harness tests) and the user sees a
+  // cross — never the raw JSON in the answer.
   const block = '```json\n{"type": "tool_call", "name": "rm_rf", "arguments": {"path": "/"}}\n```\n';
-  const { answer, calls } = run(block, 13);
+  const { answer, calls, rejected } = run(block, 13);
   assert.deepEqual(calls, []);
-  assert.equal(answer, block);
+  assert.equal(answer, "");
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0]!.name, "rm_rf");
+  assert.ok(rejected[0]!.reason.includes("rm_rf"));
+  assert.ok(rejected[0]!.reason.includes("offered"));
+  assert.ok(!answer.includes("tool_call"), "the block must not reach the bubble");
 });
 
 test("non-json code blocks stream through untouched", () => {
@@ -157,15 +165,36 @@ test("a call with no arguments object is still valid", () => {
   assert.deepEqual(calls[0]!.args, {});
 });
 
-test("parseToolCallBlock rejects everything that is not a call", () => {
+test("parseToolCallBlock sorts blocks into calls, rejections and plain text", () => {
   const wrap = (body: string) => "```json\n" + body + "\n```\n";
-  assert.equal(parseToolCallBlock(wrap('{"type":"tool_call","name":"nope"}'), TOOLS), null);
+  // A call for an unoffered tool is a rejection, not text.
+  const unoffered = parseToolCallBlock(wrap('{"type":"tool_call","name":"nope"}'), TOOLS);
+  assert.ok(unoffered && "reason" in unoffered);
+  assert.equal(unoffered.name, "nope");
+  // A malformed name is a rejection with a repair hint.
+  const noName = parseToolCallBlock(wrap('{"type":"tool_call"}'), TOOLS);
+  assert.ok(noName && "reason" in noName);
+  assert.equal(noName.name, "unknown");
+  // Unparseable JSON is a rejection naming the JSON fault — the common cause
+  // is a raw newline inside a string, so the hint names that repair.
+  const malformed = parseToolCallBlock(wrap('{"type":"tool_call","name":"shell","arguments":{"command":"ls\n-x"}}'), TOOLS);
+  assert.ok(malformed && "reason" in malformed);
+  assert.ok(malformed.reason.includes("newline"));
+  // Everything that is not the protocol at all stays ordinary text.
   assert.equal(parseToolCallBlock(wrap('{"type":"other","name":"search"}'), TOOLS), null);
   assert.equal(parseToolCallBlock(wrap('{"name":"search"}'), TOOLS), null);
-  assert.equal(parseToolCallBlock(wrap('{"type":"tool_call","name":42}'), TOOLS), null);
-  assert.equal(parseToolCallBlock(wrap('{"type":"tool_call","name":"search","arguments":[]}'), TOOLS), null);
   assert.equal(parseToolCallBlock(wrap("not json"), TOOLS), null);
   assert.equal(parseToolCallBlock(wrap('{"type":"tool_call","name":"search"}'), []), null);
+});
+
+test("a rejected fence arrives through the filter with an empty answer", () => {
+  const block = '```json\n{"type": "tool_call", "name": "shell", "arguments": {"command": "ls\n-x"}}\n```\n';
+  const { answer, calls, rejected } = run("Before.\n" + block, 9);
+  assert.deepEqual(calls, []);
+  assert.equal(answer.trimEnd(), "Before.");
+  assert.ok(!answer.includes("tool_call"));
+  assert.equal(rejected.length, 1);
+  assert.ok(rejected[0]!.reason.includes("newline"));
 });
 
 test("status markers and plan blocks still work alongside the protocol", () => {
@@ -229,18 +258,22 @@ test("one envelope can carry several calls", () => {
   assert.equal(answer.trimEnd(), "Working.");
 });
 
-test("an envelope is all-or-nothing: one unoffered name shows the whole thing", () => {
+test("an envelope with one unoffered name refuses every call in it", () => {
   // This is the real-world case — an endpoint that injects its own system
   // prompt teaches a tool vocabulary this request never offered. Half
-  // executing that would silently drop the user's other intent.
+  // executing that would silently drop the user's other intent, so nothing
+  // runs; but every call-shaped object is addressed protocol, so each gets a
+  // rejection the model is told about next round. The user sees crosses, not
+  // the raw envelope.
   const env =
     "<tool_calls>\n" +
     '{"type": "tool_call", "name": "set_title", "arguments": {"title": "T"}}\n' +
     '{"type": "tool_call", "name": "search_memory", "arguments": {}}\n' +
     "</tool_calls>\n";
-  const { answer, calls } = run(env, 7);
+  const { answer, calls, rejected } = run(env, 7);
   assert.deepEqual(calls, []);
-  assert.equal(answer, env);
+  assert.equal(answer, "");
+  assert.deepEqual(rejected.map((r) => r.name), ["set_title", "search_memory"]);
 });
 
 test("an unclosed <tool_calls> is released as text, never executed", () => {

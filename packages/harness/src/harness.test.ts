@@ -116,6 +116,100 @@ test("feeds tool results into a bounded second round", async () => {
   assert.ok(observed.some((event) => event.type === "tool_result"));
 });
 
+test("a refused protocol block becomes an error tool result, not answer text", async () => {
+  // The malformed-JSON case from the field: a raw newline inside the command
+  // string. The block used to be released into the transcript verbatim — the
+  // user read the model's broken JSON and the model learned nothing. It is
+  // now answered in protocol: a synthetic assistant tool_use plus an error
+  // tool result, and a tool_rejected event for the UI's cross.
+  const definition: ToolDefinition = {
+    type: "function",
+    function: { name: "shell", description: "run a shell command", parameters: { type: "object" } },
+  };
+  const toolHost: ToolHost = {
+    definitions: () => [definition],
+    execute: async () => {
+      throw new Error("no tool may run for a refused block");
+    },
+  };
+  const model = scriptedModel([
+    await events(
+      // Raw newline inside the JSON string — invalid JSON, valid intent.
+      { type: "token", delta: '```json\n{"type": "tool_call", "name": "shell", "arguments": {"command": "Get-ChildItem\n\'.claude\'"}}\n```\n' },
+      { type: "done" },
+    ),
+    await events({ type: "token", delta: "Listed." }, { type: "done" }),
+  ]);
+  const observed: HarnessEvent[] = [];
+  const result = await runAgentTurn({
+    model,
+    messages: [],
+    input: "list .claude",
+    toolHost,
+    signal: new AbortController().signal,
+    observer: { event: (event) => { observed.push(event); } },
+    config: fastConfig,
+  });
+
+  // The block never reaches the answer text.
+  assert.equal(result.text, "Listed.");
+  assert.equal(result.rounds, 2);
+  assert.ok(!result.messages.some((m) => m.role === "assistant" && m.content.includes("tool_call")));
+
+  // The transcript carries the synthetic pair, ahead of round two.
+  const assistantCalls = result.messages.filter(
+    (m) => m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0,
+  );
+  assert.equal(assistantCalls.length, 1);
+  const rejectedCall = assistantCalls[0]!.tool_calls![0]!;
+  assert.equal(rejectedCall.function.name, "unknown");
+  const errorResult = result.messages.find(
+    (m) => m.role === "tool" && m.tool_call_id === rejectedCall.id,
+  );
+  assert.ok(errorResult);
+  assert.ok(errorResult.content.includes("was not valid JSON"));
+  assert.ok(errorResult.content.includes("newline"), "the reason names the usual repair");
+
+  // The UI event fires, and the round is not treated as empty — no stacked
+  // "your previous reply was empty" recovery on top of the rejection.
+  assert.ok(observed.some((e) => e.type === "tool_rejected" && e.rejection.reason.includes("JSON")));
+  assert.ok(!observed.some((e) => e.type === "status" && e.status.includes("Empty response")));
+});
+
+test("a block naming an unoffered tool is refused with the offered list", async () => {
+  const definition: ToolDefinition = {
+    type: "function",
+    function: { name: "read", description: "read", parameters: { type: "object" } },
+  };
+  const toolHost: ToolHost = {
+    definitions: () => [definition],
+    execute: async () => {
+      throw new Error("no tool may run for a refused block");
+    },
+  };
+  const model = scriptedModel([
+    await events(
+      { type: "token", delta: '```json\n{"type": "tool_call", "name": "list_files", "arguments": {}}\n```\n' },
+      { type: "done" },
+    ),
+    await events({ type: "token", delta: "Done instead." }, { type: "done" }),
+  ]);
+  const result = await runAgentTurn({
+    model,
+    messages: [],
+    input: "go",
+    toolHost,
+    signal: new AbortController().signal,
+    config: fastConfig,
+  });
+
+  const errorResult = result.messages.find((m) => m.role === "tool");
+  assert.ok(errorResult);
+  assert.ok(errorResult.content.includes("list_files"));
+  assert.ok(errorResult.content.includes("read"), "the reason quotes the offered tools");
+  assert.equal(result.text, "Done instead.");
+});
+
 test("recovers one empty response", async () => {
   const model = scriptedModel([
     await events({ type: "done" }),
@@ -175,6 +269,44 @@ test("the tool-round budget stops the turn instead of throwing it away", async (
     observed.filter((event) => event.type === "needs_user"),
     [{ type: "needs_user", reason: "round_limit", message: "stopped after 3 tool rounds" }]
   );
+});
+
+test("rejection-only rounds respect the round budget", async () => {
+  // A model that keeps re-emitting a refused block must hit the same budget a
+  // tool-looping model does. The budget used to be checked only on rounds
+  // with real calls, so a rejection-only round looped past it — unbounded
+  // rounds, unbounded tokens, for exactly the case the budget exists for.
+  const script: ModelEvent[] = [
+    { type: "token", delta: '```json\n{"type": "tool_call", "name": "ghost", "arguments": {}}\n```\n' },
+    { type: "done" },
+  ];
+  const model: ModelClient = {
+    async *stream() {
+      for (const event of script) yield event;
+    },
+  };
+  const toolHost: ToolHost = {
+    definitions: () => [
+      { type: "function", function: { name: "real", description: "real", parameters: { type: "object" } } },
+    ],
+    execute: async () => "x",
+  };
+  const observed: HarnessEvent[] = [];
+  const result = await runAgentTurn({
+    model,
+    messages: [],
+    input: "go",
+    toolHost,
+    signal: new AbortController().signal,
+    observer: { event: (event) => { observed.push(event); } },
+    config: { ...fastConfig, maxToolRounds: 2 },
+  });
+
+  assert.equal(result.blocked, true);
+  assert.equal(result.rounds, 2);
+  // Both refusals were still answered in the transcript.
+  assert.equal(result.messages.filter((m) => m.role === "tool").length, 2);
+  assert.ok(observed.some((e) => e.type === "needs_user" && e.reason === "round_limit"));
 });
 
 test("the round budget never fires on a turn that answers", async () => {

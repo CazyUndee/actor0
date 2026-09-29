@@ -11,3 +11,4 @@
 *.log
 *.tsbuildinfo
 .DS_Store
+/notes/cc/

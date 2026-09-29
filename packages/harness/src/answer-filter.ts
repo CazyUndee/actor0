@@ -10,6 +10,7 @@ import {
   parseToolCallBlock,
   parseToolCallEnvelope,
   type BlockKind,
+  type RejectedBlock,
 } from "./tool-call-block.js";
 import type { PlanPrefix, ToolCall } from "./types.js";
 
@@ -58,6 +59,13 @@ export type FilteredChunk = {
   plan: PlanPrefix | null;
   /** Tool calls the model emitted as protocol blocks (see tool-call-block.ts). */
   toolCalls: ToolCall[];
+  /**
+   * Blocks the protocol refused — a call for an unoffered tool, or arguments
+   * that were not valid JSON. Each becomes a synthetic call plus an error
+   * tool result, so the model is told next round that the call was wrong and
+   * why; nothing here is ever released into the answer text.
+   */
+  rejected: RejectedBlock[];
 };
 
 export type AnswerFilter = {
@@ -99,11 +107,13 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
       ? matchCloseEnvelope(pending, block?.length ?? 0)
       : matchCloseFence(pending, atEnd);
 
-  /** The calls a closed block carries: none unless every object is a call. */
-  const parseClosed = (finished: string): ToolCall[] => {
+  /** The calls and rejections a closed block carries. */
+  const parseClosed = (finished: string): { calls: ToolCall[]; rejected: RejectedBlock[] } => {
     if (blockKind === "envelope") return parseToolCallEnvelope(finished, toolNames);
-    const call = parseToolCallBlock(finished, toolNames);
-    return call ? [call] : [];
+    const result = parseToolCallBlock(finished, toolNames);
+    if (result === null) return { calls: [], rejected: [] };
+    if ("reason" in result) return { calls: [], rejected: [result] };
+    return { calls: [result], rejected: [] };
   };
 
   /**
@@ -121,6 +131,7 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
     let output = "";
     const statuses: string[] = [];
     const toolCalls: ToolCall[] = [];
+    const rejected: RejectedBlock[] = [];
     let plan: PlanPrefix | null = null;
     let buffer = held + delta;
     held = "";
@@ -160,9 +171,14 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
         const finished = pending.slice(0, close.index + close.length);
         buffer = pending.slice(close.index + close.length);
         block = null;
-        const calls = parseClosed(finished);
-        if (calls.length > 0) {
-          toolCalls.push(...calls);
+        const parsed = parseClosed(finished);
+        if (parsed.rejected.length > 0) {
+          rejected.push(...parsed.rejected);
+          // The block owned its line, so drop the newline that ends it.
+          eatNewline = ownsLine(buffer, 0);
+          atLineStart = true;
+        } else if (parsed.calls.length > 0) {
+          toolCalls.push(...parsed.calls);
           // The block owned its line, so drop the newline that ends it.
           eatNewline = ownsLine(buffer, 0);
           atLineStart = true;
@@ -249,17 +265,20 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
       block = null;
       // Never execute a block that never closed: whatever it parses as, it is
       // the model showing the user JSON, not a protocol message.
-      const calls = close ? parseClosed(finished) : [];
-      if (calls.length > 0) {
-        toolCalls.push(...calls);
+      const parsed = close ? parseClosed(finished) : { calls: [], rejected: [] };
+      if (parsed.rejected.length > 0) {
+        rejected.push(...parsed.rejected);
         // The block is the protocol, not content: it must not also be shown.
+        output += rest;
+      } else if (parsed.calls.length > 0) {
+        toolCalls.push(...parsed.calls);
         output += rest;
       } else {
         output += finished + rest;
       }
     }
 
-    return { text: output, statuses, plan, toolCalls };
+    return { text: output, statuses, plan, toolCalls, rejected };
   };
 
   return {

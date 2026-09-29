@@ -1,4 +1,5 @@
 import { createAnswerFilter } from "./answer-filter.js";
+import type { RejectedBlock } from "./tool-call-block.js";
 import { ModelTransportError } from "./model-client.js";
 import { formatReasoningSummary } from "./reasoning-summary.js";
 import type {
@@ -100,6 +101,7 @@ async function runModelAttempt(
   let attemptText = "";
   let reasoningText = "";
   const toolCalls: ToolCall[] = [];
+  const rejectedBlocks: RejectedBlock[] = [];
   const usage: Usage[] = [];
   let sawDone = false;
   let iterator: AsyncIterator<ModelEvent> | undefined;
@@ -110,6 +112,10 @@ async function runModelAttempt(
       await emit(observer, { type: "status", status, source: "marker" });
     }
     if (filtered.plan) await emit(observer, { type: "plan", plan: filtered.plan });
+    for (const rejection of filtered.rejected) {
+      rejectedBlocks.push(rejection);
+      await emit(observer, { type: "tool_rejected", rejection });
+    }
     for (const call of filtered.toolCalls) {
       toolCalls.push(call);
       await emit(observer, { type: "tool_call", tool_calls: [call] });
@@ -154,6 +160,10 @@ async function runModelAttempt(
     const tail = filter.flush();
     for (const status of tail.statuses) await emit(observer, { type: "status", status, source: "marker" });
     if (tail.plan) await emit(observer, { type: "plan", plan: tail.plan });
+    for (const rejection of tail.rejected) {
+      rejectedBlocks.push(rejection);
+      await emit(observer, { type: "tool_rejected", rejection });
+    }
     for (const call of tail.toolCalls) {
       toolCalls.push(call);
       await emit(observer, { type: "tool_call", tool_calls: [call] });
@@ -167,7 +177,7 @@ async function runModelAttempt(
     if (!sawDone && attemptText.trim()) {
       await emit(observer, { type: "partial", text: attemptText });
     }
-    return { text: attemptText, toolCalls, complete: sawDone, reasoning, usage };
+    return { text: attemptText, toolCalls, rejectedBlocks, complete: sawDone, reasoning, usage };
   } catch (error) {
     if (outerSignal.aborted) throw error;
     if (attemptText && isRetriable(error)) await emit(observer, { type: "reset", attemptText });
@@ -214,6 +224,52 @@ export async function runAgentTurn(options: {
     roundText = result.text;
     allUsage.push(...result.usage);
     finalReasoning = result.reasoning;
+
+    // A refused protocol block still gets answered. The synthetic call plus
+    // the error tool result go into the transcript ahead of any real calls,
+    // so the next round opens with the model being told its block was wrong
+    // and why — the same way a failing tool is reported — instead of learning
+    // nothing and re-emitting the same block (or worse, the user reading the
+    // raw JSON). No tool host runs for these; the result is authored here.
+    for (const rejection of result.rejectedBlocks) {
+      messages.push({
+        role: "assistant",
+        content: "",
+        tool_calls: [rejection.call],
+      });
+      messages.push({
+        role: "tool",
+        content: rejection.reason,
+        tool_call_id: rejection.call.id,
+        name: rejection.call.function.name,
+      });
+    }
+
+    // A round that only refused a block continues: its answer is the error
+    // tool result the harness authored, so the loop runs another round with
+    // that result in front of the model. Treating it as complete here would
+    // strand the rejection — the model never gets to react. The round budget
+    // still applies: stop and report rather than loop on a model that keeps
+    // re-emitting the same refused block.
+    if (result.toolCalls.length === 0 && result.rejectedBlocks.length > 0) {
+      if (Number.isFinite(config.maxToolRounds) && round >= config.maxToolRounds) {
+        await emit(options.observer, {
+          type: "needs_user",
+          reason: "round_limit",
+          message: `stopped after ${config.maxToolRounds} tool rounds`,
+        });
+        return {
+          messages,
+          text: result.text,
+          complete: result.complete,
+          rounds: round,
+          usage: allUsage,
+          reasoning: finalReasoning,
+          blocked: true,
+        };
+      }
+      continue;
+    }
 
     if (result.toolCalls.length > 0) {
       messages.push({
@@ -304,7 +360,11 @@ export async function runAgentTurn(options: {
     // A round that produced an answer is a healthy round — clear the streak.
     consecutiveToolErrors = 0;
 
-    if (!result.text.trim() && config.recoverEmptyAnswer && !recoveredEmpty) {
+    // A round that only refused a block is not an empty round: the model said
+    // something (the harness answered it with the error result above), and
+    // stacking "your previous reply was empty" on top of that rejection
+    // teaches the model two contradictory things at once.
+    if (!result.text.trim() && result.rejectedBlocks.length === 0 && config.recoverEmptyAnswer && !recoveredEmpty) {
       recoveredEmpty = true;
       await emit(options.observer, {
         type: "status",
