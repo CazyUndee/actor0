@@ -468,6 +468,100 @@ test("content before an error frame in the same chunk is not lost", async () => 
   assert.deepEqual(seen, ["half an answer"], "the tokens that arrived first were discarded");
 });
 
+test("a rate limit is waited out for as long as the server says", async () => {
+  // `Retry-After: 30` and a backoff of 1s/2s/4s: all three retries land inside
+  // the window the server just described, and the turn fails having spent
+  // seven seconds confirming what it was told.
+  const error = await streamFailure(
+    new Response(JSON.stringify({ error: { message: "Rate limit reached" } }), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "30" },
+    }),
+  );
+  assert.equal(error.retriable, true);
+  assert.equal(error.retryAfterMs, 30_000);
+  assert.match(error.message, /wait 30s and try again/);
+  assert.ok(!/retry with backoff/i.test(error.message), `the message claims a backoff it will not use: ${error.message}`);
+});
+
+test("a reset time is read as well as a count of seconds", async () => {
+  // The header is seconds per RFC 9110, and an HTTP-date in the dialect
+  // several providers actually send. Both are real; neither is guessed at.
+  // A real reset time, in the future, at second resolution: an HTTP-date
+  // carries no milliseconds, so the read is a moment under 45s.
+  const error = await streamFailure(
+    new Response("{}", {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": new Date(Date.now() + 45_000).toUTCString() },
+    }),
+  );
+  assert.ok(
+    error.retryAfterMs !== undefined && error.retryAfterMs > 43_000 && error.retryAfterMs <= 45_000,
+    `read a reset 45s out as ${error.retryAfterMs}`,
+  );
+  assert.match(error.message, /wait 45s and try again/);
+});
+
+test("a window too far out to wait for is reported, not retried into", async () => {
+  // Retrying a twenty-minute window on a 1s/2s/4s backoff proves only that
+  // the limit is still in force. The user is told when it lifts instead.
+  const error = await streamFailure(
+    new Response("{}", {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "1200" },
+    }),
+  );
+  assert.equal(error.retriable, false);
+  assert.equal(error.retryAfterMs, 1_200_000);
+  assert.match(error.message, /will not keep retrying before then/);
+});
+
+test("a header that is neither a count nor a date is ignored", async () => {
+  // A misread directive is worse than no directive: honouring "soon" as zero
+  // is a hot loop against a server that is asking for space.
+  // "-5" and "12.5.6" are the two worth naming: Date.parse turns them into
+  // April 2001 and December 2006, both long past, and a past reset reads as
+  // "come back immediately" — a claim about a server that said nothing.
+  for (const value of ["soon", "", "-5", "12.5.6", "tomorrow"]) {
+    const error = await streamFailure(
+      new Response("{}", {
+        status: 503,
+        headers: { "content-type": "application/json", "retry-after": value },
+      }),
+    );
+    assert.equal(error.retryAfterMs, undefined, `read ${JSON.stringify(value)} as a wait`);
+    assert.equal(error.retriable, true, "a 5xx is still retriable without a usable header");
+  }
+});
+
+test("a limit that has already lifted waits zero, not an hour", async () => {
+  // A clock-skewed proxy can hand back a reset time in the past. Honouring it
+  // literally would be a negative sleep, which is a spin.
+  const error = await streamFailure(
+    new Response("{}", {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": new Date(Date.now() - 60_000).toUTCString() },
+    }),
+  );
+  assert.equal(error.retryAfterMs, 0);
+  assert.equal(error.retriable, true);
+  assert.match(error.message, /wait 0s and try again/);
+});
+
+test("a 5xx with a reset hint is waited out too", async () => {
+  // Retry-After is not only a rate limit: a gateway in front of a
+  // restarting service says the same thing with a 503.
+  const error = await streamFailure(
+    new Response("upstream restarting", {
+      status: 503,
+      headers: { "content-type": "text/plain", "retry-after": "5" },
+    }),
+  );
+  assert.equal(error.retriable, true);
+  assert.equal(error.retryAfterMs, 5_000);
+});
+
+
 test("a key passed in the query string never reaches an error message", async () => {
   const model = new OpenAiCompatibleModel({
     baseUrl: "https://example.test/v1",

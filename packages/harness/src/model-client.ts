@@ -1,10 +1,50 @@
 import type { ChatMessage, ModelClient, ModelEvent, ToolCall, ToolDefinition, Usage } from "./types.js";
 
 export class ModelTransportError extends Error {
-  constructor(message: string, readonly retriable = false) {
+  /**
+   * @param retryAfterMs how long the server asked us to wait, when it said.
+   *   A retriable error that carries one has a floor under its next attempt:
+   *   see `retryDelay` in harness.ts.
+   */
+  constructor(message: string, readonly retriable = false, readonly retryAfterMs?: number) {
     super(message);
     this.name = "ModelTransportError";
   }
+}
+
+/**
+ * The longest server-requested wait this harness will sit through.
+ *
+ * A windowed rate limit can name a reset twenty minutes out. Honouring that
+ * in a terminal means the turn disappears for twenty minutes with nothing on
+ * screen, which the user reads as a hang; ignoring it means the retries land
+ * inside the window and the turn fails having proved nothing. So the wait is
+ * honoured up to here, and past it the failure is surfaced instead, with the
+ * time the limit lifts in the message the user reads.
+ */
+export const MAX_HONOURED_RETRY_AFTER_MS = 120_000;
+
+/**
+ * How long the server asked us to wait, in milliseconds.
+ *
+ * `Retry-After` is a count of seconds per RFC 9110, and an HTTP-date in the
+ * dialect several providers actually send. Both are honoured; a value that is
+ * neither is ignored rather than guessed at, because a misread directive is
+ * worse than no directive.
+ */
+export function retryAfterMs(headers: Headers, now: number = Date.now()): number | undefined {
+  const value = headers.get("retry-after")?.trim();
+  if (!value) return undefined;
+  if (/^\d+$/.test(value)) return Number(value) * 1_000;
+  // `Date.parse` is a parser for humans and it is lenient: "-5" comes back as
+  // April 2001 and "12.5.6" as December 2006, both of which would be read as a
+  // reset that has already passed and turn a server that said nothing usable
+  // into a claim that it asked us to come back immediately. Every one of the
+  // three date formats HTTP allows begins with a weekday, so that is the gate.
+  if (!/^(?:mon|tue|wed|thu|fri|sat|sun)/i.test(value)) return undefined;
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, at - now);
 }
 
 export type OpenAiCompatibleOptions = {
@@ -93,8 +133,13 @@ export class OpenAiCompatibleModel implements ModelClient {
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      const retriable = response.status === 429 || response.status >= 500;
-      throw new ModelTransportError(describeHttpFailure(this.endpoint, response, text, retriable), retriable);
+      const wait = retryAfterMs(response.headers);
+      // A rate limit whose reset is beyond anything worth waiting out is not
+      // retriable: the retries would land inside the window and only prove
+      // the limit is still in force.
+      const transient = response.status === 429 || response.status >= 500;
+      const retriable = transient && (wait === undefined || wait <= MAX_HONOURED_RETRY_AFTER_MS);
+      throw new ModelTransportError(describeHttpFailure(this.endpoint, response, text, retriable, wait), retriable, wait);
     }
     // A 200 carrying an HTML page is the same failure as a 500 carrying one,
     // and it is the worse of the two: read as a stream it has no `data:` frames,
@@ -393,13 +438,19 @@ export function describeHttpFailure(
   response: Response,
   body: string,
   retriable: boolean,
+  retryAfterMs?: number,
 ): string {
   const status = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
   const contentType = response.headers.get("content-type") ?? "no content-type";
   const head = `${status} from ${endpoint} (${contentType})`;
 
+  // The closing line goes on this path too. It used to be attached only to
+  // the shapeless-body case below, which meant that a provider that sends a
+  // tidy one-line error -- the common case, and the one a user is most likely
+  // to read -- got no statement of what happens next at all. That is the thing
+  // this function exists to say.
   const detail = parseErrorMessage(body);
-  if (detail) return `${head}: ${detail}`;
+  if (detail) return `${head}: ${detail.replace(/[.\s]+$/, "")}. ${closeLine(retriable, retryAfterMs)}`;
 
   // Nothing usable in the body. Say what shape arrived instead of quoting it.
   const html = looksLikeHtml(response.headers.get("content-type"), body);
@@ -411,7 +462,23 @@ export function describeHttpFailure(
     : body.trim()
       ? `it answered with a body that is not a usable error (${contentType}, ${body.length} bytes)`
       : `it answered with an empty body (${contentType})`;
-  return `${head}: ${shape}. ${retryAdvice(retriable)}`;
+  return `${head}: ${shape}. ${closeLine(retriable, retryAfterMs)}`;
+}
+
+/**
+ * What happens next, said plainly.
+ *
+ * A rate limit with a reset time is neither of the two defaults: it will be
+ * waited out, and the wait is the server's number rather than the harness's.
+ * Saying "the harness will retry with backoff" about a window that resets in
+ * forty minutes is advice the reader will act on and find false.
+ */
+function closeLine(retriable: boolean, wait?: number): string {
+  if (wait === undefined) return retryAdvice(retriable);
+  const seconds = Math.ceil(wait / 1_000);
+  return retriable
+    ? `Rate limited: the harness will wait ${seconds}s and try again.`
+    : `Rate limited until the window resets in about ${seconds}s. The harness will not keep retrying before then.`;
 }
 
 function parseErrorMessage(body: string): string | undefined {

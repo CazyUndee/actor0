@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AbortedTurnError, DEFAULT_HARNESS_CONFIG, INTERRUPT_MARKER, runAgentTurn, runModelRound, withInterruptMarker } from "./harness.js";
+import {
+  AbortedTurnError,
+  DEFAULT_HARNESS_CONFIG,
+  INTERRUPT_MARKER,
+  RETRY_JITTER_RATIO,
+  retryDelay,
+  runAgentTurn,
+  runModelRound,
+  withInterruptMarker,
+} from "./harness.js";
 import { ModelTransportError } from "./model-client.js";
 import type {
   HarnessEvent,
@@ -36,6 +45,78 @@ async function events(...items: ModelEvent[]): Promise<AsyncIterable<ModelEvent>
     for (const item of items) yield item;
   })();
 }
+
+test("a rate limit sets a floor under the backoff", () => {
+  // The whole point of reading the header: a 429 that says "come back in 30"
+  // must not be retried after one, two and four seconds. Every one of those
+  // lands inside the window the server just described.
+  const config = { ...DEFAULT_HARNESS_CONFIG, maxRetries: 3, initialBackoffMs: 1_000, maxBackoffMs: 8_000 };
+  const limited = new ModelTransportError("rate limited", true, 30_000);
+  for (const attempt of [1, 2, 3]) {
+    const delay = retryDelay(attempt, config, limited);
+    assert.ok(delay >= 30_000, `attempt ${attempt} retried after ${delay}ms, inside the limit's window`);
+    assert.ok(delay <= 30_000 * (1 + RETRY_JITTER_RATIO), `attempt ${attempt} waited ${delay}ms, past the server's ask`);
+  }
+});
+
+test("a wait the server asked for never shortens a longer backoff", () => {
+  // Both inputs are floors. A 503 with "retry after 2s" on the third attempt
+  // still waits the backoff, because the backoff is there for a reason.
+  const config = { ...DEFAULT_HARNESS_CONFIG, initialBackoffMs: 1_000, maxBackoffMs: 8_000 };
+  const brief = new ModelTransportError("restarting", true, 2_000);
+  assert.ok(retryDelay(3, config, brief) >= 4_000, "a short Retry-After cut a longer backoff");
+});
+
+test("backoff grows, is capped, and carries jitter that only ever lengthens it", () => {
+  const config = { ...DEFAULT_HARNESS_CONFIG, initialBackoffMs: 1_000, maxBackoffMs: 4_000 };
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    const delay = retryDelay(attempt, config);
+    const backoff = Math.min(1_000 * 2 ** (attempt - 1), 4_000);
+    assert.ok(delay >= backoff, `attempt ${attempt}: ${delay}ms is shorter than its backoff ${backoff}ms`);
+    assert.ok(
+      delay <= backoff * (1 + RETRY_JITTER_RATIO),
+      `attempt ${attempt}: ${delay}ms is longer than its backoff plus jitter`,
+    );
+  }
+  // Jitter has to actually vary, or a fleet of clients retrying the same
+  // 429 comes back in the same second and is rejected again.
+  const samples = new Set(Array.from({ length: 20 }, () => retryDelay(1, config)));
+  assert.ok(samples.size > 1, "every client got the identical wait");
+});
+
+test("an error that says nothing about waiting gets the plain backoff", () => {
+  const config = { ...DEFAULT_HARNESS_CONFIG, initialBackoffMs: 1_000, maxBackoffMs: 8_000 };
+  const delay = retryDelay(1, config, new ModelTransportError("connection reset", true));
+  assert.ok(delay >= 1_000 && delay <= 1_250, `a dropped connection waited ${delay}ms`);
+  assert.ok(retryDelay(1, config) >= 1_000, "no error at all is still a backoff");
+});
+
+test("a rate-limited turn says so before it waits", async () => {
+  // The note is the only thing on screen while the turn is quiet, so it has to
+  // say whether the wait is ours or the server's, and never round a sub-second
+  // wait down to "0s". The window here is 40ms rather than 30s: the delay is
+  // honoured rather than merely reported, and a test is not the place to spend
+  // half a minute proving that it is.
+  const limited = (async function* (): AsyncIterable<ModelEvent> {
+    throw new ModelTransportError("rate limited", true, 40);
+  })();
+  const model = scriptedModel([limited, await events({ type: "token", delta: "ok" }, { type: "done" })]);
+  const observed: HarnessEvent[] = [];
+  await runModelRound(model, [], [], new AbortController().signal, { event: (e) => observed.push(e) }, {
+    ...fastConfig,
+    maxRetries: 1,
+  });
+
+  const notes = observed.filter((e): e is Extract<HarnessEvent, { type: "status" }> => e.type === "status");
+  assert.ok(notes.length > 0, "a retry must say that it is retrying");
+  const note = notes[0]!.status;
+  assert.match(note, /^Rate limited — retrying in \d+ms…$/, `${note}`);
+  // The figure carries jitter, so it is the floor that is asserted, not the
+  // exact number: the wait may only ever be longer than the server asked for.
+  const waited = Number(/in (\d+)ms/.exec(note)?.[1]);
+  assert.ok(waited >= 40, `the note promised to retry after ${waited}ms, inside the window the server named`);
+});
+
 
 test("retries transient attempts and rewinds visible text", async () => {
   const failed = (async function* (): AsyncIterable<ModelEvent> {

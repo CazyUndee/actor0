@@ -96,12 +96,10 @@ export async function runModelRound(
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
     assertNotAborted(signal);
     if (attempt > 0) {
-      const delayMs = Math.min(
-        config.initialBackoffMs * 2 ** (attempt - 1),
-        config.maxBackoffMs
-      );
+      const delayMs = retryDelay(attempt, config, lastError);
       if (delayMs > 0) {
-        await emit(observer, { type: "status", status: `Retrying in ${delayMs / 1_000}s…`, source: "note" });
+        const note = isServerDirected(lastError) ? "Rate limited — " : "";
+        await emit(observer, { type: "status", status: `${note}retrying in ${waitLabel(delayMs)}…`, source: "note" });
         await sleep(delayMs, signal);
       }
     }
@@ -514,6 +512,60 @@ function abortError(): DOMException {
 
 function isRetriable(error: unknown): boolean {
   return error instanceof ModelTransportError && error.retriable;
+}
+
+/** Did the server tell us when to come back? */
+function isServerDirected(error: unknown): boolean {
+  return error instanceof ModelTransportError && error.retryAfterMs !== undefined;
+}
+
+/** The wait a rate limit asked for, if the error came from one. */
+function retryAfterOf(error: unknown): number | undefined {
+  return error instanceof ModelTransportError ? error.retryAfterMs : undefined;
+}
+
+/**
+ * A duration as it should be read.
+ *
+ * Rounding a sub-second wait to "0s" tells the user nothing is happening,
+ * which is the one thing they are watching for when the turn goes quiet.
+ */
+function waitLabel(delayMs: number): string {
+  return delayMs >= 1_000 ? `${Math.round(delayMs / 1_000)}s` : `${Math.round(delayMs)}ms`;
+}
+
+/**
+ * Jitter added to every wait, as a fraction of the delay itself.
+ *
+ * Without it, every client that hit a rate limit in the same second comes back
+ * in the same second, and the limit that just rejected them rejects them
+ * again. It is added and never subtracted: a wait shorter than the backoff it
+ * is jittering is not a backoff.
+ */
+export const RETRY_JITTER_RATIO = 0.25;
+
+/**
+ * How long to wait before the next attempt.
+ *
+ * Two inputs, and the second can only make the wait longer:
+ *
+ *  - exponential backoff, capped, which is what a dropped connection or a
+ *    5xx wants;
+ *  - `Retry-After`, which is the server stating a rate limit window. A 429
+ *    that says "come back in 30" and is retried after one, two and four
+ *    seconds has honoured nothing: every attempt lands inside the window and
+ *    the turn fails having spent seven seconds confirming what it was told.
+ *
+ * A wait beyond `MAX_HONOURED_RETRY_AFTER_MS` never reaches here — the
+ * transport has already made that failure non-retriable rather than have the
+ * turn vanish for a number of minutes a user is waiting on.
+ *
+ * Exported so the arithmetic can be tested without sleeping through it.
+ */
+export function retryDelay(attempt: number, config: HarnessConfig, error?: unknown): number {
+  const backoff = Math.min(config.initialBackoffMs * 2 ** (attempt - 1), config.maxBackoffMs);
+  const base = Math.max(backoff, retryAfterOf(error) ?? 0);
+  return Math.round(base + Math.random() * RETRY_JITTER_RATIO * base);
 }
 
 function errorMessage(error: unknown): string {
