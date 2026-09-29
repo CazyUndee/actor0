@@ -3,6 +3,60 @@ import test from "node:test";
 import { ModelTransportError, OpenAiCompatibleModel } from "./model-client.js";
 import type { ModelEvent, ToolCall } from "./types.js";
 
+test("a streamed tool call is assembled the same at every chunk boundary", async () => {
+  // `ToolCallBuffer` coalesces tool-call deltas by index, and the SSE frame
+  // that carries each delta is itself split by the network at arbitrary
+  // points. Two deltas for one call, a second call arriving between them, and
+  // a delta with no id: the result may not depend on where the chunk
+  // boundaries happened to fall. The existing split test pins three specific
+  // boundaries; this pins all of them.
+  const frames = [
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"shell"}}]}}]}\n\n',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"command\\":"}}]}}]}\n\n',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"ls -la\\"}"}}]}}]}\n\n',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_def","type":"function","function":{"name":"read","arguments":"{\\"path\\":\\"a\\"}"}}]}}]}\n\n',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":",\\"cwd\\":\\"/tmp\\"}"}}]}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"done"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}\n\n',
+    "data: [DONE]\n\n",
+  ].join("");
+  const encoder = new TextEncoder();
+
+  const collect = async (chunks: string[]): Promise<string> => {
+    const model = new OpenAiCompatibleModel({
+      baseUrl: "https://example.test/v1",
+      model: "m",
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+    });
+    const calls: unknown[] = [];
+    let text = "";
+    for await (const event of model.stream([], [], new AbortController().signal)) {
+      if (event.type === "tool_call") calls.push(...event.tool_calls);
+      if (event.type === "token") text += event.delta;
+    }
+    return JSON.stringify({ text, calls });
+  };
+
+  const whole = await collect([frames]);
+  // A call with no id still gets a stable one, and the second call stays second.
+  assert.match(whole, /call_def/);
+
+  for (const size of [1, 2, 3, 5, 7, 11, 13, 17, 23, 31, 64, 200]) {
+    const chunks: string[] = [];
+    for (let i = 0; i < frames.length; i += size) chunks.push(frames.slice(i, i + size));
+    assert.equal(await collect(chunks), whole, `a ${size}-byte chunking assembled the calls differently`);
+  }
+});
+
+
 test("calls one configured endpoint and parses SSE frames", async () => {
   let requestedUrl = "";
   let authorization = "";

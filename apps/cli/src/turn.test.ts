@@ -39,20 +39,26 @@ async function startServer(script: Script): Promise<{ server: Server; baseUrl: s
       res.writeHead(405).end();
       return;
     }
+    // The body is read *before* the response is written, not alongside it.
+    // Recording it from an `end` listener that runs whenever it gets around
+    // to it looks equivalent and is not: a turn that fails mid-stream closes
+    // the connection, `end` never fires, and the request the test is asserting
+    // about simply does not appear to have happened.
     let body = "";
-    req.on("data", (chunk: Buffer) => {
-      body += chunk.toString();
+    req.setEncoding("utf8");
+    req.on("data", (chunk: string) => {
+      body += chunk;
     });
     req.on("end", () => {
       bodies.push(body);
+      const frames = script(turn++);
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+      for (const frame of frames) {
+        res.write(`data: ${JSON.stringify(frame)}\n\n`);
+      }
+      res.write("data: [DONE]\n\n");
+      res.end();
     });
-    const frames = script(turn++);
-    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
-    for (const frame of frames) {
-      res.write(`data: ${JSON.stringify(frame)}\n\n`);
-    }
-    res.write("data: [DONE]\n\n");
-    res.end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
