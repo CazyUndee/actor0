@@ -1,7 +1,7 @@
 import type { ChatMessage } from "@actor0/harness";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compactHistory, compactHistoryPerMessage } from "./history.js";
+import { compactHistory, compactHistoryPerMessage, repairHistory } from "./history.js";
 import { sessionsDir } from "./paths.js";
 
 /**
@@ -110,7 +110,13 @@ export function loadSession(id: string): StoredSession | undefined {
     return undefined;
   }
   if (!isRecord(parsed) || typeof parsed.id !== "string" || !Array.isArray(parsed.messages)) return undefined;
-  const messages = parsed.messages.filter(isChatMessage);
+  // Repair before returning. A file written by an older build, a hand-edit, or
+  // a truncation can hold a tool result whose call is gone, or a call whose
+  // results never landed — and the provider rejects that shape outright, so a
+  // resume that skips this fails on every request until the session dies.
+  // Cheap (one walk), invisible on a clean history, and it makes load and
+  // save symmetric: both ends of the file's life run the validity pass.
+  const messages = repairHistory(parsed.messages.filter(isChatMessage));
   return {
     id: parsed.id,
     createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : "",

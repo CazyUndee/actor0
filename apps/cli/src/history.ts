@@ -149,6 +149,21 @@ function toolNamesByCallId(messages: ChatMessage[]): Map<string, string> {
 type Unit = ChatMessage[];
 
 /**
+ * Repair a history the API would reject, however it got broken.
+ *
+ * The validity pass behind both compaction entry points, exported because
+ * compaction is not the only way a broken history arrives: a session file
+ * written by an older build, a hand-edit, or a truncated download all load
+ * through `loadSession` untouched, and a resume then sends the broken shape
+ * to the provider — which rejects the whole request. Repair on load, like
+ * repair on save: a resumed conversation that fails on every request is not
+ * degraded, it is dead.
+ */
+export function repairHistory(messages: ChatMessage[]): ChatMessage[] {
+  return keepValidUnits(messages).flat();
+}
+
+/**
  * Partition into units, discarding fragments the API would reject.
  *
  * This is a *validity* pass, not a budgeting one, and it runs whatever the

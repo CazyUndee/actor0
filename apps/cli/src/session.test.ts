@@ -152,3 +152,61 @@ test("session ids sort chronologically and are filesystem-safe", () => {
   assert.doesNotMatch(earlier, /[:.]/, "a colon or a dot is a path problem on some systems");
   assert.doesNotMatch(earlier, /[\\/]/);
 });
+
+test("loadSession repairs a broken history instead of resuming it broken", () => {
+  // A file written by an older build, a hand-edit, or a truncation can hold a
+  // tool result whose call is gone — or a call whose results never landed.
+  // The provider rejects that shape outright, so a resume that skips repair
+  // fails on every request until the session dies. saveSession repairs; this
+  // is the other end of the file's life, and it had the same hole.
+  process.env.ACTOR0_DATA_DIR = scratch();
+
+  // Orphan result: the call was dropped, the result survived.
+  saveSession({
+    id: "orphan",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    model: "m",
+    messages: [
+      { role: "user", content: "earlier" },
+      { role: "tool", tool_call_id: "ghost", content: "result of a dropped call" },
+    ],
+  });
+  const orphan = loadSession("orphan");
+  assert.ok(orphan);
+  assert.deepEqual(
+    orphan.messages.map((m) => m.role),
+    ["user"],
+    "an orphaned tool result must not survive a load",
+  );
+
+  // Dangling call: killed between the call and its results.
+  saveSession({
+    id: "dangling",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    model: "m",
+    messages: [
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "shell", arguments: "{}" } }] },
+    ],
+  });
+  const dangling = loadSession("dangling");
+  assert.ok(dangling);
+  assert.deepEqual(
+    dangling.messages.map((m) => m.role),
+    ["user"],
+    "a call with no result must not survive a load",
+  );
+
+  // A clean history loads byte-identical — repair is invisible on valid input.
+  const clean = conversation(2);
+  saveSession({
+    id: "clean",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    model: "m",
+    messages: clean,
+  });
+  assert.deepEqual(loadSession("clean")?.messages, clean);
+});
