@@ -26,14 +26,27 @@ cd packages/harness && node --import tsx --test src/<file>.test.ts
 cd apps/cli      && node --import tsx --test src/<file>.test.ts
 ```
 
-Everything, before committing:
+Everything, before committing — **all six**, in this order:
 
 ```bash
-npm test     # typecheck + lint + boundaries + every suite, &&-joined
+npm run check:boundaries
+npm run check:theme
+npm run typecheck
+npm test
+npm run lint
+npm run build
 ```
 
-It stops at the first failure, so a red suite means the ones after it never
-ran. Run them individually before believing that something is broken.
+`npm test` is **one item on that list, not the list**. It runs the two
+workspace suites and nothing else: no `tsc`, no eslint, no boundary check.
+CI runs each of those as its own job, so an error in any of them is green
+locally for as long as you keep running `npm test`, and red in CI eighteen
+seconds after the push. That is not hypothetical — it is how a one-line
+observer that returned an array length shipped.
+
+The suites are `&&`-joined and stop at the first failure, so a red suite means
+the ones after it never ran. Run them individually before believing that
+something is broken.
 
 ## The CLI resolves the harness to `dist/`, not to `src/`
 
