@@ -1,6 +1,7 @@
 import type { ChatMessage } from "@actor0/harness";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { compactHistory } from "./history.js";
 import { sessionsDir } from "./paths.js";
 
 /**
@@ -10,9 +11,10 @@ import { sessionsDir } from "./paths.js";
  * to show a resume banner. Nothing else is stored — in particular no API key,
  * which lives only in config or the environment.
  *
- * History is capped on save. A long tool-using session grows without bound and
- * a resumed conversation that starts with 400 stale messages is both slow and
- * confusing; the model only needs the recent window to stay coherent.
+ * History is compacted on save. A long tool-using session grows without bound,
+ * and the saved payload is what a resume replays — so stale tool results have
+ * their contents cleared while every message stays exactly where it was. See
+ * `history.ts` for why that is better than dropping messages.
  */
 
 export type StoredSession = {
@@ -22,14 +24,6 @@ export type StoredSession = {
   model: string;
   messages: ChatMessage[];
 };
-
-/** Keep the tail, always preserving the leading system message if present. */
-export function trimHistory(messages: ChatMessage[], max = 100): ChatMessage[] {
-  if (messages.length <= max) return messages;
-  const system = messages[0]?.role === "system" ? [messages[0]] : [];
-  const rest = messages.slice(messages.length - (max - system.length));
-  return [...system, ...rest];
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -48,14 +42,57 @@ export function sessionFile(id: string): string {
   return join(sessionsDir(), `${id}.json`);
 }
 
+/**
+ * Reject an id that is not a plain session name.
+ *
+ * Ids come from `newSessionId` normally, but `--session` is typed by a human,
+ * and `join` will happily resolve `../../whatever` into a path outside the
+ * sessions directory. Nothing here writes through that path — a load is a
+ * read — but a flag that silently reads somewhere else is the kind of thing
+ * that becomes a write the next time someone extends this.
+ */
+function assertSessionId(id: string): void {
+  if (!id || id === "." || id === ".." || /[\\/]/.test(id) || id.includes("..")) {
+    throw new Error(`invalid session id: ${JSON.stringify(id)}`);
+  }
+}
+
 export function saveSession(session: StoredSession): void {
+  assertSessionId(session.id);
   mkdirSync(sessionsDir(), { recursive: true });
-  const payload: StoredSession = { ...session, messages: trimHistory(session.messages) };
-  writeFileSync(sessionFile(session.id), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  const payload: StoredSession = { ...session, messages: compactHistory(session.messages) };
+  const target = sessionFile(session.id);
+
+  // Write to a sibling, then rename. Rename is atomic on Windows and POSIX, so
+  // a reader sees the old file or the new one and never a half of each.
+  //
+  // This matters more than it looks: the direct write truncated a 100-message
+  // session in place, and `loadSession` treats unparseable JSON as "no such
+  // session" — so a disk that filled up mid-write, or a kill -9, destroyed the
+  // whole conversation and reported nothing at all. The saved work is the one
+  // thing a user cannot reconstruct.
+  const staging = `${target}.${process.pid}.tmp`;
+  try {
+    writeFileSync(staging, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    renameSync(staging, target);
+  } catch (error) {
+    // Never leave a staging file behind for `listSessions` to trip over.
+    try {
+      rmSync(staging, { force: true });
+    } catch {
+      /* the write already failed; the temp file is the lesser problem */
+    }
+    throw error;
+  }
 }
 
 /** Load one session, or undefined if it is missing or unreadable. */
 export function loadSession(id: string): StoredSession | undefined {
+  try {
+    assertSessionId(id);
+  } catch {
+    return undefined;
+  }
   let raw: string;
   try {
     raw = readFileSync(sessionFile(id), "utf8");

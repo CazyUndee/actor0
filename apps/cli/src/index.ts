@@ -2,6 +2,7 @@
 import { render } from "ink";
 import { createElement } from "react";
 import { ConfigError, loadConfig } from "./config.js";
+import { FlagError, parseFlags, resolveCwd } from "./flags.js";
 import { latestSession, loadSession } from "./session.js";
 import { App } from "./ui/App.js";
 
@@ -28,31 +29,6 @@ The endpoint is fixed and needs no API key, so there is nothing to configure
 but the model. ACTOR0_MODEL overrides the model for one run. Config lives in
 $XDG_CONFIG_HOME/actor0; sessions in $XDG_DATA_HOME/actor0.
 `;
-
-type Flags = {
-  new: boolean;
-  help: boolean;
-  version: boolean;
-  sessions: boolean;
-  session?: string;
-  cwd?: string;
-  print?: string;
-};
-
-function parseFlags(argv: string[]): Flags {
-  const flags: Flags = { new: false, help: false, version: false, sessions: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--new") flags.new = true;
-    else if (arg === "--help" || arg === "-h") flags.help = true;
-    else if (arg === "--version" || arg === "-v") flags.version = true;
-    else if (arg === "--sessions") flags.sessions = true;
-    else if (arg === "--session") flags.session = argv[++i];
-    else if (arg === "--cwd") flags.cwd = argv[++i];
-    else if (arg === "--print" || arg === "-p") flags.print = argv[++i];
-  }
-  return flags;
-}
 
 async function readVersion(): Promise<string> {
   const { readFileSync } = await import("node:fs");
@@ -97,7 +73,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const cwd = flags.cwd ? (await import("node:path")).resolve(flags.cwd) : process.cwd();
+  const cwd = resolveCwd(flags.cwd);
 
   let config;
   try {
@@ -136,7 +112,14 @@ async function main(): Promise<void> {
       config,
       version: await readVersion(),
       ...(restored
-        ? { resumed: { id: restored.id, updatedAt: restored.updatedAt, messages: restored.messages } }
+        ? {
+            resumed: {
+              id: restored.id,
+              createdAt: restored.createdAt,
+              updatedAt: restored.updatedAt,
+              messages: restored.messages,
+            },
+          }
         : {}),
     }),
     // Ctrl+C is handled in the app: it cancels a running turn first and only
@@ -148,6 +131,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  // A bad command line is not a crash, and saying so is the whole difference
+  // between a user who fixes the typo and one who thinks the tool is broken.
+  if (error instanceof FlagError) {
+    process.stderr.write(`actor0: ${error.message}\n`);
+  } else {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  }
   process.exitCode = 1;
 });

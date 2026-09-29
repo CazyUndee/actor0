@@ -33,7 +33,7 @@ export type AppProps = {
   cwd: string;
   config: CliConfig;
   /** Session restored from disk at launch. */
-  resumed?: { id: string; updatedAt: string; messages: ChatMessage[] };
+  resumed?: { id: string; createdAt: string; updatedAt: string; messages: ChatMessage[] };
   /** Printed in the opening card. */
   version?: string;
   /**
@@ -202,7 +202,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           try {
             saveSession({
               id: sessionIdRef.current,
-              createdAt: resumed?.updatedAt ?? new Date().toISOString(),
+              // The original creation time, not the last time it was touched.
+              // These drifted because this read `updatedAt`, so a session that
+              // had been resumed once reported a creation time equal to its
+              // most recent save.
+              createdAt: resumed?.createdAt ?? new Date().toISOString(),
               updatedAt: new Date().toISOString(),
               model: provider.model,
               messages: messagesRef.current,
