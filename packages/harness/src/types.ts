@@ -41,7 +41,18 @@ export type ModelEvent =
   | { type: "usage"; usage: Usage }
   | { type: "status"; note: string }
   | { type: "provider"; name: string }
-  | { type: "done" };
+  | {
+      type: "done";
+      /**
+       * The endpoint stopped mid-answer — the output-token cap, or the
+       * model's own window, ran out. The text so far is the beginning of
+       * an answer, not one, and a caller that cannot tell the difference
+       * will save a fragment and call it a reply.
+       */
+      truncated?: boolean;
+      /** The endpoint's own word for it, kept for a message that must name a cause. */
+      reason?: string;
+    };
 
 /**
  * A protocol block the answer filter refused. `call` is the synthetic call
@@ -92,7 +103,15 @@ export type HarnessEvent =
   | { type: "provider"; name: string }
   | { type: "usage"; usage: Usage }
   | { type: "partial"; text: string }
-  | { type: "done"; text: string; complete: boolean }
+  | {
+    type: "done";
+    text: string;
+    complete: boolean;
+    /** The endpoint cut this answer off at its output cap. `complete` is then false. */
+    truncated?: boolean;
+    /** The endpoint's finish/stop reason, when it named one. */
+    reason?: string;
+  }
   /**
    * The turn stopped because it could not make progress on its own. The
    * harness does not decide to give up here — it reports the condition and the
@@ -124,6 +143,10 @@ export type RoundResult = {
   /** Protocol blocks refused this round — see RejectedToolBlock. */
   rejectedBlocks: RejectedToolBlock[];
   complete: boolean;
+  /** The endpoint stopped this round's answer short — see the `done` event. */
+  truncated: boolean;
+  /** The endpoint's finish/stop reason, when it named one. */
+  truncationReason?: string;
   reasoning: ReasoningSummary;
   usage: Usage[];
 };
@@ -137,6 +160,8 @@ export type ToolRoundPolicy = {
   }): boolean;
   /** Prompt used for the one permitted empty-answer continuation. */
   emptyContinuationMessage?: string;
+  /** Prompt used for the one permitted continuation of a cut-off answer. */
+  truncationContinuationMessage?: string;
 };
 
 export type RunResult = {
@@ -148,6 +173,14 @@ export type RunResult = {
   reasoning: ReasoningSummary;
   /** True when the turn stopped on `needs_user` and can be resumed. */
   blocked?: boolean;
+  /**
+   * The turn ended with the model's answer cut off by the output cap, and
+   * the one permitted continuation did not finish it either. The text is
+   * real and is returned, but the host has to say it is unfinished.
+   */
+  truncated?: boolean;
+  /** The endpoint's finish/stop reason, when it named one. */
+  truncationReason?: string;
 };
 
 export const emptyUsage = (): Usage => ({

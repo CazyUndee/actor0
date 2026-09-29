@@ -83,6 +83,133 @@ const cwd = (): string => {
   return dir;
 };
 
+/** The frame a provider sends when the answer hit the output-token cap. */
+const cutOffFrame = (finish: string): unknown => ({
+  choices: [{ delta: { content: "and then it " }, finish_reason: finish }],
+});
+
+test("an answer the endpoint cut off is continued, and the continuation sees what was written", async () => {
+  // `finish_reason: "length"` means the model ran out of output budget, not
+  // that it finished. Reporting that as a completed answer shows the user a
+  // sentence that stops mid-word and saves it as the reply.
+  const { server, baseUrl, bodies } = await startServer((turn) =>
+    turn === 0
+      ? [...textFrames("The answer starts like this"), cutOffFrame("length")]
+      : textFrames("and carries on to the end."),
+  );
+  const events: HarnessEvent[] = [];
+  try {
+    const { result } = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: [],
+      input: "write me an essay",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+      onEvent: (event) => events.push(event),
+    });
+
+    assert.equal(bodies.length, 2, "the cut-off answer must be asked about again");
+    assert.equal(result.text, "and carries on to the end.");
+    assert.equal(result.complete, true, "a completed continuation is a completed turn");
+    assert.equal(result.truncated, undefined, "the turn that ended is not itself truncated");
+    // The partial has to be in the second request, or the model restarts
+    // the essay from the top and the user gets it twice.
+    assert.ok(
+      bodies[1]?.includes("The answer starts like this"),
+      "the continuation must carry the text that was already written",
+    );
+    assert.ok(
+      events.some((e) => e.type === "status" && /cut off/i.test(e.status)),
+      "and the user must be told why the turn did not end where it looked like it would",
+    );
+  } finally {
+    await close(server);
+  }
+});
+
+test("an answer that is still cut off after one continuation is reported as unfinished", async () => {
+  // The continuation is a recovery, not a loop. A model too long for the
+  // cap is too long for it twice, and a turn that keeps asking spends the
+  // user's tokens to learn that a second time.
+  const { server, baseUrl, bodies } = await startServer(() => [...textFrames("still going"), cutOffFrame("length")]);
+  const events: HarnessEvent[] = [];
+  try {
+    const { result } = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: [],
+      input: "write me an essay",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+      onEvent: (event) => events.push(event),
+    });
+
+    assert.equal(bodies.length, 2, "exactly one continuation, then the turn ends");
+    assert.equal(result.complete, false, "an unfinished answer is not a completed turn");
+    assert.equal(result.truncated, true);
+    assert.equal(result.truncationReason, "length");
+    const done = events.find((e) => e.type === "done");
+    assert.equal(done && done.truncated, true, "and the event has to say so, for the host that renders it");
+  } finally {
+    await close(server);
+  }
+});
+
+test("a clean finish reason is not mistaken for a cut-off answer", async () => {
+  const { server, baseUrl } = await startServer(() => [
+    ...textFrames("Done."),
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+  ]);
+  try {
+    const { result } = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: [],
+      input: "hello",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+    });
+    assert.equal(result.text, "Done.");
+    assert.equal(result.complete, true);
+    assert.equal(result.truncated, undefined);
+  } finally {
+    await close(server);
+  }
+});
+
+test("a cut-off answer is recognised in every spelling an endpoint uses", async () => {
+  // OpenAI puts `finish_reason` on the choice, Anthropic puts `stop_reason`
+  // on the message, and relays copy either to the top level. Missing all
+  // three is the failure: a cut-off stream is then indistinguishable from
+  // a finished one.
+  const shapes: Record<string, unknown> = {
+    "openai choice": { choices: [{ delta: { content: "cut " }, finish_reason: "length" }] },
+    "anthropic message": { choices: [{ delta: { content: "cut " } }], stop_reason: "max_tokens" },
+    "relayed top level": { choices: [{ delta: { content: "cut " } }], finish_reason: "model_length" },
+    "context window": { choices: [{ delta: { content: "cut " }, stop_reason: "model_context_window_exceeded" }] },
+  };
+  for (const [name, frame] of Object.entries(shapes)) {
+    // The cut-off frame only on the first request: the second is the continuation,
+    // and a continuation that is cut off again is a different test.
+    const { server, baseUrl, bodies } = await startServer((turn) =>
+      turn === 0
+        ? [frame, { choices: [{ delta: { content: "the rest." } }] }]
+        : [{ choices: [{ delta: { content: "the rest." } }] }],
+    );
+    try {
+      const { result } = await runTurn({
+        model: { baseUrl, path: "/chat/completions", model: "test-model" },
+        messages: [],
+        input: "hello",
+        toolHost: createToolHost({ cwd: cwd() }),
+        signal: new AbortController().signal,
+      });
+      assert.equal(bodies.length, 2, name + ": a cut-off answer must be continued");
+      assert.equal(result.text, "the rest.", name);
+    } finally {
+      await close(server);
+    }
+  }
+});
+
 test("a plain answer streams and completes", async () => {
   const { server, baseUrl } = await startServer(() => [...textFrames("Hi "), ...textFrames("there"), { usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 } }]);
   const events: HarnessEvent[] = [];

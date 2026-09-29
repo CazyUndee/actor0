@@ -35,6 +35,13 @@ export type HarnessConfig = {
    */
   maxConsecutiveToolErrors: number;
   recoverEmptyAnswer: boolean;
+  /**
+   * Whether one continuation is attempted when the endpoint cuts an answer
+   * off at its output cap. Once, not repeatedly: a model that is too long
+   * for the cap is too long for it twice, and the second attempt costs a
+   * full request to learn the same thing.
+   */
+  recoverTruncatedAnswer: boolean;
 };
 
 export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
@@ -45,6 +52,7 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
   maxToolRounds: Number.POSITIVE_INFINITY,
   maxConsecutiveToolErrors: 5,
   recoverEmptyAnswer: true,
+  recoverTruncatedAnswer: true,
 };
 
 /** Marker appended to an answer a cancel cut short. */
@@ -138,6 +146,7 @@ async function runModelAttempt(
   const rejectedBlocks: RejectedBlock[] = [];
   const usage: Usage[] = [];
   let sawDone = false;
+  let truncationReason: string | undefined;
   let iterator: AsyncIterator<ModelEvent> | undefined;
 
   const emitFiltered = async (delta: string) => {
@@ -195,6 +204,7 @@ async function runModelAttempt(
         await emit(observer, { type: "provider", name: event.name });
       } else if (event.type === "done") {
         sawDone = true;
+        if (event.truncated && truncationReason === undefined) truncationReason = event.reason ?? "length";
       }
     }
 
@@ -215,10 +225,24 @@ async function runModelAttempt(
     }
 
     const reasoning = formatReasoningSummary(reasoningText);
+    // A cut-off answer is not a finished one, whatever the transport said
+    // about ending the stream. `[DONE]` describes the connection;
+    // `finish_reason` describes the answer, and only the second one is about
+    // whether the model got to the end of what it was writing.
+    const truncated = truncationReason !== undefined;
     if (!sawDone && attemptText.trim()) {
       await emit(observer, { type: "partial", text: attemptText });
     }
-    return { text: attemptText, toolCalls, rejectedBlocks, complete: sawDone, reasoning, usage };
+    return {
+      text: attemptText,
+      toolCalls,
+      rejectedBlocks,
+      complete: sawDone && !truncated,
+      truncated,
+      truncationReason,
+      reasoning,
+      usage,
+    };
   } catch (error) {
     if (outerSignal.aborted) {
       // The attempt's streamed text dies here — the round loop above cannot
@@ -253,6 +277,7 @@ export async function runAgentTurn(options: {
   const tools = options.toolHost?.definitions() ?? [];
   const allUsage: Usage[] = [];
   let recoveredEmpty = false;
+  let recoveredTruncation = false;
   let finalReasoning: ReasoningSummary = { title: "", summary: "" };
 
   // Unbounded by default: the only reason to stop a turn is a sustained run of
@@ -423,6 +448,29 @@ export async function runAgentTurn(options: {
     // A round that produced an answer is a healthy round — clear the streak.
     consecutiveToolErrors = 0;
 
+    // The endpoint stopped writing mid-sentence. This is the one condition
+    // that is not the model's mistake and not a tool's: the answer exists,
+    // it just did not fit. Ask for the rest of it, with what was written
+    // already in front of the model so it continues rather than restarts.
+    // Once only, and only for an answer that was actually cut — a model that
+    // is too long for the cap is too long for it twice.
+    if (result.truncated && config.recoverTruncatedAnswer && !recoveredTruncation && result.text.trim()) {
+      recoveredTruncation = true;
+      messages.push({ role: "assistant", content: result.text });
+      await emit(options.observer, {
+        type: "status",
+        status: "Answer cut off at the model\u2019s output limit \u2014 continuing\u2026",
+        source: "note",
+      });
+      messages.push({
+        role: "user",
+        content:
+          options.policy?.truncationContinuationMessage ??
+          "(Your previous reply was cut off at the output limit. Continue it from exactly where it stopped. Do not repeat any text you have already written and do not start over.)",
+      });
+      continue;
+    }
+
     // A round that only refused a block is not an empty round: the model said
     // something (the harness answered it with the error result above), and
     // stacking "your previous reply was empty" on top of that rejection
@@ -443,7 +491,12 @@ export async function runAgentTurn(options: {
       continue;
     }
 
-    await emit(options.observer, { type: "done", text: result.text, complete: result.complete });
+    await emit(options.observer, {
+      type: "done",
+      text: result.text,
+      complete: result.complete,
+      ...(result.truncated ? { truncated: true, reason: result.truncationReason } : {}),
+    });
     messages.push({ role: "assistant", content: result.text });
     return {
       messages,
@@ -452,6 +505,9 @@ export async function runAgentTurn(options: {
       rounds: round,
       usage: allUsage,
       reasoning: finalReasoning,
+      // Only the round that ends the turn decides this: an earlier truncated
+      // round that the continuation finished is not a truncated turn.
+      ...(result.truncated ? { truncated: true, truncationReason: result.truncationReason } : {}),
     };
   }
 

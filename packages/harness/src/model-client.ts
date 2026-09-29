@@ -78,6 +78,8 @@ type StreamFrame = {
   completeToolCalls?: ToolCall[];
   usage?: Usage;
   done?: boolean;
+  /** The endpoint's own word for why the answer stopped, when it says. */
+  finishReason?: string;
   /** An error delivered inside a 200 response, with the code and type it arrived with. */
   hasError?: boolean;
   error?: string;
@@ -173,11 +175,18 @@ export class OpenAiCompatibleModel implements ModelClient {
     // took every token before it with it — the model answered, the tokens
     // were already paid for, and the user was shown nothing.
     const endpoint = this.endpoint;
+    let truncation: string | undefined;
     const frames = async function* (parsed: StreamFrame[]): AsyncIterable<ModelEvent> {
       for (const frame of parsed) {
         if (frame.done) {
           sawDone = true;
           continue;
+        }
+        // First truncation wins. Servers repeat the reason on the final
+        // frame, and a later `stop` (or a second stream) must not overwrite
+        // the fact that this answer was cut short.
+        if (truncation === undefined && frame.finishReason !== undefined && TRUNCATION_REASONS.has(frame.finishReason)) {
+          truncation = frame.finishReason;
         }
         if (frame.hasError) throw streamFrameError(endpoint, frame);
         if (frame.toolCalls) calls.push(frame.toolCalls);
@@ -204,7 +213,14 @@ export class OpenAiCompatibleModel implements ModelClient {
       yield* frames(parsedTail.frames);
       const completeCalls = calls.finish();
       if (completeCalls.length > 0) yield { type: "tool_call", tool_calls: completeCalls };
-      if (sawDone) yield { type: "done" };
+      // A cut-off answer still ends the stream, so it is still a `done` —
+      // one that says what it is. Emitted even without a `[DONE]` frame,
+      // because the reason arrived and is not going to arrive again.
+      if (sawDone || truncation !== undefined) {
+        yield truncation === undefined
+          ? { type: "done" }
+          : { type: "done", truncated: true, reason: truncation };
+      }
     } finally {
       await reader.cancel().catch(() => {});
     }
@@ -252,13 +268,52 @@ function drainFrames(buffer: string): { frames: StreamFrame[]; rest: string } {
     let value: Record<string, unknown>;
     try { value = JSON.parse(data) as Record<string, unknown>; } catch { throw new ModelTransportError("endpoint returned invalid SSE JSON", true); }
     const choices = value.choices;
-    const delta = Array.isArray(choices) && choices.length > 0 && typeof choices[0] === "object" && choices[0] !== null
-      ? (choices[0] as { delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown; tool_calls?: unknown } }).delta
+    const choice = Array.isArray(choices) && choices.length > 0 && typeof choices[0] === "object" && choices[0] !== null
+      ? (choices[0] as { delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown; tool_calls?: unknown }; finish_reason?: unknown; stop_reason?: unknown })
       : undefined;
-    handleFrame({ content: typeof delta?.content === "string" ? delta.content : undefined, reasoning: typeof delta?.reasoning_content === "string" ? delta.reasoning_content : typeof delta?.reasoning === "string" ? delta.reasoning : undefined, toolCalls: Array.isArray(delta?.tool_calls) ? delta.tool_calls as ToolDelta[] : undefined, completeToolCalls: Array.isArray(value.tool_calls) ? value.tool_calls as ToolCall[] : undefined, usage: value.usage as Usage, ...errorFields(value) });
+    const delta = choice?.delta;
+    handleFrame({ finishReason: finishReasonOf(choice, value), content: typeof delta?.content === "string" ? delta.content : undefined, reasoning: typeof delta?.reasoning_content === "string" ? delta.reasoning_content : typeof delta?.reasoning === "string" ? delta.reasoning : undefined, toolCalls: Array.isArray(delta?.tool_calls) ? delta.tool_calls as ToolDelta[] : undefined, completeToolCalls: Array.isArray(value.tool_calls) ? value.tool_calls as ToolCall[] : undefined, usage: value.usage as Usage, ...errorFields(value) });
   }
   return { frames, rest };
 }
+
+/**
+ * The endpoint's reason for stopping, in whichever of the spellings it uses.
+ *
+ * OpenAI-compatible servers put `finish_reason` on the choice; the
+ * Anthropic-shaped streams actor0 also reads put `stop_reason` on the
+ * message; relays copy either onto the top level. All three are read
+ * because the one that is missing reads as "the model finished", which is
+ * the exact belief this path exists to break — a stream cut off by the
+ * output cap is otherwise indistinguishable from a stream that ended.
+ */
+function finishReasonOf(
+  choice: { finish_reason?: unknown; stop_reason?: unknown } | undefined,
+  value: Record<string, unknown>
+): string | undefined {
+  for (const candidate of [choice?.finish_reason, choice?.stop_reason, value.stop_reason, value.finish_reason]) {
+    if (typeof candidate === "string" && candidate) return candidate.toLowerCase();
+  }
+  return undefined;
+}
+
+/**
+ * Reasons that mean "this answer was cut off", not "this answer is done".
+ *
+ * `length` is OpenAI's spelling of the output-token cap, `max_tokens` is
+ * Anthropic's, and `model_context_window_exceeded` is what the same API
+ * emits when the model's own window ran out mid-generation. They differ in
+ * which limit was hit and not at all in what a caller must do about it:
+ * the text so far is the start of an answer, and asking again is how the
+ * rest of it arrives. `content_filter` is deliberately absent — a cut made
+ * by a filter is not resumed by being asked again.
+ */
+const TRUNCATION_REASONS: ReadonlySet<string> = new Set([
+  "length",
+  "max_tokens",
+  "model_length",
+  "model_context_window_exceeded",
+]);
 
 function findBoundary(buffer: string): { index: number; length: number } | null {
   const lf = buffer.indexOf("\n\n");

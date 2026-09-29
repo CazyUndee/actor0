@@ -203,6 +203,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           if (result.blocked) {
             notice("warn", describeStop(conversationRef.current.blocked?.reason));
           }
+          // The answer rendered above is marked partial, but the reader is
+          // looking at a finished-looking conversation: a warning has to name
+          // the fact that the model's reply stopped at the output cap, and
+          // that asking again is the way to get the rest of it.
+          if (result.truncated) {
+            notice("warn", "The answer was cut off at the model\u2019s output limit and is unfinished. Ask for the rest.");
+          }
           const tokens = usageSummary(result.usage);
           if (tokens) notice("info", tokens);
         } catch (error) {
