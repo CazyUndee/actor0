@@ -781,6 +781,27 @@ export function createToolHost(options: { cwd: string }): ToolHost {
 }
 
 /** The verb shown on the activity line. The target is shown next to it. */
+/**
+ * Did this shell result end in a non-zero exit?
+ *
+ * A command that fails is not a tool that failed: `shell` ran, captured the
+ * output and returned it, so the harness sees a result and the transcript
+ * row is drawn as a success. The exit code is the only channel a failing
+ * command has, and it is the last line of the text by a decision that is
+ * pinned by a test — the model decides what to do next right there.
+ *
+ * So the row has to read it back. The match is the tool's own line — its
+ * own text, preceded by the blank line the tool puts there — and nothing
+ * else, because a command whose output happens to end with those words has
+ * not exited non-zero and must not be painted as a failure. Only the `shell`
+ * row is asked at all, so a `read` that contains the words is left alone.
+ */
+export function exitedNonZero(output: string): boolean {
+  const match = /\n\nCommand exited with code (\d+|unknown)$/.exec(output.trimEnd());
+  if (!match) return false;
+  return match[1] !== "0";
+}
+
 export function toolLabel(name: string): string {
   switch (name) {
     case "read":

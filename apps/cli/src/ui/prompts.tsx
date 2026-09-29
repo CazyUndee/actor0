@@ -116,11 +116,15 @@ export function Composer({
       <Text color={busy ? color.dim : color.accent} bold>
         {busy ? "·" : "❯"}{" "}
       </Text>
+      {/* Active even while a turn runs. Inactive meant every keystroke was
+          dropped on the floor, and a person who begins the next question
+          during a long tool call lost it without being told. What is refused
+          during a turn is the *submit*, not the typing — see `submit`. */}
       <TextInput
         value={value}
         onChange={onChange}
         onSubmit={onSubmit}
-        isActive={isActive && !busy}
+        isActive={isActive}
         placeholder={busy ? "working — Esc to cancel" : "ask something, or /help"}
       />
     </Box>

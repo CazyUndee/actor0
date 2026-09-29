@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bannerActivity, bannerLines, fitTail, shortenPath, toolDetail, wrapText } from "./parts.js";
+import { bannerActivity, bannerLines, fitTail, shortenPath, toolDetail, toolRowFailed, wrapText } from "./parts.js";
 
 /**
  * The footer's layout arithmetic and the live region's height budget, without
@@ -15,6 +15,30 @@ import { bannerActivity, bannerLines, fitTail, shortenPath, toolDetail, wrapText
  * one still matters: an unbounded frame is what puts Ink into the clear-and-
  * repaint mode that wipes the scrollback, so the budget is not cosmetic.
  */
+
+const tool = (over: Partial<{ name: string; status: "ok" | "error"; output: string }> = {}) =>
+  ({ kind: "tool", name: "shell", target: "ls", status: "ok", output: "", ...over }) as const;
+
+test("a shell command that exited non-zero is a failed row, not a successful one", () => {
+  const row = tool({ output: "no such file\n\nCommand exited with code 1" });
+  assert.equal(toolRowFailed(row), true);
+  assert.equal(toolRowFailed(tool({ output: "fine\n" })), false);
+  assert.equal(toolRowFailed(tool({ output: "Command exited with code 0" })), false);
+});
+
+test("a tool that threw is a failed row whatever it printed", () => {
+  assert.equal(toolRowFailed(tool({ status: "error", output: "ENOENT" })), true);
+  assert.equal(toolRowFailed(tool({ status: "error", output: "" })), true, "an error with no text is still an error");
+});
+
+test("only a shell row reads its exit code out of the text", () => {
+  // A `read` that happens to contain the words is a read, and must not be
+  // relabelled on the strength of a sentence in a file.
+  assert.equal(
+    toolRowFailed(tool({ name: "read", output: "Command exited with code 1" })),
+    false,
+  );
+});
 
 test("a path that fits is left alone", () => {
   assert.equal(shortenPath("C:\\work\\app", 20), "C:\\work\\app");

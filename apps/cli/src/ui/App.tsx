@@ -143,6 +143,19 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       const input = raw.trim();
       if (!input) return;
 
+      // A turn is already running. The text stays in the composer and the
+      // user is told why: it is not cleared, and it is not sent. The composer
+      // used to be made inactive for the duration of a turn, which discarded
+      // every keystroke typed while the agent worked — a user who starts the
+      // next question during a long tool call watches it disappear, character
+      // by character, with nothing on screen saying the input is off. Found by
+      // the TUI preview typing the next question during a turn and losing it.
+      // Type-ahead is ordinary; losing what someone typed is not.
+      if (busy) {
+        notice("warn", "still working — wait for the turn, or press Esc to cancel it");
+        return;
+      }
+
       const command = parseSlash(input);
       if (command) {
         // Clear the composer first. A command that leaves its own text behind
@@ -265,7 +278,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         }
       })();
     },
-    [config, notice, resumed?.updatedAt, runCommand, toolHost, updateLive],
+    [busy, config, notice, resumed?.updatedAt, runCommand, toolHost, updateLive],
   );
 
   // Global keys. Deliberately narrow: the composer owns text entry and the

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import type { ToolCall } from "@actor0/harness";
 import { spawnSync } from "node:child_process";
-import { createToolHost, resolveShell, shellNotes, toolLabel } from "./tools.js";
+import { createToolHost, exitedNonZero, resolveShell, shellNotes, toolLabel } from "./tools.js";
 import { defaultSystemPrompt } from "./turn.js";
 
 /**
@@ -342,6 +342,29 @@ test("shell reports a non-zero exit in the result, not as a rejection", async ()
   );
   assert.match(out, /Command exited with code 1/);
   assert.match(out, /before/, "the output the command did produce must still arrive");
+});
+
+test("a non-zero exit is readable back out of the result text", () => {
+  // The row is drawn from this text, because a failing command has no other
+  // channel: `shell` ran, captured the output and returned it, so the harness
+  // sees a result and the row looks like a success.
+  assert.equal(exitedNonZero("hi\n\nCommand exited with code 1"), true);
+  assert.equal(exitedNonZero("hi\n\nCommand exited with code 127"), true);
+  assert.equal(exitedNonZero("everything worked\n"), false);
+  assert.equal(exitedNonZero("Command exited with code 0"), false, "zero is not a failure");
+  assert.equal(
+    exitedNonZero("hi\n\nCommand exited with code 1 and more"),
+    false,
+    "it has to be the last line, exactly",
+  );
+  assert.equal(
+    exitedNonZero("grep said: Command exited with code 1"),
+    false,
+    "a command that printed the phrase has not exited non-zero",
+  );
+  // `unknown` is what a process killed by a signal reports, and it is not a
+  // success: the command did not finish what it was asked to do.
+  assert.equal(exitedNonZero("hi\n\nCommand exited with code unknown"), true);
 });
 
 test("shell keeps the tail of oversized output, where the error is", async () => {

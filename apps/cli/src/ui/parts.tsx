@@ -1,10 +1,11 @@
 import { Box, Static, Text, useStdout } from "ink";
+import { Fragment } from "react";
 import { useEffect, useState, type ReactNode } from "react";
 import { stripReasoningMarkup } from "@actor0/harness";
 import type { Entry, Live } from "../conversation.js";
 import { HELP_TEXT } from "../slash.js";
 import { color, SPINNER_FRAMES, toolGlyph } from "../theme.js";
-import { toolLabel } from "../tools.js";
+import { exitedNonZero, toolLabel } from "../tools.js";
 
 /**
  * Presentational components.
@@ -237,6 +238,21 @@ export function toolDetail(status: "ok" | "error", output: string): string {
 }
 
 /**
+ * Did this tool row end in a failure?
+ *
+ * A `shell` command that exits non-zero is a failure even though the call
+ * succeeded: the call's success only says the command ran, and the exit code
+ * is the outcome. It is also the only channel a failing command has — the
+ * result text — so the row has to read it back. Observed in the TUI preview:
+ * a command no shell has came back as a green tick over a truncated fragment
+ * of its own stderr, with the line naming the exit code trimmed off the end
+ * by the success path. The one row a user most needs to trust was lying.
+ */
+export function toolRowFailed(entry: Entry): boolean {
+  return entry.kind === "tool" && (entry.status === "error" || (entry.name === "shell" && exitedNonZero(entry.output)));
+}
+
+/**
  * A reasoning block as a title and a body.
  *
  * Models open a reasoning block with a bare title and then repeat it as a
@@ -313,13 +329,21 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
       );
 
     case "tool": {
-      const tone = entry.status === "ok" ? color.success : color.error;
-      const label = entry.status === "error" ? "failed" : toolLabel(entry.name);
-      const detail = toolDetail(entry.status, entry.output);
+      const status = toolRowFailed(entry) ? "error" : "ok";
+      const tone = status === "ok" ? color.success : color.error;
+      // Both rows name the tool. They used not to: a failure printed the
+      // word “failed” where the success row prints the tool, so the one row a
+      // user most wants to act on was the one that never said what went
+      // wrong — `✗ failed wc -l missing.md` reads as a failed read of a file
+      // called `wc`, and a shell command and a read of the same path become
+      // indistinguishable. The status is already carried three ways: the
+      // glyph, the colour, and a detail block that an error always has.
+      const label = toolLabel(entry.name);
+      const detail = toolDetail(status, entry.output);
       return (
         <Box marginTop={1} flexDirection="column">
           <Box>
-            <Text color={tone}>{toolGlyph[entry.status]} </Text>
+            <Text color={tone}>{toolGlyph[status]} </Text>
             <Text color={color.muted}>{label}</Text>
             {entry.target ? <Text color={color.dim}> {entry.target}</Text> : null}
           </Box>
@@ -642,7 +666,12 @@ export function Transcript({
           being committed. */}
       {(item, index) =>
         index === 0 && banner === item ? (
-          item
+          // Keyed like every other child, and for the same reason. The
+          // banner is an element the caller built, so it cannot carry its own
+          // key, and `<Static>` maps a list — React warns on every commit
+          // that it is given a child without one, which prints over the frame
+          // the user is reading and buries any warning that matters.
+          <Fragment key={index}>{item}</Fragment>
         ) : (
           <EntryView key={index} entry={item as Entry} columns={columns} />
         )
