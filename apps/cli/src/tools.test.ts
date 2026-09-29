@@ -373,6 +373,38 @@ test("shell is killed at its timeout and says so", async () => {
   assert.ok(Date.now() - started < 15_000, "must not have waited for the command");
 });
 
+test("a command that reads stdin is told there is none", async () => {
+  // A command that reads input has to be told there is none, or it waits for
+  // input that is never coming. The default stdin is a pipe, and a pipe nobody
+  // closes never reaches EOF: with no default timeout on this tool that wait
+  // is an hour, ended only by the user noticing. A short timeout is set here
+  // so a regression fails in seconds instead of hanging the suite.
+  const started = Date.now();
+  const out = await host(scratch()).execute(
+    call("shell", {
+      command: script("cat", "cmd /c more", "cmd /c more"),
+      timeout: 5,
+    }),
+    signal,
+  );
+  assert.ok(Date.now() - started < 5_000, `waited ${Date.now() - started}ms for input that never came`);
+  assert.match(out, /no output|exited with code/);
+});
+
+test("redirecting stdin still works — closing the pipe is not the same as refusing it", async () => {
+  // The pipe this closes is the child's own; a redirection is the shell
+  // opening a file, and must be unaffected.
+  const dir = scratch();
+  writeFileSync(join(dir, "data.txt"), "piped-in\n");
+  const out = await host(dir).execute(
+    call("shell", {
+      command: script("cat data.txt", "Get-Content data.txt", "type data.txt"),
+    }),
+    signal,
+  );
+  assert.match(out, /piped-in/);
+});
+
 test("shell has no default timeout — a long command finishes", async () => {
   // pi's contract: no timeout unless asked. A 120s default killed real installs
   // and builds mid-flight; nothing the model does routinely should die by clock.

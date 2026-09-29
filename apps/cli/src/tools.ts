@@ -604,6 +604,25 @@ const shellTool: CliTool = {
         detached: process.platform !== "win32",
         windowsHide: true,
       });
+      // Nothing to read, said once and immediately.
+      //
+      // The default stdin is a pipe, and a pipe nobody writes to and nobody
+      // closes never reaches EOF, so every command that reads stdin waited
+      // for input that was never coming: `cat` with no arguments, `sort`,
+      // a pager, anything a script would run with its stdin redirected from
+      // nothing. With no default timeout on this tool that wait is an hour,
+      // and the only thing that ends it is the user noticing.
+      //
+      // Closing the pipe is what says "no input" — not `stdin: "ignore"`,
+      // which was the first thing tried and is wrong here: on Windows the
+      // ignored handle is not a console and not a pipe, and `cmd /c more`
+      // spins on it for over a minute instead of seeing EOF. A closed pipe is
+      // EOF everywhere.
+      //
+      // Redirection and pipes are unaffected, because those are the shell
+      // opening and connecting things: `cmd < file` and `a | b` never touch
+      // this pipe.
+      child.stdin?.end();
 
       let stdout = "";
       let stderr = "";
