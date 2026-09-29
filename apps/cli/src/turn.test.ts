@@ -392,8 +392,14 @@ test("cancelling mid-stream throws and stops the turn", async () => {
       input: "hello",
       toolHost: createToolHost({ cwd: cwd() }),
       signal: controller.signal,
+      // Abort from the first token rather than from a timer. A timer races
+      // the stream: on a loaded machine the abort can land before the
+      // opening frame is read, and the test then measures a different thing
+      // (an assistant turn with no text) only on slow runs.
+      onEvent: (event) => {
+        if (event.type === "token" && event.delta) controller.abort();
+      },
     });
-    setTimeout(() => controller.abort(), 60);
     await assert.rejects(pending, (error: unknown) => {
       // The abort still surfaces as a rejection (hosts keep their abort
       // handling), but it now carries the transcript the turn built.
