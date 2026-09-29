@@ -101,7 +101,16 @@ async function main(): Promise<void> {
 
   if (flags.print !== undefined) {
     const { runPrintTurn } = await import("./print.js");
-    const code = await runPrintTurn({ prompt: flags.print, cwd, config, messages: restored?.messages ?? [] });
+    const code = await runPrintTurn({
+      prompt: flags.print,
+      cwd,
+      config,
+      messages: restored?.messages ?? [],
+      // A run against a restored session writes the exchange back to it — the
+      // same contract the TUI has. Without one, the run stays stateless,
+      // which is what a pipe wants.
+      ...(restored ? { session: { id: restored.id, createdAt: restored.createdAt } } : {}),
+    });
     process.exitCode = code;
     return;
   }
