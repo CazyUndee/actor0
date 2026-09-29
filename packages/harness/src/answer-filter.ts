@@ -19,6 +19,16 @@ const MAX_STATUS_HOLD = 48;
 const MAYBE_STATUS_PREFIX = /^(?:[ \t]*|[ \t]*\[[^\x5d\n]{0,40})$/;
 
 /**
+ * Status text kept from one line.
+ *
+ * A line that opens with the marker is a status line, and its text runs to
+ * the end of that line. Past this many characters it stops being a status and
+ * becomes the answer again, which is what keeps a runaway line from taking the
+ * rest of the response with it.
+ */
+export const MAX_STATUS_CHARS = 80;
+
+/**
  * Status markers.
  *
  * Only the bullet form is recognised: `[·] Searching the web`. That is the
@@ -34,24 +44,66 @@ const MAYBE_STATUS_PREFIX = /^(?:[ \t]*|[ \t]*\[[^\x5d\n]{0,40})$/;
  * The asymmetry is deliberate. Missing a status leaves a visible `[·] thing`
  * line in the answer, which is ugly. Eating a link label is silent content
  * loss. The ugly failure is the better one.
+ *
+ * One known blind spot, left alone on purpose: a marker-shaped line inside an
+ * ordinary (non-protocol) fenced code block is still eaten as a status. The
+ * filter has no notion of a code fence — only a ```json fence is a block it
+ * tracks, because buffering a bare fence would stall any code-heavy answer
+ * waiting for a close that may never come. Adding fence state to get this
+ * right means implementing CommonMark's opening and closing rules for a line
+ * shape that essentially never occurs, and getting them subtly wrong stalls
+ * the stream. Recorded rather than fixed.
  */
-const STATUS_BULLET_LINE = /^[ \t]*\[·\][ \t]*([^\n]{1,80})/;
-
-type StatusMatch = { text: string; length: number };
 
 /**
  * A marker owns its line when a newline follows it immediately, which is what
  * lets the trailing newline be swallowed so markers do not each prepend a
- * blank line to the answer. A marker with prose after it on the same line does
- * not own it, and the prose stays.
+ * blank line to the answer.
  */
-function matchStatus(text: string): StatusMatch | null {
-  const match = STATUS_BULLET_LINE.exec(text);
-  if (!match) return null;
-  return { text: match[1] ?? "", length: match[0].length };
-}
-
 const ownsLine = (text: string, length: number): boolean => text.indexOf("\n", length) === length;
+
+/** The marker itself, with the indentation and the space that follow it. */
+const STATUS_MARKER = /^[ \t]*\[\u00b7\][ \t]*/;
+
+/** A status line found at the start of the buffer. */
+type StatusLine = {
+  /** The text shown as the status, already trimmed and capped. */
+  text: string;
+  /** How much of the buffer the line occupies, newline included. */
+  end: number;
+  /**
+   * False when the line has not finished arriving.
+   *
+   * This is the whole difficulty. Where a status ends is only knowable from
+   * the newline that ends it, and SSE deltas are far smaller than a line —
+   * a status split across two deltas used to be decided on the first one,
+   * which is how "[\u00b7] Search" followed by "ing the web" produced the
+   * status "Search" and then printed "ing the web" into the answer as prose,
+   * with no marker on it to say what it had been. The filter holds the
+   * fragment instead and decides when the line is complete.
+   */
+  complete: boolean;
+};
+
+function matchStatusLine(text: string, atEnd: boolean): StatusLine | null {
+  const marker = STATUS_MARKER.exec(text);
+  if (!marker) return null;
+  const rest = text.slice(marker[0].length);
+  const text_ = (value: string): string => value.replace(/^\u00b7+\s*/, "").trim().slice(0, MAX_STATUS_CHARS);
+  const newline = rest.indexOf("\n");
+  if (newline !== -1) {
+    // A line past the cap stops being a status halfway: the rest of it is
+    // content, and the newline that ends it is content's, not the status's.
+    const capped = newline > MAX_STATUS_CHARS;
+    return {
+      text: text_(rest.slice(0, newline)),
+      end: marker[0].length + (capped ? MAX_STATUS_CHARS : newline + 1),
+      complete: true,
+    };
+  }
+  if (!atEnd && rest.length <= MAX_STATUS_CHARS) return { text: "", end: 0, complete: false };
+  return { text: text_(rest), end: marker[0].length + MAX_STATUS_CHARS, complete: true };
+}
 
 export type FilteredChunk = {
   text: string;
@@ -223,12 +275,18 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
         continue;
       }
 
-      const status = matchStatus(buffer);
+      const status = matchStatusLine(buffer, atEnd);
       if (status) {
-        const text = status.text.replace(/^·\s*/, "").trim().slice(0, 80);
-        if (text) statuses.push(text);
-        buffer = buffer.slice(status.length).replace(/^[ \t]+/, "");
-        if (ownsLine(buffer, 0)) eatNewline = true;
+        if (!status.complete) {
+          // More of the line may still be coming. Held for exactly as long as
+          // it takes to find out, and no longer: a fragment that is already
+          // over the cap stops being a status and falls through to the answer.
+          held = buffer;
+          buffer = "";
+          continue;
+        }
+        if (status.text) statuses.push(status.text);
+        buffer = buffer.slice(status.end);
         continue;
       }
 

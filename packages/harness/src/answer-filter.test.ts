@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createAnswerFilter } from "./answer-filter.js";
+import { createAnswerFilter, MAX_STATUS_CHARS } from "./answer-filter.js";
 
 function run(deltas: string[]) {
   const statuses: string[] = [];
@@ -64,6 +64,63 @@ test("link text is not mistaken for a status marker", () => {
     assert.deepEqual(result.statuses, [], `ate ${line} as a status`);
     assert.ok(result.answer.includes(line), `dropped ${line} from the answer`);
   }
+});
+
+/**
+ * A status line split by a delta boundary used to tear.
+ *
+ * The filter decided "this is a status" from the first delta that carried the
+ * marker, and SSE deltas are much smaller than a line: "[\u00b7] Search" on
+ * one and "ing the web" on the next produced the status "Search" and then
+ * printed "ing the web" into the answer as prose, with nothing on it to say
+ * what it had been. The line is held now until its newline arrives.
+ */
+test("a status line split across deltas is not torn in half", () => {
+  const result = run(["[\u00b7] Search", "ing the web", "\n", "Here is the answer.\n"]);
+  assert.deepEqual(result.statuses, ["Searching the web"]);
+  assert.equal(result.answer, "Here is the answer.\n");
+});
+
+test("a marker split across deltas is still a marker", () => {
+  const result = run(["[", "\u00b7] Read", "ing the file", "\n"]);
+  assert.deepEqual(result.statuses, ["Reading the file"]);
+  assert.equal(result.answer, "");
+});
+
+test("one character at a time still yields whole status lines", () => {
+  // The worst case a real stream produces, and the one every test before this
+  // missed because they all pushed a whole line at a time.
+  const result = run([..."[\u00b7] Running the tests"].map((c) => c).concat(["\n", "done\n"]));
+  assert.deepEqual(result.statuses, ["Running the tests"]);
+  assert.equal(result.answer, "done\n");
+});
+
+test("a status line past the cap keeps its tail as answer text", () => {
+  const long = "x".repeat(MAX_STATUS_CHARS + 40);
+  const result = run([`[\u00b7] ${long}\n`]);
+  assert.deepEqual(result.statuses, ["x".repeat(MAX_STATUS_CHARS)]);
+  assert.equal(result.answer, `${"x".repeat(40)}\n`, "the text past the cap is content, not status");
+});
+
+test("a status line with no newline at the end of the stream is still a status", () => {
+  const result = run(["[\u00b7] Done"]);
+  assert.deepEqual(result.statuses, ["Done"]);
+  assert.equal(result.answer, "");
+});
+
+test("a blank marker line is consumed without inventing a status", () => {
+  const result = run(["[\u00b7]\n", "answer\n"]);
+  assert.deepEqual(result.statuses, []);
+  assert.equal(result.answer, "answer\n");
+});
+
+test("holding a status line does not delay the answer that follows it", () => {
+  // The hold is bounded by the cap, not by the end of the answer: a long run
+  // of marker-shaped lines must not park the whole response.
+  const result = run(["[\u00b7] ", "one two three\n", "real answer\n"]);
+  assert.deepEqual(result.statuses, ["one two three"]);
+  assert.equal(result.answer, "real answer\n");
+  assert.ok(result.visible.at(-1)?.includes("real answer"), "the answer was released");
 });
 
 test("real status markers still work", () => {
