@@ -390,6 +390,59 @@ test("a tool call runs, feeds back, and the model answers", async () => {
   }
 });
 
+test("a turn that stops for the user says so in the transcript", async () => {
+  // The UI asks the user a question when a turn stops — “check the paths and try
+  // again” — and the user's answer arrives as an ordinary user message. If the
+  // stop is not in the transcript, the model is answering a question nobody
+  // asked it, with no idea a turn even ended.
+  const { server, baseUrl } = await startServer((turn) =>
+    turn < 5
+      ? toolFrames("read", { path: "not-here.txt" }, `call_${turn}`)
+      : textFrames("done"),
+  );
+  try {
+    const { result } = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: [],
+      input: "find the config",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(result.blocked, true);
+    const last = result.messages[result.messages.length - 1];
+    assert.equal(last?.role, "user", "the stop has to be in the transcript the next turn replays");
+    assert.match(last!.content, /5 rounds of tool calls failed in a row/, "and it must name the cause");
+    assert.match(
+      last!.content,
+      /do not assume they know why/,
+      "the note exists to stop the model reading the user's reply as a known question, not to assert what the user will say",
+    );
+    assert.doesNotMatch(last!.content, /their next message is (about|an answer to)/, "it must not guess at the reply");
+  } finally {
+    await close(server);
+  }
+});
+
+test("a turn that was not stopped leaves no note behind", async () => {
+  const { server, baseUrl } = await startServer(() => textFrames("All done."));
+  try {
+    const { result } = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: [],
+      input: "hello",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+    });
+
+    const last = result.messages[result.messages.length - 1];
+    assert.equal(last?.role, "assistant");
+    assert.equal(last?.content, "All done.");
+  } finally {
+    await close(server);
+  }
+});
+
 test("a write runs ungated and the model sees what happened", async () => {
   const { server, baseUrl } = await startServer((turn) =>
     turn === 0 ? toolFrames("write", { path: "out.txt", content: "nope" }) : textFrames("Wrote out.txt."),

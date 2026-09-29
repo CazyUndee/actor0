@@ -335,11 +335,12 @@ export async function runAgentTurn(options: {
     // re-emitting the same refused block.
     if (result.toolCalls.length === 0 && result.rejectedBlocks.length > 0) {
       if (Number.isFinite(config.maxToolRounds) && round >= config.maxToolRounds) {
-        await emit(options.observer, {
-          type: "needs_user",
-          reason: "round_limit",
-          message: `stopped after ${config.maxToolRounds} tool rounds`,
-        });
+        await stopForUser(
+          options.observer,
+          messages,
+          "round_limit",
+          `stopped after ${config.maxToolRounds} tool rounds`
+        );
         return {
           messages,
           text: result.text,
@@ -396,11 +397,12 @@ export async function runAgentTurn(options: {
         ? consecutiveToolErrors + 1
         : 0;
       if (consecutiveToolErrors >= config.maxConsecutiveToolErrors) {
-        await emit(options.observer, {
-          type: "needs_user",
-          reason: "tool_errors",
-          message: `${consecutiveToolErrors} rounds of tool calls failed in a row`,
-        });
+        await stopForUser(
+          options.observer,
+          messages,
+          "tool_errors",
+          `${consecutiveToolErrors} rounds of tool calls failed in a row`
+        );
         return {
           messages,
           text: result.text,
@@ -427,11 +429,12 @@ export async function runAgentTurn(options: {
       // error streak stops: report it, keep what was done, let the host say so
       // in its own words.
       if (Number.isFinite(config.maxToolRounds) && round >= config.maxToolRounds) {
-        await emit(options.observer, {
-          type: "needs_user",
-          reason: "round_limit",
-          message: `stopped after ${config.maxToolRounds} tool rounds`,
-        });
+        await stopForUser(
+          options.observer,
+          messages,
+          "round_limit",
+          `stopped after ${config.maxToolRounds} tool rounds`
+        );
         return {
           messages,
           text: result.text,
@@ -512,6 +515,45 @@ export async function runAgentTurn(options: {
   }
 
   throw new Error("unreachable: the tool-round loop always returns");
+}
+
+/**
+ * Stop the turn and say so — to the user, and to the model.
+ *
+ * A stop is the one moment the host speaks to the user and the model hears
+ * nothing. The UI says “stopped: tool calls kept failing — check the paths and try again”,
+ * the user answers that question, and the answer arrives as an ordinary user
+ * message with no question anywhere before it. Measured: after a five-round
+ * tool-failure stop the transcript ended on a tool result and said nothing
+ * about stopping, so the next turn opened with a reply to a prompt the model
+ * had never seen.
+ *
+ * The last sentence of the note is the load-bearing one. It is the problem
+ * Claude Code writes into the system prompt for its companion sprite — a second
+ * speaker sharing the channel — and the fix is the same: tell the model what the
+ * other party knows instead of leaving it to infer that from the shape of the
+ * reply. It deliberately does not claim the user's next message is about the
+ * stop, because it may not be.
+ */
+function stopNote(reason: "tool_errors" | "round_limit", message: string): string {
+  const cause =
+    reason === "round_limit"
+      ? `This turn stopped at its tool-round budget (${message}).`
+      : `This turn stopped because ${message}.`;
+  return (
+    `(${cause} The user has been told and asked how to proceed. They have not ` +
+    `seen a message from you about the stop, so do not assume they know why.)`
+  );
+}
+
+async function stopForUser(
+  observer: HarnessObserver | undefined,
+  messages: ChatMessage[],
+  reason: "tool_errors" | "round_limit",
+  message: string
+): Promise<void> {
+  await emit(observer, { type: "needs_user", reason, message });
+  messages.push({ role: "user", content: stopNote(reason, message) });
 }
 
 async function emit(
