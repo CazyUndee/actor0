@@ -350,6 +350,22 @@ test("shell runs in the working directory", async () => {
 });
 
 test("shell is killed at its timeout and says so", async () => {
+  // The timings here are the test's, and they are load-bearing.
+  //
+  // This asserts two things at once: that the kill happens, and that whatever
+  // the command had already written is handed back. The second half needs the
+  // command to have *run*, which at a one-second timeout it does not reliably
+  // do: PowerShell is launched as a child here and takes the better part of a
+  // second to start, and its stdout is block-buffered into a pipe, so on a
+  // loaded machine the kill lands before a single byte is flushed and the
+  // assertion fails for a reason that has nothing to do with the code. That
+  // made this test fail about one run in three under the full suite and never
+  // when its own file ran alone.
+  //
+  // So: a short warm-up before the hang, and a timeout wide enough for the
+  // shell to have started and flushed. The kill is still proven by the
+  // elapsed time, which has to be nowhere near the 30 seconds the command
+  // asked to run for.
   const started = Date.now();
   await assert.rejects(
     () =>
@@ -357,20 +373,22 @@ test("shell is killed at its timeout and says so", async () => {
         call("shell", {
           command: script(
             "echo partial-before-hang; sleep 30",
-            "Write-Output partial-before-hang; Start-Sleep -Seconds 30",
+            "Start-Sleep -Milliseconds 250; Write-Output partial-before-hang; Start-Sleep -Seconds 30",
             "echo partial-before-hang & ping -n 31 127.0.0.1 > nul",
           ),
-          timeout: 1,
+          timeout: 3,
         }),
         signal,
       ),
     (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      return message.includes("timed out after 1 second") && message.includes("partial-before-hang");
+      return message.includes("timed out after 3 seconds") && message.includes("partial-before-hang");
     },
     "a killed command must hand back the output it did produce",
   );
-  assert.ok(Date.now() - started < 15_000, "must not have waited for the command");
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 15_000, `waited ${elapsed}ms for a 30s command`);
+  assert.ok(elapsed >= 2_000, `the command was killed after ${elapsed}ms, before it could produce anything`);
 });
 
 test("a command that reads stdin is told there is none", async () => {
