@@ -206,22 +206,49 @@ export function rejectUnknownTool(name: string, offered: string[]): RejectedBloc
 }
 
 /**
+ * Recover the intended tool name from a block whose JSON did not parse.
+ *
+ * The rejection transcript line reads "✗ <name>" — showing "unknown" when the
+ * body plainly says which tool was meant is a worse error message than the
+ * model deserves, and a regex is safe here: the name is read out of the raw
+ * body only to *display* it, never to execute it, and the value is capped and
+ * stripped to what a name can look like.
+ */
+function recoverName(body: string): string {
+  const match = /"name"\s*:\s*"([^"\\]{1,64})"/.exec(body);
+  return match?.[1] ?? "unknown";
+}
+
+/**
  * Build the rejection record for a block that looked like a tool call but
  * whose arguments were not valid JSON. The common cause is a raw newline or
  * tab inside a string literal — the model formatted the command like shell
- * output instead of escaping it — so the reason names that repair first.
+ * output instead of escaping it — so the reason names that repair first. A
+ * body with no usable "name" gets the name-specific hint instead; the
+ * generic newline hint would be pointing at a fault it does not have.
  */
-export function rejectMalformedArguments(detail: string): RejectedBlock {
+export function rejectMalformedArguments(detail: string, rawBody?: string): RejectedBlock {
+  const name = rawBody !== undefined ? recoverName(rawBody) : "unknown";
   const call: ToolCall = {
     id: `block_rejected_${++rejectSeq}`,
     type: "function",
-    function: { name: "unknown", arguments: "{}" },
+    function: { name, arguments: "{}" },
   };
+  if (name === "unknown") {
+    return {
+      name,
+      call,
+      reason:
+        `Rejected: your tool-call block was not valid JSON (${detail}). ` +
+        `The block needs {"type": "tool_call", "name": "<offered tool>", "arguments": {…}} — ` +
+        `a string "name" naming one of the offered tools. Re-emit it as valid JSON.`,
+    };
+  }
   return {
-    name: "unknown",
+    name,
     call,
     reason:
-      `Rejected: your tool-call block was not valid JSON (${detail}). ` +
+      `Rejected: your "${name}" tool-call block was not valid JSON (${detail}). ` +
       `Most often a raw newline inside a string value — JSON strings cannot ` +
       `contain literal line breaks; use \\n. Re-emit the block with valid JSON ` +
       `on a single line.`,
@@ -263,7 +290,7 @@ export function parseToolCallBlock(block: string, toolNames: string[]): ToolCall
     value = JSON.parse(blockBody(block));
   } catch (error) {
     if (PROTOCOL_INTENT.test(blockBody(block))) {
-      return rejectMalformedArguments(errorMessage(error));
+      return rejectMalformedArguments(errorMessage(error), blockBody(block));
     }
     return null;
   }
@@ -275,7 +302,9 @@ function toToolCall(value: unknown, toolNames: string[]): ToolCall | RejectedBlo
   if (!isPlainObject(value)) return null;
   if (value.type !== "tool_call") return null;
   if (typeof value.name !== "string") {
-    return rejectMalformedArguments("the object has no string \"name\" field");
+    return rejectMalformedArguments(
+      'the object has no string "name" field — add "name": "<offered tool>"',
+    );
   }
   if (!toolNames.includes(value.name)) return rejectUnknownTool(value.name, toolNames);
 

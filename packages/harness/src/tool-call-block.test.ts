@@ -195,6 +195,18 @@ test("a rejected fence arrives through the filter with an empty answer", () => {
   assert.ok(!answer.includes("tool_call"));
   assert.equal(rejected.length, 1);
   assert.ok(rejected[0]!.reason.includes("newline"));
+  // The transcript line reads "✗ <name>": recover the intended name from the
+  // raw body instead of showing "unknown" when the body plainly says it.
+  assert.equal(rejected[0]!.name, "shell");
+});
+
+test("a malformed block with no usable name gets the name-specific hint", () => {
+  // The generic newline hint would point at a fault this body does not have.
+  const block = '```json\n{"type": "tool_call", "name": 42}\n```\n';
+  const { rejected } = run(block, 11);
+  assert.equal(rejected.length, 1);
+  assert.ok(rejected[0]!.reason.includes('"name"'));
+  assert.ok(!rejected[0]!.reason.includes("newline"), "the hint must match the fault");
 });
 
 test("status markers and plan blocks still work alongside the protocol", () => {

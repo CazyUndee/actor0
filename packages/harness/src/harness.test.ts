@@ -162,7 +162,9 @@ test("a refused protocol block becomes an error tool result, not answer text", a
   );
   assert.equal(assistantCalls.length, 1);
   const rejectedCall = assistantCalls[0]!.tool_calls![0]!;
-  assert.equal(rejectedCall.function.name, "unknown");
+  // The name is recovered from the raw body so the transcript line reads
+  // "✗ shell", not "✗ unknown" — the call still never runs.
+  assert.equal(rejectedCall.function.name, "shell");
   const errorResult = result.messages.find(
     (m) => m.role === "tool" && m.tool_call_id === rejectedCall.id,
   );
