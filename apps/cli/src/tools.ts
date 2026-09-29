@@ -158,10 +158,16 @@ function escapes(rel: string): boolean {
  * of file needs the next `offset=` handed to it, not a count of what it did
  * not get. "N more lines" made the model guess — or worse, re-read the whole
  * file with a bigger limit and burn the context window it was trying to save.
+ *
+ * `totalLines` is the file's own length, not the window's. The note used to
+ * say "of <window end>", so `limit: 2500` on a 3000-line file claimed the
+ * file was 2500 lines long — and a model that believes the file ends where
+ * its own `limit` ended edits a file it thinks it has read in full.
  */
 function capLines(
   lines: string[],
   startLine: number,
+  totalLines: number,
 ): { text: string; nextOffset?: number } {
   let byteCount = 0;
   let end = 0;
@@ -183,7 +189,7 @@ function capLines(
       ? `${MAX_READ_LINES}-line limit`
       : `${MAX_READ_BYTES.toLocaleString("en-US")}-byte limit`;
   return {
-    text: `${shown.join("\n")}\n\n[Showing lines ${startLine}-${startLine + end - 1} of ${startLine + lines.length - 1} (${why}). Use offset=${nextOffset} to continue.]`,
+    text: `${shown.join("\n")}\n\n[Showing lines ${startLine}-${startLine + end - 1} of ${totalLines} (${why}). Use offset=${nextOffset} to continue.]`,
     nextOffset,
   };
 }
@@ -231,12 +237,16 @@ const readTool: CliTool = {
       ? Math.max(1, Math.floor(Number(args.limit)))
       : all.length;
     const slice = all.slice(start - 1, start - 1 + window);
-    const capped = capLines(slice, start);
+    const capped = capLines(slice, start, all.length);
     const moreAfterWindow = start - 1 + slice.length < all.length;
     if (!capped.nextOffset && moreAfterWindow) {
       const nextOffset = start + slice.length;
       return `${capped.text}\n\n[${all.length - (start - 1 + slice.length)} more lines in file. Use offset=${nextOffset} to continue.]`;
     }
+    // A paged read that has run out of file says so. Without it the last
+    // page is indistinguishable from a page whose note was merely lost, and
+    // the model cannot tell when to stop paging.
+    if (!capped.nextOffset) return `${capped.text}\n\n[End of file: ${all.length} lines.]`;
     return capped.text;
   },
 };

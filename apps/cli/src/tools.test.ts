@@ -101,6 +101,46 @@ test("a limit that stops short still tells the model where the file continues", 
   assert.match(out, /more lines in file/);
 });
 
+test("a paged read reports the file's line count, not the window's", async () => {
+  // `limit` says how much the model wants, not how much the file has. The
+  // note used to end "of <window end>", so asking for 2500 lines of a
+  // 3000-line file produced "Showing lines 1-2000 of 2500" — a file length
+  // that is the reader's own doing, and one a model will go on to edit by.
+  const dir = scratch();
+  writeFileSync(
+    join(dir, "big.txt"),
+    Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n"),
+  );
+  const out = await host(dir).execute(call("read", { path: "big.txt", limit: 2500 }), signal);
+  assert.match(out, /Showing lines 1-2000 of 3000/);
+  assert.doesNotMatch(out, /of 2500\b/, "the model's own limit must not become the file's length");
+});
+
+test("the page that reaches the end of the file says so", async () => {
+  // The note that offers a next offset creates an obligation to answer it:
+  // once the model has followed it to the end, something has to say the
+  // paging is finished, or the last page reads like a page whose note went
+  // missing and the model pages forever.
+  const dir = scratch();
+  writeFileSync(
+    join(dir, "big.txt"),
+    Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n"),
+  );
+  let offset: number | undefined;
+  let last = "";
+  for (let pages = 0; pages < 10; pages++) {
+    last = await host(dir).execute(
+      call("read", { path: "big.txt", ...(offset ? { offset } : {}), limit: 2500 }),
+      signal,
+    );
+    const m = /Use offset=(\d+) to continue/.exec(last);
+    if (!m) break;
+    offset = Number(m[1]);
+  }
+  assert.match(last, /\[End of file: 3000 lines\.\]/, "the final page must close the loop");
+  assert.doesNotMatch(last, /Use offset=/, "and must not offer another page");
+});
+
 test("read pages a big file all the way through without repeating lines", async () => {
   const dir = scratch();
   const lines = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`);
