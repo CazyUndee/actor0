@@ -55,6 +55,12 @@ consequences:
   literal `\\r` at the terminator. Long scripts are safer written with a real
   file-writing tool and then `cp`-ed into place. Verify the file's byte count
   and its tail before running it.
+- Git stores LF and the checkout is CRLF, and `git add` does not reliably
+  reconcile the two: a file rewritten by a script can land in the index with
+  CRLF still in it, after which **every line** differs from HEAD and the diff
+  reads as a whole-file rewrite. Check `git diff --cached --numstat` before
+  committing anything a script touched. If the numbers are the whole file,
+  rewrite it with LF endings and add it again.
 
 ## Do not overwrite a file you have not read
 
