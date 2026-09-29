@@ -56,6 +56,22 @@ the CLI throws `does not provide an export named ...` for a symbol that is
 plainly there. `npm test` builds first, so the full suite is safe; a bare
 `node --import tsx --test src/turn.test.ts` in `apps/cli` is not.
 
+The same trap sits underneath the check that matters most: **proving a new
+test fails without the fix.** Reverting the harness source and re-running a
+CLI test proves nothing — the CLI is still running the `dist/` built from the
+fixed source, so the new tests pass against the bug they were written for.
+That happened on 2026-09-29 and it is the kind of green that ships. Rebuild
+the harness between the revert and the run:
+
+```bash
+npm --workspace @actor0/harness run build   # after reverting, and after restoring
+```
+
+A test that passes both with and without the fix is not automatically wrong —
+a guard test ("a clean `finish_reason` is not mistaken for a cut-off answer")
+is *supposed* to pass on the old code. Check which kind each one is before
+concluding the fix is untested.
+
 ## The working tree is CRLF
 
 There is no `.gitattributes`, and the checkout is CRLF on disk. Two
