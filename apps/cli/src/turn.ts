@@ -1,7 +1,9 @@
 import {
   DEFAULT_HARNESS_CONFIG,
+  INTERRUPT_MARKER,
   OpenAiCompatibleModel,
   runAgentTurn,
+  type AbortedTurnError,
   type ChatMessage,
   type HarnessEvent,
   type ModelClient,
@@ -290,4 +292,29 @@ export function usageSummary(usage: RunResult["usage"]): string | undefined {
   const total = totalUsage(usage);
   if (total.total_tokens === 0) return undefined;
   return `${total.total_tokens.toLocaleString()} tokens`;
+}
+
+/** Marker appended to an answer a cancel cut short; see `withInterruptMarker`. */
+export { INTERRUPT_MARKER };
+
+/**
+ * The transcript to persist when a turn was cancelled.
+ *
+ * The harness throws `AbortedTurnError` on abort, and its `messages` already
+ * hold the exchange exactly as the user watched it: the input, any finished
+ * tool rounds, honest answers for the calls the cancel cut short, and the
+ * partial answer with the interrupt marker. The only thing left is the same
+ * strip `forStorage` does — the system prompt is re-seeded on load, and
+ * storing it would duplicate a growing preamble on every resume.
+ *
+ * Returns undefined when the error carries no transcript (an abort before the
+ * harness built one, or a non-abort error misused here), so the caller can
+ * fall back to what it had rather than saving something wrong.
+ */
+export function cancelledTurnMessages(error: unknown): ChatMessage[] | undefined {
+  const aborted = error as Partial<AbortedTurnError> | null;
+  if (!aborted || aborted.name !== "AbortedTurnError" || !Array.isArray(aborted.messages)) {
+    return undefined;
+  }
+  return forStorage(aborted.messages);
 }

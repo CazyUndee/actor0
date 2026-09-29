@@ -10,10 +10,13 @@ import {
   runTurn,
   seedSystemPrompt,
   forStorage,
+  cancelledTurnMessages,
   defaultSystemPrompt,
+  INTERRUPT_MARKER,
   PROVIDER_PROMPT_FLOOR_CHARS,
   promptClearsProviderFloor,
 } from "./turn.js";
+import { AbortedTurnError } from "@actor0/harness";
 import { createToolHost, resolveShell } from "./tools.js";
 import { applyEvent, initialConversation } from "./conversation.js";
 
@@ -252,7 +255,13 @@ test("cancelling mid-stream throws and stops the turn", async () => {
     });
     setTimeout(() => controller.abort(), 60);
     await assert.rejects(pending, (error: unknown) => {
-      assert.equal((error as Error).name, "AbortError");
+      // The abort still surfaces as a rejection (hosts keep their abort
+      // handling), but it now carries the transcript the turn built.
+      assert.ok(error instanceof AbortedTurnError, "an abort must hand back the exchange");
+      assert.deepEqual(forStorage(error.messages), [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: `start\n\n${INTERRUPT_MARKER}` },
+      ]);
       return true;
     });
   } finally {
@@ -319,4 +328,31 @@ test("every tool the prompt names is a tool the host actually has", () => {
   const example = /"name": "(\w+)"/.exec(defaultSystemPrompt())?.[1];
   assert.ok(example, "the example must name a tool");
   assert.ok(names.includes(example), `the example names ${example}, which is not a real tool`);
+});
+
+test("cancelledTurnMessages adopts the harness transcript and strips the prompt", () => {
+  const error = new AbortedTurnError(
+    [
+      { role: "system", content: "the seeded prompt" },
+      { role: "user", content: "go" },
+      { role: "assistant", content: `part\n\n${INTERRUPT_MARKER}` },
+    ],
+    "part",
+  );
+  assert.deepEqual(cancelledTurnMessages(error), [
+    { role: "user", content: "go" },
+    { role: "assistant", content: `part\n\n${INTERRUPT_MARKER}` },
+  ]);
+});
+
+test("cancelledTurnMessages rejects anything that is not an abort carrying a transcript", () => {
+  // A mislabeled error must not let a caller save the wrong history.
+  assert.equal(cancelledTurnMessages(undefined), undefined);
+  assert.equal(cancelledTurnMessages(null), undefined);
+  assert.equal(cancelledTurnMessages(new Error("something else")), undefined);
+  assert.equal(cancelledTurnMessages({ name: "AbortedTurnError", messages: "not an array" }), undefined);
+  assert.equal(
+    cancelledTurnMessages(Object.assign(new Error("no transcript"), { name: "AbortedTurnError" })),
+    undefined,
+  );
 });

@@ -47,6 +47,42 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
   recoverEmptyAnswer: true,
 };
 
+/** Marker appended to an answer a cancel cut short. */
+export const INTERRUPT_MARKER = "[interrupted]";
+
+/**
+ * `text` with the interrupt marker appended, or the marker alone when the
+ * cancel landed before anything streamed. The marker is what tells a resumed
+ * session that the text above it is a fragment the user stopped, not a
+ * completed answer the model should stand behind.
+ */
+export function withInterruptMarker(text: string): string {
+  const trimmedEnd = text.trimEnd();
+  return trimmedEnd ? `${trimmedEnd}\n\n${INTERRUPT_MARKER}` : INTERRUPT_MARKER;
+}
+
+/**
+ * Thrown when the caller aborted a turn. Carries the transcript as the turn
+ * left it — the input, every finished round, answers for calls the cancel cut
+ * short, and the partial answer marked interrupted — so a host can persist an
+ * exchange the user watched happen. Without it, a cancel rewinds the
+ * conversation to before the turn: the work vanishes from the saved session
+ * and a resume replays it from zero.
+ *
+ * The transcript is API-valid by construction (see `abortTurn`), so a host can
+ * save it as-is and the next request will be accepted.
+ */
+export class AbortedTurnError extends Error {
+  constructor(
+    readonly messages: ChatMessage[],
+    /** What the cancelled attempt had streamed, without the marker. */
+    readonly partialText: string,
+  ) {
+    super("The operation was aborted");
+    this.name = "AbortedTurnError";
+  }
+}
+
 export async function runModelRound(
   model: ModelClient,
   messages: ChatMessage[],
@@ -186,7 +222,14 @@ async function runModelAttempt(
     }
     return { text: attemptText, toolCalls, rejectedBlocks, complete: sawDone, reasoning, usage };
   } catch (error) {
-    if (outerSignal.aborted) throw error;
+    if (outerSignal.aborted) {
+      // The attempt's streamed text dies here — the round loop above cannot
+      // see it — so it rides on the error to `abortTurn`, which puts it in the
+      // transcript the caller persists. Without this, the text the user
+      // watched stream would be the one thing the saved session loses.
+      (error as { attemptText?: string }).attemptText = attemptText;
+      throw error;
+    }
     if (attemptText && isRetriable(error)) await emit(observer, { type: "reset", attemptText });
     if (isRetriable(error)) throw error;
     if (error instanceof ModelTransportError) throw error;
@@ -219,15 +262,24 @@ export async function runAgentTurn(options: {
   let consecutiveToolErrors = 0;
   for (let round = 1; ; round++) {
     let roundText = "";
-    assertNotAborted(options.signal);
-    const result = await runModelRound(
-      options.model,
-      messages,
-      tools,
-      options.signal,
-      options.observer,
-      config
-    );
+    if (options.signal.aborted) abortTurn(messages, "", []);
+    let result: RoundResult;
+    try {
+      result = await runModelRound(
+        options.model,
+        messages,
+        tools,
+        options.signal,
+        options.observer,
+        config
+      );
+    } catch (error) {
+      // An abort can surface from anywhere inside the round — the pre-flight
+      // check, the backoff sleep, the stream itself. It still has to leave
+      // through `abortTurn`, or the caller loses the transcript below.
+      if (options.signal.aborted) abortTurn(messages, attemptTextOf(error), []);
+      throw error;
+    }
     roundText = result.text;
     allUsage.push(...result.usage);
     finalReasoning = result.reasoning;
@@ -285,7 +337,8 @@ export async function runAgentTurn(options: {
         tool_calls: result.toolCalls,
       });
       let failedThisRound = 0;
-      for (const call of result.toolCalls) {
+      for (let index = 0; index < result.toolCalls.length; index += 1) {
+        const call = result.toolCalls[index]!;
         await emit(options.observer, { type: "tool_start", call });
         try {
           const output = await options.toolHost?.execute(call, options.signal);
@@ -298,6 +351,11 @@ export async function runAgentTurn(options: {
           });
           await emit(options.observer, { type: "tool_result", call, output });
         } catch (error) {
+          if (options.signal.aborted) {
+            // This call's answer is unknown and the rest never started; say
+            // so, or the saved transcript dangles and the resume is rejected.
+            abortTurn(messages, "", [call, ...result.toolCalls.slice(index + 1)]);
+          }
           failedThisRound += 1;
           const output = `Tool failed: ${errorMessage(error)}`;
           messages.push({
@@ -460,4 +518,49 @@ function isRetriable(error: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The streamed text an aborted attempt carried out on its error, if any. */
+function attemptTextOf(error: unknown): string {
+  const text = (error as { attemptText?: string } | null | undefined)?.attemptText;
+  return typeof text === "string" ? text : "";
+}
+
+/**
+ * Leave a cancelled turn the way the user watched it, not the way the code
+ * unwound.
+ *
+ * Every call in `calls` gets an answer: a result unknown. That covers both
+ * the call a cancel cut short and the ones that never started — "result
+ * unknown" is the honest answer to "did it finish?", and an invented result
+ * (an empty string, the failure text) would teach the model something false
+ * about the machine. On the next round the model can re-run what it needs.
+ *
+ * `partialText` is appended as the final assistant message with an interrupt
+ * marker, so a resume reads the cut text as a fragment the user stopped
+ * rather than a completed answer. Claude Code leaves the same shape behind —
+ * a partial assistant message and "[Request interrupted by user]" — with the
+ * marker as its own pseudo-message; here it rides on the message, because
+ * `ChatMessage` has no place for a separate notice and one shape keeps every
+ * consumer uniform. Pass an empty string when the streamed text is already in
+ * the transcript (on the tool-call assistant message), so it is not stored
+ * twice.
+ *
+ * The result is API-valid by construction: no dangling call, no unanswered
+ * `tool_calls` — the shapes a provider rejects the whole request over.
+ */
+function abortTurn(messages: ChatMessage[], partialText: string, unanswered: ToolCall[]): never {
+  const transcript = [...messages];
+  for (const call of unanswered) {
+    transcript.push({ role: "assistant", content: "", tool_calls: [call] });
+    transcript.push({
+      role: "tool",
+      content:
+        "[cancelled] The turn was interrupted around this call, so its result is unknown. Run it again if you still need it.",
+      tool_call_id: call.id,
+      name: call.function.name,
+    });
+  }
+  transcript.push({ role: "assistant", content: withInterruptMarker(partialText) });
+  throw new AbortedTurnError(transcript, partialText);
 }

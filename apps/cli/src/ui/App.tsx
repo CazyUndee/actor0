@@ -11,7 +11,7 @@ import {
   withUserInput,
   type ConversationState,
 } from "../conversation.js";
-import { forStorage, runTurn, usageSummary } from "../turn.js";
+import { cancelledTurnMessages, forStorage, runTurn, usageSummary } from "../turn.js";
 import { newSessionId, saveSession } from "../session.js";
 import { parseSlash, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
@@ -64,6 +64,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const abortRef = useRef<AbortController | null>(null);
   const conversationRef = useRef(conversation);
   conversationRef.current = conversation;
+
+  // What the transcript would show if the turn ended right now: the last
+  // settled state, plus any partial text the current attempt has streamed.
+  // `finally` persists from this mirror, so a cancel saves the exchange the
+  // user watched instead of silently rewinding the session file.
+  const liveRef = useRef<ChatMessage[]>(messagesRef.current);
+  const updateLive = useCallback((messages: ChatMessage[]) => {
+    liveRef.current = messages;
+  }, []);
 
   const toolHost = useMemo(() => createToolHost({ cwd }), [cwd]);
 
@@ -165,10 +174,26 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
             signal: controller.signal,
             cwd,
             ...(config.systemPrompt ? { systemPrompt: config.systemPrompt } : {}),
-            onEvent: (event) => setConversation((state) => applyEvent(state, event)),
+            onEvent: (event) =>
+              setConversation((state) => {
+                const next = applyEvent(state, event);
+                if (event.type === "done") {
+                  // The turn's answer is final: this is the state a save
+                  // should capture if the turn ends from here on.
+                  const answer = next.entries[next.entries.length - 1];
+                  if (answer?.kind === "assistant") {
+                    updateLive([
+                      ...messagesRef.current,
+                      { role: "assistant", content: answer.text },
+                    ]);
+                  }
+                }
+                return next;
+              }),
           });
 
           messagesRef.current = forStorage(result.messages);
+          updateLive(messagesRef.current);
 
           // A turn that stopped on `needs_user` is resumable, not finished, so
           // say so rather than letting it look like a completed answer. The
@@ -181,20 +206,31 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           const tokens = usageSummary(result.usage);
           if (tokens) notice("info", tokens);
         } catch (error) {
+          // The harness hands the transcript back on abort (AbortedTurnError):
+          // the input, every finished round, honest answers for the calls the
+          // cancel cut short, and the partial answer marked interrupted.
+          // Adopting it is what makes a cancel survive a restart — without
+          // this, messagesRef still holds the state from before the turn and
+          // the save below quietly rewinds the session to it, losing an
+          // exchange the user watched happen.
+          const cancelled = cancelledTurnMessages(error);
+          if (cancelled) messagesRef.current = cancelled;
+
           if (controller.signal.aborted) {
             // Keep whatever streamed before the cancel — discarding it would
             // throw away text the user already read.
             setConversation((state) => {
               const partial = state.live.text;
-              if (!partial.trim()) return withNotice(state, "warn", "cancelled");
-              return withNotice(
-                { ...state, entries: [...state.entries, { kind: "assistant", text: partial, partial: true }], live: emptyLive() },
-                "warn",
-                "cancelled",
-              );
+              const kept = partial.trim()
+                ? { ...state, entries: [...state.entries, { kind: "assistant", text: partial, partial: true }] }
+                : state;
+              return withNotice({ ...kept, live: emptyLive() }, "warn", "cancelled");
             });
           } else {
-            notice("error", (error as Error).message);
+            // The failed turn is thrown away, not saved — but the live region
+            // must still be cleared here, or the streamed text, the tool
+            // spinner and the status line freeze on screen above the error.
+            setConversation((state) => withNotice({ ...state, live: emptyLive() }, "error", (error as Error).message));
           }
         } finally {
           abortRef.current = null;
@@ -209,7 +245,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
               createdAt: resumed?.createdAt ?? new Date().toISOString(),
               updatedAt: new Date().toISOString(),
               model: provider.model,
-              messages: messagesRef.current,
+              // The live region's mirror: this ref advances only when the
+              // conversation is adopting new history — a completed turn's
+              // result, or a cancelled turn's recovered transcript. Saving it
+              // instead of reading React state is what keeps the file matching
+              // what the user actually saw, including a turn they stopped.
+              messages: liveRef.current,
             });
           } catch (error) {
             notice("error", `could not save session: ${(error as Error).message}`);
@@ -217,7 +258,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         }
       })();
     },
-    [config, notice, resumed?.updatedAt, runCommand, toolHost],
+    [config, notice, resumed?.updatedAt, runCommand, toolHost, updateLive],
   );
 
   // Global keys. Deliberately narrow: the composer owns text entry and the

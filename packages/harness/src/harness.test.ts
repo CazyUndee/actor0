@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_HARNESS_CONFIG, runAgentTurn, runModelRound } from "./harness.js";
+import { AbortedTurnError, DEFAULT_HARNESS_CONFIG, INTERRUPT_MARKER, runAgentTurn, runModelRound, withInterruptMarker } from "./harness.js";
 import { ModelTransportError } from "./model-client.js";
 import type {
   HarnessEvent,
@@ -114,6 +114,117 @@ test("feeds tool results into a bounded second round", async () => {
   assert.equal(result.rounds, 2);
   assert.ok(result.messages.some((message) => message.role === "tool" && message.content === "observed"));
   assert.ok(observed.some((event) => event.type === "tool_result"));
+});
+
+test("a cancel mid-stream hands back the exchange instead of throwing it away", async () => {
+  // Streams one token, then blocks forever on the abort the test fires.
+  const controller = new AbortController();
+  const model: ModelClient = {
+    async *stream() {
+      yield { type: "token", delta: "Watch this" };
+      await new Promise((_resolve, reject) => {
+        controller.signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("The operation was aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    },
+  };
+
+  let thrown: unknown;
+  const pending = runAgentTurn({
+    model,
+    messages: [],
+    input: "go",
+    signal: controller.signal,
+    config: fastConfig,
+  });
+  setTimeout(() => controller.abort(), 20);
+  await assert.rejects(pending, (error: unknown) => {
+    thrown = error;
+    return true;
+  });
+
+  const error = thrown as AbortedTurnError;
+  assert.ok(error instanceof AbortedTurnError);
+  assert.equal(error.partialText, "Watch this");
+  // The user's message and the partial answer, marked interrupted — a
+  // transcript a host can save and the user will recognise.
+  assert.deepEqual(error.messages, [
+    { role: "user", content: "go" },
+    { role: "assistant", content: `Watch this\n\n${INTERRUPT_MARKER}` },
+  ]);
+});
+
+test("a cancel during tool calls answers every call, including the unstarted ones", async () => {
+  const controller = new AbortController();
+  const first: ToolCall = { id: "call_1", type: "function", function: { name: "inspect", arguments: "{}" } };
+  const second: ToolCall = { id: "call_2", type: "function", function: { name: "inspect", arguments: "{}" } };
+  const definition: ToolDefinition = {
+    type: "function",
+    function: { name: "inspect", description: "inspect", parameters: { type: "object" } },
+  };
+  const toolHost: ToolHost = {
+    definitions: () => [definition],
+    async execute(_call, signal) {
+      // Listen before aborting: a signal that is already aborted never
+      // dispatches to a listener added afterwards, and waiting on one hangs.
+      await new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+        controller.abort();
+      });
+      return "unreachable";
+    },
+  };
+  const model = scriptedModel([
+    await events(
+      { type: "token", delta: "Working" },
+      { type: "tool_call", tool_calls: [first, second] },
+      { type: "done" },
+    ),
+  ]);
+
+  let thrown: unknown;
+  const pending = runAgentTurn({
+    model,
+    messages: [],
+    input: "go",
+    toolHost,
+    signal: controller.signal,
+    config: fastConfig,
+  });
+  await assert.rejects(pending, (error: unknown) => {
+    thrown = error;
+    return true;
+  });
+  const error = thrown as AbortedTurnError;
+
+  // The tool-call assistant message keeps its streamed text; the cancelled
+  // calls each get an honest answer; no partial text is duplicated on the
+  // trailing message; the final answer is the marker alone.
+  const last = error.messages[error.messages.length - 1];
+  const caller = error.messages.find((m) => m.role === "assistant" && m.tool_calls?.length);
+  assert.equal(last?.role, "assistant");
+  assert.equal(last?.content, INTERRUPT_MARKER);
+  assert.equal(caller?.content, "Working");
+  assert.deepEqual(caller?.tool_calls, [first, second]);
+  const results = error.messages.filter((m) => m.role === "tool");
+  assert.equal(results.length, 2, "both calls must be answered");
+  for (const result of results) {
+    assert.match(result.content, /result is unknown/);
+    assert.ok(
+      caller?.tool_calls?.some((call) => call.id === result.tool_call_id),
+      "every result must pair with a call",
+    );
+  }
+});
+
+test("the interrupt marker never fabricates text and never doubles up", () => {
+  assert.equal(withInterruptMarker("partly done"), `partly done\n\n${INTERRUPT_MARKER}`);
+  assert.equal(withInterruptMarker("  "), INTERRUPT_MARKER);
+  assert.equal(withInterruptMarker(""), INTERRUPT_MARKER);
+  assert.equal(withInterruptMarker("trailing spaces   "), `trailing spaces\n\n${INTERRUPT_MARKER}`);
 });
 
 test("a refused protocol block becomes an error tool result, not answer text", async () => {
