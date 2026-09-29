@@ -127,6 +127,13 @@ async function runModelAttempt(
   };
 
   try {
+    // The attempt boundary, told to the observer before anything streams: a
+    // host that keeps render state can snapshot here and discard exactly what
+    // this attempt produced if the attempt dies and is retried. Without it, a
+    // `reset` cannot say how far to rewind — text is named by `attemptText`,
+    // but reasoning flushed on a tool_call or plan, statuses, and usage
+    // summaries all streamed before the failure too.
+    await emit(observer, { type: "attempt_start" });
     iterator = model.stream(messages, tools, controller.signal)[Symbol.asyncIterator]();
     while (true) {
       const next = await withTimeout(

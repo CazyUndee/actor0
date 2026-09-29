@@ -72,6 +72,13 @@ export type HarnessEvent =
   | { type: "reasoning"; delta: string }
   | { type: "status"; status: string; source: "marker" | "note" }
   | { type: "plan"; plan: PlanPrefix }
+  /**
+   * A model attempt is about to stream. Everything a host renders from the
+   * events that follow belongs to this attempt; a host that snapshots its
+   * render state here can discard exactly this attempt's output when the
+   * matching `reset` arrives.
+   */
+  | { type: "attempt_start" }
   | { type: "reset"; attemptText: string }
   | { type: "tool_start"; call: ToolCall }
   | { type: "tool_result"; call: ToolCall; output: string; error?: string }

@@ -44,6 +44,13 @@ export type ConversationState = {
   live: Live;
   /** Set when the harness stopped because it could not make progress. */
   blocked?: Blocked;
+  /**
+   * Length of `entries` when the current model attempt began. A `reset`
+   * truncates back to it: reasoning that was flushed mid-attempt (by a
+   * tool_call or plan) describes a discarded attempt, and leaving it in the
+   * transcript shows the model thinking about work that never happened.
+   */
+  attemptEntries?: number;
 };
 
 export const emptyLive = (): Live => ({ text: "", reasoning: "", partial: false });
@@ -166,15 +173,29 @@ export function applyEvent(state: ConversationState, event: HarnessEvent): Conve
       };
     }
 
+    case "attempt_start":
+      // Snapshot for the matching reset. Committed entries from earlier
+      // attempts (and earlier turns) stay untouched.
+      return { ...state, attemptEntries: state.entries.length };
+
     case "reset": {
       const attempt = (state.live.retrying?.attempt ?? 0) + 1;
       const discarded = event.attemptText.trim();
+      // Drop what this attempt flushed mid-stream. The snapshot is
+      // `attemptEntries`; without it, reasoning flushed on a tool_call before
+      // the failure stayed in the transcript as thinking about work that was
+      // thrown away. Older hosts that never saw attempt_start have no
+      // snapshot — respect that (undefined) and keep everything, the old
+      // behaviour.
+      const base = state.attemptEntries ?? state.entries.length;
+      const kept = state.entries.slice(0, base);
       return {
         entries: discarded
-          ? [...state.entries, { kind: "notice", tone: "warn", text: `connection interrupted — retrying (attempt ${attempt})` }]
-          : state.entries,
+          ? [...kept, { kind: "notice", tone: "warn", text: `connection interrupted — retrying (attempt ${attempt})` }]
+          : kept,
         live: { ...emptyLive(), retrying: { attempt } },
         blocked: undefined,
+        attemptEntries: undefined,
       };
     }
 

@@ -215,3 +215,40 @@ test("the reducer never mutates the state it is given", () => {
   applyEvent(before, { type: "token", delta: "x" });
   assert.equal(JSON.stringify(before), snapshot);
 });
+
+test("reset discards what the dead attempt flushed mid-stream", () => {
+  // Reasoning flushed on a tool_call becomes a permanent entry the moment the
+  // call arrives — but if that attempt then fails and is retried, the entry
+  // describes a discarded attempt: the model shown thinking about work that
+  // never happened. attempt_start snapshots the transcript; reset truncates
+  // to the snapshot.
+  let state = applyEvent(initialConversation(), { type: "user", text: "go" } as never);
+  state = applyEvent(state, { type: "attempt_start" });
+  state = applyEvent(state, { type: "reasoning", delta: "reading the file" });
+  state = applyEvent(state, {
+    type: "tool_call",
+    tool_calls: [{ id: "x", type: "function", function: { name: "read", arguments: "{}" } }],
+  });
+  assert.ok(state.entries.some((e) => e.kind === "reasoning"), "flush happened mid-attempt");
+  state = applyEvent(state, { type: "reset", attemptText: "" });
+  assert.deepEqual(state.entries.map((e) => e.kind), [], "the dead attempt's residue is gone");
+
+  // The surviving attempt's flushes are kept.
+  state = applyEvent(state, { type: "attempt_start" });
+  state = applyEvent(state, { type: "reasoning", delta: "again" });
+  state = applyEvent(state, {
+    type: "tool_call",
+    tool_calls: [{ id: "y", type: "function", function: { name: "read", arguments: "{}" } }],
+  });
+  assert.ok(state.entries.some((e) => e.kind === "reasoning"));
+});
+
+test("reset without a snapshot keeps everything (old-host tolerance)", () => {
+  // A host that never saw attempt_start has no snapshot; reset then keeps the
+  // entries rather than guessing at a truncation point.
+  let state = initialConversation();
+  state = applyEvent(state, { type: "reasoning", delta: "kept" });
+  state = applyEvent(state, { type: "tool_call", tool_calls: [] });
+  state = applyEvent(state, { type: "reset", attemptText: "" });
+  assert.equal(state.entries.length, 1);
+});
