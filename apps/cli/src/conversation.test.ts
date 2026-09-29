@@ -124,6 +124,58 @@ test("reasoning lands before the tool call it led to, not after it", () => {
   );
 });
 
+test("a blocked banner retires the moment the user replies", () => {
+  // The banner's own hint is "reply to continue" — a reply that left it up
+  // would be the UI contradicting itself, and nothing else in the reducer
+  // clears `blocked`, so a turn that stopped once used to wear the banner for
+  // the rest of the session.
+  let state = feed([
+    { type: "needs_user", reason: "round_limit", message: "stopped after 24 tool rounds" },
+  ]);
+  assert.ok(state.blocked, "the banner is up after needs_user");
+  state = withUserInput(state, "keep going");
+  assert.equal(state.blocked, undefined);
+});
+
+test("prose streamed before a tool call is committed at the call, not carried into the next round", () => {
+  // The harness stores the round's prose on the tool-call assistant message;
+  // the transcript must store it too, or the next round's tokens append to
+  // it and `done` promotes the concatenation as one run-on answer.
+  const state = feed([
+    { type: "attempt_start" },
+    { type: "token", delta: "Let me check the file." },
+    { type: "tool_call", tool_calls: [call("read", { path: "a.ts" })] },
+    { type: "tool_result", call: call("read", { path: "a.ts" }), output: "contents" },
+    { type: "attempt_start" },
+    { type: "token", delta: "It says hello." },
+    { type: "done", text: "It says hello.", complete: true },
+  ]);
+  assert.deepEqual(
+    state.entries.filter((entry) => entry.kind === "assistant"),
+    [
+      { kind: "assistant", text: "Let me check the file.", partial: true },
+      { kind: "assistant", text: "It says hello.", partial: false },
+    ],
+  );
+});
+
+test("a tool call with no prose commits nothing at the call", () => {
+  // Most rounds stream no prose before the call; the transcript must not grow
+  // an empty or whitespace assistant entry for them.
+  const state = feed([
+    { type: "attempt_start" },
+    { type: "tool_call", tool_calls: [call("read", { path: "a.ts" })] },
+    { type: "tool_result", call: call("read", { path: "a.ts" }), output: "contents" },
+    { type: "attempt_start" },
+    { type: "token", delta: "Done." },
+    { type: "done", text: "Done.", complete: true },
+  ]);
+  assert.deepEqual(
+    state.entries.filter((entry) => entry.kind === "assistant"),
+    [{ kind: "assistant", text: "Done.", partial: false }],
+  );
+});
+
 test("reasoning flushed by an early tool is not committed twice", () => {
   const state = feed([
     { type: "reasoning", delta: "first thought" },

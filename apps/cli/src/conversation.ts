@@ -57,9 +57,18 @@ export const emptyLive = (): Live => ({ text: "", reasoning: "", partial: false 
 
 export const initialConversation = (): ConversationState => ({ entries: [], live: emptyLive() });
 
-/** Echo the user's message into the transcript. */
+/**
+ * Echo the user's message into the transcript.
+ *
+ * This is also the act of un-blocking: the banner's own hint is "reply to
+ * continue", so a reply must retire the banner that asked for it. Clearing it
+ * here (and only here) means a stopped turn's banner lives exactly as long as
+ * the stop does — through the idle period it describes, and not one frame into
+ * the turn that answers it. Nothing else clears it, which is how a turn that
+ * stopped once used to wear "the agent needs you" for the rest of the session.
+ */
 export function withUserInput(state: ConversationState, text: string): ConversationState {
-  return { ...state, entries: [...state.entries, { kind: "user", text }] };
+  return { ...state, entries: [...state.entries, { kind: "user", text }], blocked: undefined };
 }
 
 export function withNotice(
@@ -223,10 +232,24 @@ export function applyEvent(state: ConversationState, event: HarnessEvent): Conve
       return { ...flushed, entries: [...flushed.entries, entry], live: { ...flushed.live, tool: undefined } };
     }
 
-    case "tool_call":
+    case "tool_call": {
       // The model has finished thinking and decided to act. That is the moment
       // the thinking becomes history, not the moment the turn ends.
-      return flushReasoning(state);
+      const flushed = flushReasoning(state);
+      // Anything the model streamed on its way to the call is the round's own
+      // text, and the harness stores it on the tool-call message — so the
+      // transcript must store it too, or the next round's tokens append to it
+      // and `done` promotes the concatenation as one answer. Committing it
+      // here is what keeps a two-round turn rendering as two messages instead
+      // of one run-on. A tool call with no prose commits nothing.
+      const text = flushed.live.text.trim();
+      if (!text) return flushed;
+      return {
+        ...flushed,
+        entries: [...flushed.entries, { kind: "assistant", text, partial: true }],
+        live: { ...flushed.live, text: "" },
+      };
+    }
 
     case "tool_rejected": {
       // A refused protocol block is a failed call, and it is shown exactly

@@ -221,7 +221,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
             // throw away text the user already read.
             setConversation((state) => {
               const partial = state.live.text;
-              const kept = partial.trim()
+              const kept: ConversationState = partial.trim()
                 ? { ...state, entries: [...state.entries, { kind: "assistant", text: partial, partial: true }] }
                 : state;
               return withNotice({ ...kept, live: emptyLive() }, "warn", "cancelled");
