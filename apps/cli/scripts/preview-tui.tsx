@@ -191,14 +191,56 @@ function fakeStdout(): PassThrough {
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * The scripted model, as a plain function of the turn index.
+ * Resolves when `predicate` holds, or after `timeoutMs`.
+ *
+ * The frames used to be captured on fixed timers, and a timer is a guess about
+ * how long a turn takes on the machine running the preview. On a slow one the
+ * “a read runs” frame was captured after the turn had finished, and the driver typed
+ * the next question into a busy session — which is why the read it was about to
+ * show never happened and the run only failed on the scrollback check at the end.
+ */
+async function waitFor(predicate: () => boolean, timeoutMs = 15_000): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) return;
+    await wait(20);
+  }
+}
+
+/**
+ * Milliseconds between two events of one scripted answer.
+ *
+ * The frames below are captured on timers, and an unpaced mock finishes a
+ * whole four-round turn in well under the first one — so “a read runs” and
+ * “the read result arrives” were the same finished screen, twice, and the
+ * driver had quietly stopped being able to see a turn in flight. That is the
+ * one thing it exists for.
+ */
+const PACE_MS = 60;
+
+/** A command that takes about a second, so a tool round is observable. */
+const SLOW_COMMAND = process.platform === "win32" ? "ping -n 2 127.0.0.1 >nul" : "sleep 1";
+
+/** A command no shell has, so the failure path is real and not a missing tool. */
+const MISSING_COMMAND = "no-such-command-actor0-preview";
+
+type Round = number;
+
+/**
+ * The scripted model, keyed off what the driver typed rather than a counter.
  *
  * It used to be an HTTP server on a random port, reached through a base URL
  * the config carried. With one fixed endpoint there is no base URL to point at
  * a mock, so the script moved onto the harness's `ModelClient` port — the seam
  * that exists for exactly this — and the network left the preview entirely.
+ *
+ * Keying on the question, not on a running total, is what makes each frame mean
+ * what its label says: one prompt produces one tool round and one answer,
+ * instead of one prompt producing all four turns and every frame after the
+ * first showing the same finished screen. A counter has the same problem in a
+ * worse form — adding a `/model` frame moves every later turn by one.
  */
-function scriptedTurn(turn: number | "fail"): AsyncGenerator<ModelEvent> {
+function scriptedTurn(input: string, round: Round): AsyncGenerator<ModelEvent> {
   const text = (delta: string): ModelEvent => ({ type: "token", delta });
   const tool = (id: string, name: string, args: Record<string, unknown>): ModelEvent => ({
     type: "tool_call",
@@ -210,45 +252,73 @@ function scriptedTurn(turn: number | "fail"): AsyncGenerator<ModelEvent> {
   // One turn fails the way a platform-level error actually fails: an HTML page
   // with a 4xx, which is not retried, so the diagnosis reaches the transcript
   // instead of clearing itself on the next attempt.
-  if (turn === "fail") throw new ModelTransportError(
+  if (input.includes("this one fails")) throw new ModelTransportError(
     "HTTP 403 Forbidden from https://aestral-chat.vercel.app/api/chat (text/html): it answered with an " +
       "HTML page, which usually means a login wall, a bot check, or the wrong URL. Retrying will not help.",
     false,
   );
 
-  switch (turn) {
-    case 0:
-      return (async function* () { yield tool("c1", "read", { path: "notes.md" }); })();
-    case 1:
-      return (async function* () {
-        yield tool("c2", "write", {
+  const answer = (reply: string): ModelEvent[] => [text(reply), usage, done];
+
+  if (input.includes("slow")) {
+    // Round 0 is the frame the driver exists for: a tool call in flight, with
+    // nothing taking the keyboard. Round 1 is its result, on its own.
+    return round === 0
+      ? (async function* () {
+        await wait(PACE_MS);
+        yield tool("c1", "shell", { command: SLOW_COMMAND });
+      })()
+      : (async function* () { yield* answer("That command took a second and nothing asked while it ran."); })();
+  }
+
+  if (input.includes("notes.md")) {
+    return round === 0
+      ? (async function* () { yield tool("c2", "read", { path: "notes.md" }); })()
+      : (async function* () { yield* answer("It says: the CLI consumes the harness."); })();
+  }
+
+  if (input.includes("summary")) {
+    return round === 0
+      ? (async function* () {
+        yield tool("c3", "write", {
           path: "summary.md",
           content: ["# Summary", "", "The CLI consumes the harness.", ""].join("\n"),
         });
-      })();
-    case 2:
-      // Nothing here is gated, so a command is just another tool round: it
-      // runs, it reports its exit code, and the keyboard is never taken away.
-      // This one fails, on purpose: it is the frame that proves a failure
-      // reaches the transcript rather than stopping silently behind a red glyph.
-      return (async function* () { yield tool("c3", "bash", { command: "wc -l missing.md" }); })();
-    default:
-      return (async function* () {
-        // A deliberately tall answer: the transcript has to drop its head rather
-        // than push the composer off the bottom of the terminal, and the driver
-        // is the only place that failure is visible.
-        const long = Array.from(
-          { length: 9 },
-          (_, i) => `Paragraph ${i + 1}: the harness owns execution and the CLI owns the surface.`,
-        ).join("\n\n");
-        for (const line of long.split(/(?<=\.)\s/)) yield text(`${line} `);
-        yield usage;
-        yield done;
-      })();
+      })()
+      : (async function* () { yield* answer("Wrote summary.md."); })();
   }
-}
 
-let turn = 0;
+  if (input.includes("how many lines")) {
+    // A real shell, running a command no shell has. The previous script asked
+    // for a tool named `bash`, which this CLI does not have, so the frame
+    // labelled “a failed shell command shows why” was really testing unknown-tool
+    // rejection — and would have stayed green if shell failures broke.
+    return round === 0
+      ? (async function* () { yield tool("c4", "shell", { command: MISSING_COMMAND }); })()
+      : (async function* () { yield* answer("It could not run, and the row above says why."); })();
+  }
+
+  // A deliberately tall answer: the transcript has to drop its head rather than
+  // push the composer off the bottom of the terminal, and the driver is the
+  // only place that failure is visible.
+  const long = Array.from(
+    { length: 9 },
+    (_, i) => `Paragraph ${i + 1}: the harness owns execution and the CLI owns the surface.`,
+  ).join("\n\n");
+  return (async function* () {
+    for (const line of long.split(/(?<=\.)\s/)) {
+      await wait(PACE_MS);
+      yield text(`${line} `);
+    }
+    yield usage;
+    yield done;
+  })();
+}
+const roundsAsked = new Map<string, number>();
+
+/** How many model requests a question has produced. Two means the turn is over. */
+const askedFor = (input: string, n: number): Promise<void> =>
+  waitFor(() => (roundsAsked.get(input) ?? 0) >= n);
 
 async function main(): Promise<void> {
   const workspace = mkdtempSync(join(tmpdir(), "actor0-preview-"));
@@ -267,14 +337,19 @@ async function main(): Promise<void> {
   // port rather than on a base URL the user could have set.
   const transport: ModelClient = {
     async *stream(messages) {
-      // Which turn fails is keyed off the text the driver typed, not off a
-      // counter. A counter means the failure lands on whatever turn happens to
-      // be Nth, which silently depends on how many local slash commands the
-      // driver sent — so adding a `/model` frame can move the 403 onto an
-      // unrelated question and the check still passes.
+      // Which round of a question this is, counted per question. A counter
+      // across the whole run means a failure lands on whatever turn happens to
+      // be Nth, which silently depends on how many slash commands the driver
+      // sent — so adding a `/model` frame can move the 403 onto an unrelated
+      // question and the check still passes.
       const last = [...messages].reverse().find((m) => m.role === "user");
       const input = typeof last?.content === "string" ? last.content : "";
-      yield* scriptedTurn(input.includes("this one fails") ? "fail" : turn++);
+      const round = roundsAsked.get(input) ?? 0;
+      roundsAsked.set(input, round + 1);
+      for await (const event of scriptedTurn(input, round)) {
+        await wait(PACE_MS);
+        yield event;
+      }
     },
   };
 
@@ -290,8 +365,13 @@ async function main(): Promise<void> {
   // passing run — which is exactly how a broken JSX transform survived. Every
   // frame is now checked, and the run fails loudly.
   const broken: string[] = [];
+  const seen = new Map<string, string>();
+  const repeated: string[] = [];
   const show = (label: string) => {
     const body = screen.render();
+    const previous = seen.get(label);
+    if (previous === body) repeated.push(label);
+    seen.set(label, body);
     if (body.includes("ERROR") || body.includes("React is not defined")) {
       broken.push(label);
     }
@@ -302,50 +382,126 @@ async function main(): Promise<void> {
   await wait(300);
   show("1 · empty transcript, composer idle");
 
-  stdin.write("what is in notes.md?");
+/** Every question the driver has submitted, in order. */
+const submitted: string[] = [];
+
+/**
+ * Is a turn running, as the screen says so?
+ *
+ * Read from the footer, not from the composer placeholder. The placeholder says
+ * “working — Esc to cancel” only while the draft is empty, so the moment a question was
+ * typed — exactly the state this driver puts the app in — the word disappeared and the
+ * driver concluded the turn was over, pressed Enter, and was refused. The
+ * footer describes the key that is actually live and is always rendered, which
+ * is the same reason the footer exists.
+ */
+const BUSY_FOOTER = "Esc cancels a running turn";
+const running = (): boolean => screen.render().includes(BUSY_FOOTER);
+
+/** Wait until the UI is telling the user it is idle. */
+const settled = (): Promise<void> => waitFor(() => !running());
+
+/** Type a question, submit it, and do not return until its turn has finished. */
+const ask = async (question: string): Promise<void> => {
+  // Wait for the screen, not for a count of model requests. A request count is
+  // a proxy: the second request of a turn happens while the answer is still
+  // streaming, and the driver typed the next question into that gap. The
+  // composer now keeps what is typed during a turn and refuses the submit with
+  // a warning, so the driver was left waiting fifteen seconds for a turn that
+  // was never going to start.
+  await settled();
+  submitted.push(question);
+  stdin.write(question);
+  await wait(120);
+  stdin.write("\r");
+  // Waiting for the turn to stop being busy is not enough: the instant between
+  // the Enter and the turn starting is also not busy, so the driver used to
+  // return while the question was still sitting in the composer. Wait for the
+  // question to reach the transcript — a committed line carries no caret, the
+  // composer line does — and only then for the turn to finish.
+  const committed = (): boolean =>
+    screen.render().split("\n").some((line) => line.trim() === `❯ ${question}`);
+  await waitFor(committed);
+  await settled();
+};
+
+  submitted.push("run something slow");
+  stdin.write("run something slow");
   await wait(150);
   show("2 · typed input");
 
   stdin.write("\r");
+  // Into a command that runs for a second: this is the frame the whole driver
+  // exists for. A tool call is in flight and the keyboard belongs to the user —
+  // no dialog, nothing to dismiss, no input taken away. The wait is for the
+  // request to have been made, not for a duration: the command is slow enough
+  // that any capture after it is still in flight, and asking for the request is
+  // what makes that true on a slow machine too.
+  await askedFor("run something slow", 1);
+  await wait(150);
+  show("3 · a tool call is running, and nothing asks");
+
+  // Type the next question while the command is still running, and try to send
+  // it. The composer used to be inactive for the duration of a turn, so every
+  // one of these keystrokes was dropped: a person who starts typing during a long
+  // tool call watches their question disappear with nothing saying the input was
+  // off. The text is kept and the send is refused out loud.
+  // The question the user was going to ask next, typed while the command is
+  // still running. The composer used to be inactive for the duration of a turn,
+  // so every one of these keystrokes was dropped: a person who starts the next
+  // question during a long tool call watches it disappear, with nothing on
+  // screen saying the input was off. The text is kept and the send is refused.
+  // Typed as the real next question rather than as filler, so what follows is
+  // the flow a person would actually go through.
+  const typed = "what is in notes.md?";
+  stdin.write(typed);
+  await wait(150);
+  stdin.write("\r");
   await wait(250);
-  show("3 · a read runs, and nothing asks");
+  show("4 · typing during a turn is kept, and the send is refused");
 
-  await wait(700);
-  show("4 · the read result arrives on its own");
+  await askedFor("run something slow", 2);
+  await wait(150);
+  show("5 · its result arrives on its own");
 
-  stdin.write("write a summary of it");
-  await wait(120);
+  // The turn is over. The text is still in the composer, untouched, and one more
+  // Enter sends it — which is the whole point of keeping it.
+  await settled();
   stdin.write("\r");
-  await wait(900);
-  show("5 · a write lands with no confirmation");
+  const committed = (): boolean =>
+    screen.render().split("\n").some((line) => line.trim() === `❯ ${typed}`);
+  await waitFor(committed);
+  await settled();
+  submitted.push(typed);
+  show("6 · the read that was typed early goes through unchanged");
 
-  stdin.write("how many lines is it?");
-  await wait(120);
-  stdin.write("\r");
-  await wait(900);
-  show("6 · a failed shell command shows why, not just that it failed");
+  await ask("write a summary of it");
+  show("7 · a write lands with no confirmation");
+
+  await ask("how many lines is it?");
+  show("8 · a failed shell command shows why, not just that it failed");
 
   stdin.write("/help");
   await wait(100);
   stdin.write("\r");
   await wait(250);
-  show("7 · /help");
+  show("9 · /help");
 
   stdin.write("/model");
   await wait(120);
   stdin.write("\r");
   await wait(250);
-  show("8 · /model picker");
+  show("10 · /model picker");
 
   stdin.write("\u001b");
   await wait(200);
-  show("9 · picker dismissed with Esc");
+  show("11 · picker dismissed with Esc");
 
   stdin.write("/clear");
   await wait(120);
   stdin.write("\r");
   await wait(250);
-  show("10 · /clear starts a new conversation");
+  show("12 · /clear starts a new conversation");
 
   // Overflow: several tall answers. The transcript no longer sheds its head to
   // stay on screen — it goes to the terminal's scrollback — but the composer
@@ -356,18 +512,18 @@ async function main(): Promise<void> {
     "explain the filter in detail",
     "explain the reducer in detail",
   ]) {
-    stdin.write(question);
-    await wait(80);
-    stdin.write("\r");
-    await wait(700);
+    await ask(question);
   }
-  show("11 · a transcript taller than the terminal");
+  show("13 · a transcript taller than the terminal");
 
+  submitted.push("this one fails");
   stdin.write("this one fails");
   await wait(80);
   stdin.write("\r");
-  await wait(1_200);
-  show("12 · the endpoint answers 403 with an HTML page");
+  // The failure is thrown before any frame, so there is no second request to
+  // wait for; the error notice is the last thing the turn writes.
+  await wait(600);
+  show("14 · the endpoint answers 403 with an HTML page");
 
   // The regression this guards. The transcript used to be a bounded window that
   // was redrawn on every frame, so it overwrote the terminal's scrollback and
@@ -375,6 +531,20 @@ async function main(): Promise<void> {
   // app's own PageUp handler, which is exactly the thing that made scrolling
   // feel broken. Native scrolling reads from the output stream instead, so the
   // simplest questions from the start of this run must still be in it.
+  // Every question the driver typed has to reach the model as itself. A
+  // transcript where one user entry holds two questions concatenated is a
+  // composer that did not clear when it was submitted, and the second question
+  // is silently lost — which is what a frame check cannot see, because the frame
+  // looks perfectly reasonable.
+  const mangled = [...roundsAsked.keys()].filter((asked) => !submitted.includes(asked));
+  if (mangled.length > 0) {
+    process.stderr.write(
+      `\npreview failed: the model received a question the driver never typed as typed: ${JSON.stringify(mangled)}\n`,
+    );
+    app.unmount();
+    process.exit(1);
+  }
+
   const history = screen.renderAll();
   for (const marker of ["what is in notes.md?", "write a summary of it"]) {
     if (!history.includes(marker)) {
@@ -384,6 +554,15 @@ async function main(): Promise<void> {
       app.unmount();
       process.exit(1);
     }
+  }
+
+  if (repeated.length > 0) {
+    process.stderr.write(
+      `\npreview failed: ${repeated.length} frame(s) were identical to the frame before them \u2014 ` +
+        `the script finished before the camera did, so those frames check nothing: ${repeated.join(", ")}\n`,
+    );
+    app.unmount();
+    process.exit(1);
   }
 
   if (broken.length > 0) {
