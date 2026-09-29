@@ -322,6 +322,41 @@ test("shell keeps the tail of oversized output, where the error is", async () =>
   assert.match(out, /END_MARKER/, "the tail — the part that says what happened — must survive");
 });
 
+test("the truncation notice counts what was actually thrown away", async () => {
+  // The notice is there so the model knows it is looking at part of the
+  // output. It used to be computed from the text that survived, which is
+  // always only the text that survived: a 160KB log arrived at the notice as
+  // the 34KB the accumulator kept, and it said "4,094 earlier bytes dropped"
+  // when 130,000 had been. The model reads that as "the rest is here" and
+  // answers from output it cannot see, which is worse than saying nothing.
+  const out = await host(scratch()).execute(
+    call("shell", {
+      command: script(
+        "yes 0123456789012345678901234567890123456789 | head -4000",
+        "1..4000 | ForEach-Object { '0123456789012345678901234567890123456789' }",
+        "for /L %i in (1,1,4000) do @echo 0123456789012345678901234567890123456789",
+      ),
+    }),
+    signal,
+  );
+  const notice = /^\[output truncated: ([\d,]+) earlier bytes and ([\d,]+) lines dropped/.exec(out);
+  assert.ok(notice, `no truncation notice in: ${out.slice(0, 120)}`);
+  const bytes = Number(notice[1]!.replace(/,/g, ""));
+  const lines = Number(notice[2]!.replace(/,/g, ""));
+  // 4,000 lines of 41 bytes is about 160KB; the cap keeps 30,000 of it.
+  assert.ok(bytes > 100_000, `claimed only ${bytes} bytes were dropped`);
+  assert.ok(lines > 3_000, `claimed only ${lines} lines were dropped`);
+});
+
+test("output that fits is not announced as truncated", async () => {
+  const out = await host(scratch()).execute(
+    call("shell", { command: script("echo small", "Write-Output small", "echo small") }),
+    signal,
+  );
+  assert.doesNotMatch(out, /truncated/);
+  assert.match(out, /small/);
+});
+
 test("shell separates stderr so a real error is not lost in the noise", async () => {
   const out = await host(scratch()).execute(
     call("shell", { command: script("echo oops 1>&2", "[Console]::Error.WriteLine('oops')", "echo oops 1>&2") }),

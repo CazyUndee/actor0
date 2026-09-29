@@ -543,35 +543,74 @@ function killTree(child: ReturnType<typeof spawn>): void {
 }
 
 /**
+ * What a stream has produced, and what the cap has already thrown away.
+ *
+ * The count is the point. `keepTail` used to work out how much had been
+ * dropped from the text it was handed, which is only ever the text that
+ * survived: a 160KB build log arrives here as the 34KB the accumulator kept,
+ * and the notice said "4,094 earlier bytes dropped" when 130,000 had been. The
+ * model reads that, concludes the log is otherwise complete, and answers from
+ * output it cannot see. A truncation notice that undercounts is worse than none,
+ * because it is trusted.
+ */
+type Output = { text: string; droppedBytes: number; droppedLines: number };
+
+/** Newlines in a slice, which is what the notice counts in alongside bytes. */
+const newlines = (text: string): number => {
+  let count = 0;
+  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) count += 1;
+  return count;
+};
+
+/**
  * Keep the tail, because that is where the error is.
  *
  * A head-cap shows the model the start of a build log and throws away the
  * "ERR!" it was looking for, so it re-runs the command through `tail` — a
  * wasted round on a command that may be slow or not idempotent.
  */
-function keepTail(text: string, limit = MAX_OUTPUT_BYTES): string {
-  if (text.length <= limit) return text;
-  const dropped = text.length - limit;
-  const tail = text.slice(-limit);
+function keepTail(out: Output, limit = MAX_OUTPUT_BYTES): string {
+  // The final trim at render time counts too: the accumulator keeps a little
+  // more than the limit so the cut lands on a line boundary, and those extra
+  // bytes were dropped as surely as any other.
+  const renderDrop = Math.max(0, out.text.length - limit);
+  const bytes = out.droppedBytes + renderDrop;
+  if (bytes === 0) return out.text;
+  const lines = out.droppedLines + (renderDrop > 0 ? newlines(out.text.slice(0, renderDrop)) : 0);
+  const tail = out.text.slice(-limit);
   const firstNewline = tail.indexOf("\n");
   const body = firstNewline >= 0 ? tail.slice(firstNewline + 1) : tail;
-  return `[output truncated: ${dropped} earlier bytes dropped, keeping the last ${MAX_OUTPUT_BYTES}]\n${body}`;
+  // Bytes and lines both, because the reader acts on one of them and reasons
+  // about the other: "1,200 lines" says how much to re-run with, and 130,000
+  // says the same thing to a program.
+  return (
+    `[output truncated: ${bytes.toLocaleString("en-US")} earlier bytes and ` +
+    `${lines.toLocaleString("en-US")} lines dropped, keeping the last ` +
+    `${limit.toLocaleString("en-US")}]\n${body}`
+  );
 }
 
 /**
- * Streaming accumulation that keeps the tail.
+ * Streaming accumulation that keeps the tail, and counts what it discards.
  *
  * Capping the accumulator itself caps the *head* — the end of a 160KB build
  * log never reaches `keepTail` because collection stopped 100KB ago. When the
  * buffer outgrows its slack, drop from the front so the most recent output is
- * always what survives.
+ * always what survives, and count the bytes and lines that went with it.
  */
 const ACCUM_SLACK = MAX_OUTPUT_BYTES + 4_096;
 
-function appendTail(acc: string, next: string): string {
-  const total = acc.length + next.length;
-  if (total <= ACCUM_SLACK) return acc + next;
-  return (acc + next).slice(total - ACCUM_SLACK);
+const emptyOutput = (): Output => ({ text: "", droppedBytes: 0, droppedLines: 0 });
+
+function appendBounded(acc: Output, next: string): Output {
+  const merged = acc.text + next;
+  if (merged.length <= ACCUM_SLACK) return { text: merged, droppedBytes: acc.droppedBytes, droppedLines: acc.droppedLines };
+  const kept = merged.length - ACCUM_SLACK;
+  return {
+    text: merged.slice(kept),
+    droppedBytes: acc.droppedBytes + kept,
+    droppedLines: acc.droppedLines + newlines(merged.slice(0, kept)),
+  };
 }
 
 /**
@@ -639,8 +678,8 @@ const shellTool: CliTool = {
       // this pipe.
       child.stdin?.end();
 
-      let stdout = "";
-      let stderr = "";
+      let stdout = emptyOutput();
+      let stderr = emptyOutput();
       let settled = false;
       let timedOut = false;
       const finish = (fn: () => void) => {
@@ -663,17 +702,23 @@ const shellTool: CliTool = {
       ctx.signal.addEventListener("abort", onAbort, { once: true });
 
       child.stdout.on("data", (chunk: Buffer) => {
-        stdout = appendTail(stdout, chunk.toString("utf8"));
+        stdout = appendBounded(stdout, chunk.toString("utf8"));
       });
       child.stderr.on("data", (chunk: Buffer) => {
-        stderr = appendTail(stderr, chunk.toString("utf8"));
+        stderr = appendBounded(stderr, chunk.toString("utf8"));
       });
       child.on("error", (error) => finish(() => reject(error)));
       child.on("close", (code) => {
         finish(() => {
           if (timedOut) {
-            const partial = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n\n");
-            const body = partial ? `\n${keepTail(partial)}` : "";
+            // Both streams' discards are counted together: the model is being
+            // shown one joined blob, and the notice has to be about that blob.
+            const partial: Output = {
+              text: [stdout.text.trimEnd(), stderr.text.trimEnd()].filter(Boolean).join("\n\n"),
+              droppedBytes: stdout.droppedBytes + stderr.droppedBytes,
+              droppedLines: stdout.droppedLines + stderr.droppedLines,
+            };
+            const body = partial.text ? `\n${keepTail(partial)}` : "";
             reject(new Error(`Command timed out after ${Math.round((timeoutMs ?? 0) / 1_000)} seconds.${body}`));
             return;
           }
@@ -681,8 +726,9 @@ const shellTool: CliTool = {
           // failure at the end of the result, next to where it decides what
           // to do about it.
           const parts: string[] = [];
-          if (stdout.trim()) parts.push(keepTail(stdout.trimEnd()));
-          if (stderr.trim()) parts.push(`stderr:\n${keepTail(stderr.trimEnd())}`);
+          const out = (value: Output): Output => ({ ...value, text: value.text.trimEnd() });
+          if (stdout.text.trim()) parts.push(keepTail(out(stdout)));
+          if (stderr.text.trim()) parts.push(`stderr:\n${keepTail(out(stderr))}`);
           const body = parts.length > 0 ? parts.join("\n\n") : "(no output)";
           resolve(code === 0 ? body : `${body}\n\nCommand exited with code ${code ?? "unknown"}`);
         });
