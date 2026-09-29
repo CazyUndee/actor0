@@ -75,11 +75,125 @@ test("link text is not mistaken for a status marker", () => {
  * printed "ing the web" into the answer as prose, with nothing on it to say
  * what it had been. The line is held now until its newline arrives.
  */
+/**
+ * The result must not depend on how the bytes were split.
+ *
+ * Everything in this filter is a decision made on a partial buffer: whether
+ * the marker has arrived, whether a fence has closed, whether the next
+ * character changes a hold. None of that may show up in the finished answer.
+ * A stream that arrived in one delta and the same stream that arrived one
+ * character at a time have to produce identical text, statuses, calls and
+ * rejections — otherwise the answer a user reads depends on the network.
+ *
+ * This is the test that found the blank line after a tool call: every other
+ * test in this file pushes whole blocks, which is the one way a stream never
+ * arrives.
+ */
+const CORPUS: [string, string][] = [
+  ["plain prose", "Hello there.\nThis is a second line.\n"],
+  ["a status line", "[·] Reading files\nHere is the answer.\n"],
+  ["a status with no newline", "[·] last thing"],
+  ["an indented status", "   [·] indented\ntext\n"],
+  ["two statuses", "[·] one\n[·] two\nanswer\n"],
+  ["a link that is not a status", "See [Get Started](https://x.test) for more.\n"],
+  [
+    "a fenced call",
+    'Sure.\n\n```json\n{"type":"tool_call","name":"shell","arguments":{"command":"ls"}}\n```\n\nDone.\n',
+  ],
+  ["a fence that is not a call", 'Example:\n\n```json\n{"not":"a call"}\n```\n'],
+  ["a bare code fence", "Example:\n\n```python\nprint(1)\n```\n"],
+  [
+    "an envelope call",
+    'Working.\n\n<tool_calls>\n{"type":"tool_call","name":"read","arguments":{"path":"a"}}\n</tool_calls>\n',
+  ],
+  [
+    "a call with broken arguments",
+    'Try:\n\n```json\n{"type":"tool_call","name":"shell","arguments":{oops}}\n```\n',
+  ],
+  [
+    "a call for an unoffered tool",
+    'Try:\n\n```json\n{"type":"tool_call","name":"nope","arguments":{}}\n```\n',
+  ],
+  [
+    "a call followed by a status",
+    "ok\n\n```json\n" +
+      '{"type":"tool_call","name":"read","arguments":{"path":"a"}}\n' +
+      "```\n\n[·] Reading it\n",
+  ],
+  ["a marker-shaped line in a fence", "```\n[not a marker]\n```\n"],
+  [
+    "an unterminated fence",
+    'text\n```json\n{"type":"tool_call","name":"shell","arguments":{"command":"x"}}\n',
+  ],
+  ["windows line endings", "[·] Compiling\r\nanswer line\r\n"],
+  ["no trailing newline at all", "just an answer"],
+  ["an answer that starts with a fence", '```json\n{"type":"tool_call","name":"read","arguments":{"path":"a"}}\n```\n'],
+];
+
+const chunked = (text: string, size: number): string[] => {
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
+  return out;
+};
+
+/**
+ * Everything the filter settles on: the answer, the statuses, the calls and
+ * the rejections.
+ *
+ * Deliberately not the progressive snapshot the other helper returns. That
+ * one is *supposed* to differ -- it is what the user sees while the answer is
+ * still arriving, and arriving one character at a time must show one
+ * character at a time. What must not differ is what the turn ends up with.
+ */
+function settled(chunks: string[]): string {
+  const filter = createAnswerFilter(["shell", "read"]);
+  const statuses: string[] = [];
+  const calls: string[] = [];
+  const rejected: string[] = [];
+  let answer = "";
+  for (const chunk of chunks) {
+    const out = filter.push(chunk);
+    statuses.push(...out.statuses);
+    calls.push(...out.toolCalls.map((call) => `${call.function.name}(${call.function.arguments})`));
+    rejected.push(...out.rejected.map((block) => block.reason));
+    answer += out.text;
+  }
+  const tail = filter.flush();
+  statuses.push(...tail.statuses);
+  calls.push(...tail.toolCalls.map((call) => `${call.function.name}(${call.function.arguments})`));
+  rejected.push(...tail.rejected.map((block) => block.reason));
+  answer += tail.text;
+  return JSON.stringify({ answer, statuses, calls, rejected });
+}
+
+test("the answer does not depend on how the stream was chunked", () => {
+  for (const [name, text] of CORPUS) {
+    const whole = settled([text]);
+    for (const size of [1, 2, 3, 5, 7, 13]) {
+      assert.equal(
+        settled(chunked(text, size)),
+        whole,
+        `${name} read in ${size}-character deltas parsed differently`,
+      );
+    }
+  }
+});
+
+/**
+ * A status line split by a delta boundary used to tear.
+ *
+ * The filter decided "this is a status" from the first delta that carried the
+ * marker, and SSE deltas are much smaller than a line: "[·] Search" on one
+ * and "ing the web" on the next produced the status "Search" and then printed
+ * "ing the web" into the answer as prose, with nothing on it to say what it
+ * had been. The line is held now until its newline arrives.
+ */
 test("a status line split across deltas is not torn in half", () => {
-  const result = run(["[\u00b7] Search", "ing the web", "\n", "Here is the answer.\n"]);
+  const result = run(["[·] Search", "ing the web", "\n", "Here is the answer.\n"]);
   assert.deepEqual(result.statuses, ["Searching the web"]);
   assert.equal(result.answer, "Here is the answer.\n");
 });
+
 
 test("a marker split across deltas is still a marker", () => {
   const result = run(["[", "\u00b7] Read", "ing the file", "\n"]);

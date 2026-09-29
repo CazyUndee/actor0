@@ -227,12 +227,19 @@ export function createAnswerFilter(toolNames: string[] = []): AnswerFilter {
         if (parsed.rejected.length > 0) {
           rejected.push(...parsed.rejected);
           // The block owned its line, so drop the newline that ends it.
-          eatNewline = ownsLine(buffer, 0);
+          eatNewline = true;
           atLineStart = true;
         } else if (parsed.calls.length > 0) {
           toolCalls.push(...parsed.calls);
           // The block owned its line, so drop the newline that ends it.
-          eatNewline = ownsLine(buffer, 0);
+          //
+          // Unconditionally, and that is the point: the newline ending a
+          // block is very often the next delta to arrive, and deciding from
+          // a buffer that does not hold it yet is how a blank line appeared in
+          // the answer only when the stream happened to be finely chunked. The
+          // flag is cleared by the next character whatever it is, so setting
+          // it for a block followed by anything else costs nothing.
+          eatNewline = true;
           atLineStart = true;
         } else {
           output += finished;
