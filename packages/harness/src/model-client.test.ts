@@ -376,6 +376,44 @@ test("an error frame with no text is a failure, not silence", async () => {
   assert.equal(error.retriable, true);
 });
 
+test("content before an error frame in the same chunk is not lost", async () => {
+  // One network chunk, two frames, the second of them fatal. The tokens are
+  // already paid for and already on screen by the time the error arrives, so
+  // buffering a chunk and yielding it only after the whole chunk had been
+  // handled threw them away: the user saw a turn that produced nothing at all.
+  const chunk =
+    'data: {"choices":[{"delta":{"content":"half an answer"}}]}\n\n' +
+    'data: {"error":{"message":"upstream reset","type":"server_error"}}\n\n';
+  const encoder = new TextEncoder();
+  const model = new OpenAiCompatibleModel({
+    baseUrl: "https://example.test/v1",
+    model: "m",
+    fetchImpl: async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(chunk));
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      ),
+  });
+
+  const seen: string[] = [];
+  let failure: ModelTransportError | undefined;
+  try {
+    for await (const event of model.stream([], [], new AbortController().signal)) {
+      if (event.type === "token") seen.push(event.delta);
+    }
+  } catch (error) {
+    assert.ok(error instanceof ModelTransportError);
+    failure = error;
+  }
+  assert.ok(failure, "the stream must still fail");
+  assert.deepEqual(seen, ["half an answer"], "the tokens that arrived first were discarded");
+});
+
 test("a key passed in the query string never reaches an error message", async () => {
   const model = new OpenAiCompatibleModel({
     baseUrl: "https://example.test/v1",

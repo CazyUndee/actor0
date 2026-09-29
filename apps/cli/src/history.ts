@@ -28,9 +28,14 @@ import type { ChatMessage } from "@actor0/harness";
  * There is no budget-driven path that removes anything. If every clearable
  * payload is gone and the history is still over budget, the answer is the
  * intact history: the remaining bulk is user and assistant text, and cutting
- * that would trade a correct conversation for a smaller wrong one. The
- * endpoint does its own trimming on the way out, so an over-budget resume is
- * handled where the request is actually shaped.
+ * that would trade a correct conversation for a smaller wrong one.
+ *
+ * The endpoint does not trim. It rejects a request that does not fit, so an
+ * over-budget history is a request that fails, not one that gets smaller on
+ * the way out. The request path recovers from that by compacting and asking
+ * again once (see `OVERFLOW_RECOVERY_TOKENS` in `turn.ts`); what is kept
+ * here is the first line, because a session file that only just fits is a
+ * resume that has to recover to work at all.
  *
  * Only *observational* results are clearable. A `write` or `edit` result is
  * the record of a change that was actually made; dropping it would erase the
@@ -47,17 +52,18 @@ export const CHARS_PER_TOKEN = 4;
 /**
  * Default budget for a persisted history.
  *
- * Sized against what the endpoint will actually accept, not against what a
- * session might grow to. The endpoint keeps the most recent ~48 messages and
- * roughly 27k tokens, so a resumed history that fits in half that leaves room
- * for the new turn and is never the thing that overflows the request.
+ * This is the file a resume replays, and a resume sends the whole file. So the
+ * budget is sized against what can be sent back, not against what a session
+ * may grow to: a history that only fits because the provider happens to be
+ * generous is a resume that breaks on the next model.
  *
  * It also has to be a number that *fires*. The first version of this was 32k
  * tokens, which no realistic session reaches — so the mechanism existed, was
  * tested in isolation, and in practice never ran once. A budget that never
- * binds is not a budget. 16k clears payloads from results older than the window
- * the endpoint reads anyway, so the bytes it frees were already on their way
- * out; the recent results the model is still reasoning about stay intact.
+ * binds is not a budget. 16k clears the payloads behind results the model has
+ * already moved past, while the results it is still reasoning about stay
+ * intact — which is the whole reason this clears payloads instead of cutting
+ * turns.
  */
 export const DEFAULT_TOKEN_BUDGET = 16_000;
 

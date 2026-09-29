@@ -120,16 +120,29 @@ export class OpenAiCompatibleModel implements ModelClient {
     const calls = new ToolCallBuffer();
     let buffer = "";
     let sawDone = false;
-    const events: ModelEvent[] = [];
-    const handle = (frame: StreamFrame) => {
-      if (frame.hasError) throw streamFrameError(this.endpoint, frame);
-      if (frame.content) events.push({ type: "token", delta: frame.content });
-      if (frame.reasoning) events.push({ type: "reasoning", delta: frame.reasoning });
-      if (frame.toolCalls) calls.push(frame.toolCalls);
-      if (frame.completeToolCalls) {
-        for (const call of frame.completeToolCalls) events.push({ type: "tool_call", tool_calls: [call] });
+    // Frames are handed on one at a time, in order, rather than collected and
+    // yielded afterwards. A single network chunk routinely carries several
+    // frames, and one of them can be the last thing a stream ever sends: when
+    // the frames of a chunk were buffered and only yielded once the whole
+    // chunk had been handled, an error frame in that chunk threw first and
+    // took every token before it with it — the model answered, the tokens
+    // were already paid for, and the user was shown nothing.
+    const endpoint = this.endpoint;
+    const frames = async function* (parsed: StreamFrame[]): AsyncIterable<ModelEvent> {
+      for (const frame of parsed) {
+        if (frame.done) {
+          sawDone = true;
+          continue;
+        }
+        if (frame.hasError) throw streamFrameError(endpoint, frame);
+        if (frame.toolCalls) calls.push(frame.toolCalls);
+        if (frame.content) yield { type: "token", delta: frame.content };
+        if (frame.reasoning) yield { type: "reasoning", delta: frame.reasoning };
+        if (frame.completeToolCalls) {
+          for (const call of frame.completeToolCalls) yield { type: "tool_call", tool_calls: [call] };
+        }
+        if (frame.usage) yield { type: "usage", usage: frame.usage };
       }
-      if (frame.usage) events.push({ type: "usage", usage: frame.usage });
     };
 
     try {
@@ -137,17 +150,15 @@ export class OpenAiCompatibleModel implements ModelClient {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const parsed = drainFrames(buffer, handle);
+        const parsed = drainFrames(buffer);
         buffer = parsed.rest;
-        for (const frame of parsed.frames) if (frame.done) sawDone = true;
-        while (events.length > 0) yield events.shift()!;
+        yield* frames(parsed.frames);
       }
       buffer += decoder.decode();
-      const parsedTail = drainFrames(buffer, handle);
-      for (const frame of parsedTail.frames) if (frame.done) sawDone = true;
+      const parsedTail = drainFrames(buffer);
+      yield* frames(parsedTail.frames);
       const completeCalls = calls.finish();
       if (completeCalls.length > 0) yield { type: "tool_call", tool_calls: completeCalls };
-      while (events.length > 0) yield events.shift()!;
       if (sawDone) yield { type: "done" };
     } finally {
       await reader.cancel().catch(() => {});
@@ -173,10 +184,18 @@ class ToolCallBuffer {
   }
 }
 
-function drainFrames(buffer: string, handle: (frame: StreamFrame) => void): { frames: StreamFrame[]; rest: string } {
+/**
+ * Split an SSE buffer into whole frames. Pure: nothing is thrown, nothing is
+ * emitted, and the caller decides what each frame means and in what order. A
+ * parser that also ran the frames had to buffer them, which is how a frame
+ * that failed to be yielded ended up discarded along with the ones before it.
+ */
+function drainFrames(buffer: string): { frames: StreamFrame[]; rest: string } {
   const frames: StreamFrame[] = [];
   let rest = buffer;
-  const handleFrame = (frame: StreamFrame) => { frames.push(frame); handle(frame); };
+  const handleFrame = (frame: StreamFrame) => {
+    frames.push(frame);
+  };
   while (true) {
     const boundary = findBoundary(rest);
     if (!boundary) break;
@@ -280,6 +299,18 @@ export function isRetriableStreamError(message: string, code?: string, type?: st
  */
 export function isContextOverflow(message: string): boolean {
   return OVERFLOW_TEXT.test(message);
+}
+
+/**
+ * Is this thrown value the model saying the request is too big?
+ *
+ * Asked of the error rather than of the message so a host does not have to
+ * know which layer raised it, or re-derive that a retriable failure of the
+ * same shape must not be compacted around. Both spellings land here: a 400
+ * whose body is the diagnosis, and an error frame inside a 200.
+ */
+export function isContextOverflowError(error: unknown): error is ModelTransportError {
+  return error instanceof ModelTransportError && !error.retriable && isContextOverflow(error.message);
 }
 
 /** The in-stream error as a failure a person can act on. */

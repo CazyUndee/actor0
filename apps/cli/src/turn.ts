@@ -2,6 +2,7 @@ import {
   DEFAULT_HARNESS_CONFIG,
   INTERRUPT_MARKER,
   OpenAiCompatibleModel,
+  isContextOverflowError,
   runAgentTurn,
   type AbortedTurnError,
   type ChatMessage,
@@ -13,6 +14,7 @@ import {
 import type { ResolvedProvider } from "./config.js";
 import { totalUsage } from "./conversation.js";
 import { formatProjectContext, loadProjectContext } from "./context.js";
+import { compactHistory, measureHistory } from "./history.js";
 import { resolveShell, shellNotes, type ResolvedShell, type ShellFamily } from "./tools.js";
 
 /**
@@ -236,6 +238,23 @@ export type TurnOutcome = {
  */
 export const MAX_TOOL_ROUNDS = 24;
 
+/**
+ * Tokens the history is cut to when the model says it is too big.
+ *
+ * The request path has no standing budget — a live session resends the
+ * whole transcript every turn, which is quadratic in cost and ends at the
+ * model's context limit. Cutting every request to a guessed number would cost
+ * the model real context on every turn to fix a failure that happens once in
+ * a long while, so the budget is applied where the model has actually said it
+ * is needed.
+ *
+ * 8k is deliberately far below any window worth talking to: it has to leave
+ * room for the new turn and for the answer, and it is a floor, not a target.
+ * Compaction clears the oldest clearable payloads first, so what survives is
+ * the exchange the model is still reasoning about.
+ */
+export const OVERFLOW_RECOVERY_TOKENS = 8_000;
+
 export type TurnOptions = {
   model: ResolvedProvider;
   messages: ChatMessage[];
@@ -272,18 +291,63 @@ export async function runTurn(options: TurnOptions): Promise<TurnOutcome> {
   // project context is appended to either. Re-seeding an existing session
   // picks up new AGENTS.md rules the same way it picks up a new prompt.
   const messages = seedSystemPrompt(options.messages, withProjectContext(base, cwd));
+  const model = options.client ?? createModel(options.model);
+  const config = { ...DEFAULT_HARNESS_CONFIG, maxToolRounds: MAX_TOOL_ROUNDS };
 
-  const result = await runAgentTurn({
-    model: options.client ?? createModel(options.model),
-    messages,
-    input: options.input,
-    toolHost: options.toolHost,
-    signal: options.signal,
-    config: { ...DEFAULT_HARNESS_CONFIG, maxToolRounds: MAX_TOOL_ROUNDS },
-    ...(options.onEvent ? { observer: { event: options.onEvent } } : {}),
-  });
+  // Whether this turn has put anything on screen. The recovery replays the
+  // request, so it is only safe while the answer is still empty: a token
+  // already streamed would appear twice, and a tool that already ran would
+  // run twice, which is not something a shell command promises to be safe.
+  let produced = false;
+  const onEvent = (event: HarnessEvent) => {
+    if (event.type === "token" || event.type === "reasoning" || event.type === "tool_call") produced = true;
+    options.onEvent?.(event);
+  };
+  const attempt = (history: ChatMessage[]) =>
+    runAgentTurn({
+      model,
+      messages: history,
+      input: options.input,
+      toolHost: options.toolHost,
+      signal: options.signal,
+      config,
+      // Attached even when the caller wants no events at all. The recovery
+      // below reads this same stream to know whether the turn has produced
+      // anything, and a guard that only works when someone is watching is not
+      // a guard: the headless path passes no observer, and it was replaying
+      // turns that had already run a tool.
+      observer: { event: onEvent },
+    });
 
-  return { result };
+  try {
+    return { result: await attempt(messages) };
+  } catch (error) {
+    const compacted = recoveryHistory(error, messages, produced);
+    if (!compacted) throw error;
+    return { result: await attempt(compacted) };
+  }
+}
+
+/**
+ * The smaller history to ask again with, or undefined when asking again is
+ * pointless — in which case the error stands and the user sees it.
+ *
+ * Four things have to hold, and each one is a way this becomes a loop or a
+ * duplicate. The error has to be an overflow rather than anything else: a
+ * rejected key or a missing model fails the same way forever, and retrying it
+ * is the thing the classification above just stopped the transport from doing
+ * on its own. Nothing may have been produced yet, or the replay is visible.
+ * Compaction has to have actually freed something — when a history is all
+ * user and assistant text there is no honest way to make it smaller, and
+ * asking the same question again is exactly the death spiral a recovery is
+ * supposed to end. And it happens once: the retry is not a loop, so a second
+ * overflow is a second failure and is reported as one.
+ */
+function recoveryHistory(error: unknown, messages: ChatMessage[], produced: boolean): ChatMessage[] | undefined {
+  if (produced || !isContextOverflowError(error)) return undefined;
+  const compacted = compactHistory(messages, { maxTokens: OVERFLOW_RECOVERY_TOKENS });
+  if (measureHistory(compacted) >= measureHistory(messages)) return undefined;
+  return compacted;
 }
 
 /** One-line token summary for the status bar. */

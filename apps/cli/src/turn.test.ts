@@ -16,7 +16,7 @@ import {
   PROVIDER_PROMPT_FLOOR_CHARS,
   promptClearsProviderFloor,
 } from "./turn.js";
-import { AbortedTurnError } from "@actor0/harness";
+import { AbortedTurnError, type ChatMessage } from "@actor0/harness";
 import { createToolHost, resolveShell } from "./tools.js";
 import { applyEvent, initialConversation } from "./conversation.js";
 
@@ -31,13 +31,21 @@ import { applyEvent, initialConversation } from "./conversation.js";
 
 type Script = (turn: number) => unknown[];
 
-async function startServer(script: Script): Promise<{ server: Server; baseUrl: string }> {
+async function startServer(script: Script): Promise<{ server: Server; baseUrl: string; bodies: string[] }> {
   let turn = 0;
+  const bodies: string[] = [];
   const server = createServer((req, res) => {
     if (req.method !== "POST") {
       res.writeHead(405).end();
       return;
     }
+    let body = "";
+    req.on("data", (chunk: Buffer) => {
+      body += chunk.toString();
+    });
+    req.on("end", () => {
+      bodies.push(body);
+    });
     const frames = script(turn++);
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
     for (const frame of frames) {
@@ -48,7 +56,7 @@ async function startServer(script: Script): Promise<{ server: Server; baseUrl: s
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
-  return { server, baseUrl: `http://127.0.0.1:${port}/v1` };
+  return { server, baseUrl: `http://127.0.0.1:${port}/v1`, bodies };
 }
 
 const textFrames = (text: string): unknown[] => [
@@ -86,6 +94,132 @@ test("a plain answer streams and completes", async () => {
     assert.equal(result.complete, true);
     assert.ok(events.some((e) => e.type === "token"), "tokens must reach the observer");
     assert.equal(result.usage[0]?.total_tokens, 11);
+  } finally {
+    await close(server);
+  }
+});
+
+/**
+ * A history with a real `read` result in it, sized so compaction has
+ * something to clear. This is what a session looks like after the model has
+ * been shown a file: a large observational payload sitting between two
+ * exchanges, which is exactly the thing that does not fit a context window.
+ */
+const bulkyHistory = (chars = 60_000): ChatMessage[] => [
+  { role: "user", content: "read readme.md" },
+  { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: "{}" } }] },
+  { role: "tool", tool_call_id: "call_1", name: "read", content: "x".repeat(chars) },
+  { role: "assistant", content: "It says hello." },
+  { role: "user", content: "and now, what did it say?" },
+];
+
+/** The frame a provider sends when the request does not fit. */
+const overflowFrame = {
+  error: {
+    message: "This model's maximum context length is 8192 tokens. However, your messages resulted in 91234 tokens.",
+    type: "invalid_request_error",
+    code: "context_length_exceeded",
+  },
+};
+
+test("a request the model calls too big is asked again with a compacted history", async () => {
+  // The turn used to end here: the model refuses the transcript, and the only
+  // thing the user could do was start over. The whole history is still there
+  // __D__ it is the payloads that are large, and payloads can be cleared.
+  const { server, baseUrl, bodies } = await startServer((turn) =>
+    turn === 0 ? [overflowFrame] : textFrames("You were looking at a file that says hello."),
+  );
+  try {
+    const { result } = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: bulkyHistory(),
+      input: "and now, what did it say?",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(bodies.length, 2, "the turn must be re-asked exactly once");
+    assert.ok(
+      (bodies[1] as string).length < (bodies[0] as string).length / 2,
+      `the retry re-sent the same size: ${(bodies[1] as string).length} vs ${(bodies[0] as string).length}`,
+    );
+    assert.match((bodies[1] as string), /result cleared/, "the retry must say the result was cleared, not drop it");
+    assert.match(result.text, /says hello/);
+
+    // Clearing a payload is not the same as cutting a message: the call, the
+    // result and everything after it are all still there.
+    const toolMessage = result.messages.find((m) => m.role === "tool");
+    assert.ok(toolMessage, "the cleared result must stay in the transcript");
+    assert.match(toolMessage!.content, /result cleared/);
+    assert.equal(result.messages.length, bulkyHistory().length + 3, "nothing may be dropped but the new exchange");
+  } finally {
+    await close(server);
+  }
+});
+
+test("an overflow that compaction cannot fix is reported, not asked again", async () => {
+  // Nothing clearable: the bulk is the conversation itself. Asking again with
+  // the identical transcript is the death spiral a recovery is meant to end.
+  const { server, baseUrl, bodies } = await startServer(() => [overflowFrame]);
+  try {
+    await assert.rejects(
+      () =>
+        runTurn({
+          model: { baseUrl, path: "/chat/completions", model: "test-model" },
+          messages: [{ role: "user", content: "q".repeat(80_000) }],
+          input: "again",
+          toolHost: createToolHost({ cwd: cwd() }),
+          signal: new AbortController().signal,
+        }),
+      /maximum context length/,
+    );
+    assert.equal(bodies.length, 1, "a request that cannot shrink must be sent once");
+  } finally {
+    await close(server);
+  }
+});
+
+test("a failure that is not an overflow is never re-asked", async () => {
+  // A rejected key or an unknown model fails the same way forever. This is the
+  // classification the transport layer makes, and the recovery must not undo it.
+  const { server, baseUrl, bodies } = await startServer(() => [
+    { error: { message: "Invalid API key provided", type: "authentication_error", code: "invalid_api_key" } },
+  ]);
+  try {
+    await assert.rejects(
+      () =>
+        runTurn({
+          model: { baseUrl, path: "/chat/completions", model: "test-model" },
+          messages: bulkyHistory(),
+          input: "hello",
+          toolHost: createToolHost({ cwd: cwd() }),
+          signal: new AbortController().signal,
+        }),
+      /Invalid API key/,
+    );
+    assert.equal(bodies.length, 1, "only a context overflow may be asked again");
+  } finally {
+    await close(server);
+  }
+});
+
+test("an overflow after output has streamed is reported, not replayed", async () => {
+  // A tool that has already run is not promised to be safe to run twice, and
+  // tokens already on screen would be joined by a second answer.
+  const { server, baseUrl, bodies } = await startServer(() => [...textFrames("partial ans"), overflowFrame]);
+  try {
+    await assert.rejects(
+      () =>
+        runTurn({
+          model: { baseUrl, path: "/chat/completions", model: "test-model" },
+          messages: bulkyHistory(),
+          input: "hello",
+          toolHost: createToolHost({ cwd: cwd() }),
+          signal: new AbortController().signal,
+        }),
+      /maximum context length/,
+    );
+    assert.equal(bodies.length, 1, "a turn that already produced output must not be replayed");
   } finally {
     await close(server);
   }
