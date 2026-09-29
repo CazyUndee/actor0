@@ -97,12 +97,23 @@ test("a rate-limited turn says so before it waits", async () => {
   // wait down to "0s". The window here is 40ms rather than 30s: the delay is
   // honoured rather than merely reported, and a test is not the place to spend
   // half a minute proving that it is.
-  const limited = (async function* (): AsyncIterable<ModelEvent> {
-    throw new ModelTransportError("rate limited", true, 40);
-  })();
+  // An iterable whose first `next` rejects. Not a generator: this one has
+  // nothing to yield, and a generator that only throws is a lint error and a
+  // lie about its own shape.
+  const limited: AsyncIterable<ModelEvent> = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.reject(new ModelTransportError("rate limited", true, 40)),
+    }),
+  };
   const model = scriptedModel([limited, await events({ type: "token", delta: "ok" }, { type: "done" })]);
   const observed: HarnessEvent[] = [];
-  await runModelRound(model, [], [], new AbortController().signal, { event: (e) => observed.push(e) }, {
+  // The block body is the point: `observed.push(e)` in an arrow body
+  // returns the array's length, and an observer has to return void.
+  await runModelRound(model, [], [], new AbortController().signal, {
+    event: (event) => {
+      observed.push(event);
+    },
+  }, {
     ...fastConfig,
     maxRetries: 1,
   });
