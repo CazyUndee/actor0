@@ -489,6 +489,35 @@ test("edit applies to normalized text, so a multi-line LF match works on CRLF", 
 
 // --- containment ------------------------------------------------------------
 
+test("a directory whose name starts with two dots is still inside", async () => {
+  // `rel.startsWith("..")` is a prefix test on a path, and paths are not
+  // prefixes. `..cache` and `...data` are ordinary directory names, and every
+  // tool refused to read or write inside one — which is how a containment
+  // check that is only ever tested against escapes ends up refusing the work
+  // it exists to permit.
+  const dir = scratch();
+  mkdirSync(join(dir, "..cache"), { recursive: true });
+  mkdirSync(join(dir, "...data"), { recursive: true });
+  writeFileSync(join(dir, "..cache", "a.txt"), "dotted");
+  writeFileSync(join(dir, "...data", "b.txt"), "tripled");
+
+  const out = await host(dir).execute(call("read", { path: join("..cache", "a.txt") }), signal);
+  assert.match(out, /dotted/);
+  assert.match(await host(dir).execute(call("read", { path: "...data/b.txt" }), signal), /tripled/);
+
+  // A write through the same name is equally inside.
+  await host(dir).execute(call("write", { path: join("..cache", "new.txt"), content: "written" }), signal);
+  assert.equal(readFileSync(join(dir, "..cache", "new.txt"), "utf8"), "written");
+
+  // And the escape in the neighbouring directory is still an escape.
+  const outside = scratch();
+  writeFileSync(join(outside, "secret.txt"), "hunter2");
+  await assert.rejects(
+    () => host(dir).execute(call("read", { path: join("..", "..", relative(dir, outside), "secret.txt") }), signal),
+    /outside the working directory/,
+  );
+});
+
 test("no tool can reach outside the working directory", async () => {
   const outer = scratch();
   const inner = join(outer, "project");

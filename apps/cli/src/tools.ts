@@ -1,6 +1,6 @@
 import type { ToolCall, ToolDefinition, ToolHost } from "@actor0/harness";
 import { readFile, realpath, stat, writeFile, mkdir } from "node:fs/promises";
-import { isAbsolute, relative, resolve, dirname } from "node:path";
+import { isAbsolute, relative, resolve, dirname, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
 /**
@@ -122,13 +122,28 @@ async function within(cwd: string, path: string): Promise<string> {
 
   const rel = relative(root, resolved);
   if (rel === "") return resolved;
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  const outside = escapes(rel);
+  if (outside) {
     throw new Error(
       `refusing to touch ${path}: resolves to ${resolved}, outside the working directory ${root}`
-      + (rel.startsWith("..") && tail.length > 0 ? " (through a link)" : ""),
+      + (outside && tail.length > 0 ? " (through a link)" : ""),
     );
   }
   return resolved;
+}
+
+/**
+ * Did a relative path leave the root?
+ *
+ * Not `startsWith("..")`, which is a prefix test on a path, and paths are not
+ * prefixes. `..cache/data.txt` is a file two levels down in a directory that
+ * happens to be named `..cache`, and the prefix test refused to read it —
+ * along with every other `..`-prefixed name a project might legitimately
+ * contain. What escapes is a `..` *segment*: the path itself, or a segment
+ * that starts with one.
+ */
+function escapes(rel: string): boolean {
+  return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }
 
 /** `cwd` is usually the same directory for every call in a turn; resolve it once. */
