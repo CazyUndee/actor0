@@ -38,7 +38,11 @@ type StreamFrame = {
   completeToolCalls?: ToolCall[];
   usage?: Usage;
   done?: boolean;
+  /** An error delivered inside a 200 response, with the code and type it arrived with. */
+  hasError?: boolean;
   error?: string;
+  errorCode?: string;
+  errorType?: string;
 };
 
 export class OpenAiCompatibleModel implements ModelClient {
@@ -118,7 +122,7 @@ export class OpenAiCompatibleModel implements ModelClient {
     let sawDone = false;
     const events: ModelEvent[] = [];
     const handle = (frame: StreamFrame) => {
-      if (frame.error) throw new ModelTransportError(frame.error, true);
+      if (frame.hasError) throw streamFrameError(this.endpoint, frame);
       if (frame.content) events.push({ type: "token", delta: frame.content });
       if (frame.reasoning) events.push({ type: "reasoning", delta: frame.reasoning });
       if (frame.toolCalls) calls.push(frame.toolCalls);
@@ -187,7 +191,7 @@ function drainFrames(buffer: string, handle: (frame: StreamFrame) => void): { fr
     const delta = Array.isArray(choices) && choices.length > 0 && typeof choices[0] === "object" && choices[0] !== null
       ? (choices[0] as { delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown; tool_calls?: unknown } }).delta
       : undefined;
-    handleFrame({ content: typeof delta?.content === "string" ? delta.content : undefined, reasoning: typeof delta?.reasoning_content === "string" ? delta.reasoning_content : typeof delta?.reasoning === "string" ? delta.reasoning : undefined, toolCalls: Array.isArray(delta?.tool_calls) ? delta.tool_calls as ToolDelta[] : undefined, completeToolCalls: Array.isArray(value.tool_calls) ? value.tool_calls as ToolCall[] : undefined, usage: value.usage as Usage, error: typeof (value.error as Record<string, unknown> | undefined)?.message === "string" ? String((value.error as Record<string, unknown>).message) : undefined });
+    handleFrame({ content: typeof delta?.content === "string" ? delta.content : undefined, reasoning: typeof delta?.reasoning_content === "string" ? delta.reasoning_content : typeof delta?.reasoning === "string" ? delta.reasoning : undefined, toolCalls: Array.isArray(delta?.tool_calls) ? delta.tool_calls as ToolDelta[] : undefined, completeToolCalls: Array.isArray(value.tool_calls) ? value.tool_calls as ToolCall[] : undefined, usage: value.usage as Usage, ...errorFields(value) });
   }
   return { frames, rest };
 }
@@ -214,6 +218,126 @@ export function looksLikeHtml(contentType: string | null, body: string | null): 
 }/** True when the response claims to be the event stream we asked for. */
 function isEventStream(contentType: string | null): boolean {
   return contentType !== null && /\btext\/event-stream\b/i.test(contentType);
+}
+
+/**
+ * The identifying fields of an in-stream error frame.
+ *
+ * Presence and text are separate. `{"error": "upstream reset"}` and
+ * `{"error": {}}` are both errors and only the first carries a message, so
+ * gating on the message is what let `{"error": {}}` through as silence: the
+ * stream ended, the turn finished with no answer, no tool call and no stated
+ * reason — the same silent empty reply a 200 carrying HTML produces.
+ */
+function errorFields(value: Record<string, unknown>): { hasError: boolean; error?: string; errorCode?: string; errorType?: string } {
+  const field = value.error;
+  if (field === undefined || field === null) return { hasError: false };
+  if (typeof field !== "object") {
+    return { hasError: true, error: typeof field === "string" && field ? field : undefined };
+  }
+  const record = field as Record<string, unknown>;
+  const text = (key: "message" | "code" | "type"): string | undefined =>
+    typeof record[key] === "string" ? (record[key] as string) : undefined;
+  return { hasError: true, error: text("message"), errorCode: text("code"), errorType: text("type") };
+}
+
+/**
+ * Whether an error delivered *inside* a 200 response can be fixed by asking
+ * again.
+ *
+ * A 200 means the request was accepted, so the status classification above
+ * never runs — there is no status left to read. Everything then arrives in
+ * one shape, `data: {"error": {...}}`: a dropped upstream connection, a rate
+ * limit, a rejected key, a request that does not fit the context window.
+ * Calling all of them retriable, which is what this did, replays a
+ * deterministic failure three times with 1s/2s/4s of backoff, at four times the
+ * token cost, and ends in exactly the same error.
+ *
+ * Code and type are read first because they are exact, and because they are
+ * the part OpenAI, Anthropic, Gemini and OpenRouter all agree on. The message
+ * is the fallback for the servers that send neither. An unrecognised error
+ * stays retriable: a stream that died mid-flight is far more often a dropped
+ * connection than a request the server will never accept, and guessing wrong
+ * in that direction costs one wasted attempt, while guessing wrong the other
+ * way refuses to start the turn at all.
+ */
+export function isRetriableStreamError(message: string, code?: string, type?: string): boolean {
+  if (code && RETRIABLE_STREAM_CODES.test(code)) return true;
+  if (code && PERMANENT_STREAM_CODES.test(code)) return false;
+  if (type && RETRIABLE_STREAM_CODES.test(type)) return true;
+  if (type && PERMANENT_STREAM_TYPES.test(type)) return false;
+  if (isContextOverflow(message)) return false;
+  if (PERMANENT_STREAM_TEXT.test(message)) return false;
+  return true;
+}
+
+/**
+ * Is this failure the conversation not fitting the model?
+ *
+ * Named because it is the one transport failure with a real recovery, and
+ * recovery is not the transport layer's job: the caller has to shorten the
+ * history and ask again, which is a decision about the conversation.
+ */
+export function isContextOverflow(message: string): boolean {
+  return OVERFLOW_TEXT.test(message);
+}
+
+/** The in-stream error as a failure a person can act on. */
+function streamFrameError(endpoint: string, frame: StreamFrame): ModelTransportError {
+  const message = frame.error ?? "";
+  const retriable = isRetriableStreamError(message, frame.errorCode, frame.errorType);
+  const advice = !retriable && isContextOverflow(message) ? OVERFLOW_ADVICE : undefined;
+  const detail = frame.error ? `: ${frame.error}` : " and gave no message";
+  return new ModelTransportError(
+    `${endpoint} ended the stream with an error${detail}. ${retryAdvice(retriable, advice)}`,
+    retriable,
+  );
+}
+
+/**
+ * Codes and types that name a transient fault. Matched loosely because
+ * providers disagree on separator and wording: `rate_limit_exceeded`,
+ * `rate limit`, `too_many_requests`, `overloaded_error`, `server_error`.
+ */
+const RETRIABLE_STREAM_CODES =
+  /\b(?:rate[_\s-]?limit(?:ed)?|too[_\s-]?many[_\s-]?requests|429|server[_\s-]?error|internal[_\s-]?error|overloaded(?:[_\s-]?error)?|api[_\s-]?error|service[_\s-]?unavailable|temporarily[_\s-]?unavailable|bad[_\s-]?gateway|upstream[_\s-]?error|capacity[_\s-]?exceeded|timeout|timed[_\s-]?out|transient)\b/i;
+
+/** Codes that name a request the server will never accept, however often it is sent. */
+const PERMANENT_STREAM_CODES =
+  /\b(?:context[_\s-]?length[_\s-]?exceeded|context[_\s-]?window[_\s-]?exceeded|prompt[_\s-]?too[_\s-]?long|request[_\s-]?too[_\s-]?large|payload[_\s-]?too[_\s-]?large|invalid[_\s-]?api[_\s-]?key|invalid[_\s-]?authentication|permission[_\s-]?denied|insufficient[_\s-]?quota|quota[_\s-]?exceeded|billing[_\s-]?hard[_\s-]?limit[_\s-]?reached|account[_\s-]?deactivated|model[_\s-]?not[_\s-]?found|model[_\s-]?not[_\s-]?available|invalid[_\s-]?model|content[_\s-]?policy[_\s-]?violation)\b/i;
+
+/**
+ * Types, which are coarser than codes. `invalid_request_error` is OpenAI's
+ * 400, and `insufficient_quota` is a rate-limit-shaped failure that is
+ * actually about the account rather than the request; neither improves on a
+ * third attempt.
+ */
+const PERMANENT_STREAM_TYPES =
+  /\b(?:invalid[_\s-]?request(?:[_\s-]?error)?|authentication[_\s-]?error|permission[_\s-]?error|not[_\s-]?found[_\s-]?error|billing[_\s-]?error|account[_\s-]?error|insufficient[_\s-]?quota|request[_\s-]?too[_\s-]?large)\b/i;
+
+/**
+ * Message text, for the servers that send neither code nor type. Every
+ * provider words this differently and no two agree: Anthropic says `prompt is
+ * too long: 137500 tokens > 135000 maximum`, vLLM and DeepSeek say `This
+ * model's maximum context length is 32768 tokens. However, your messages
+ * resulted in 40000 tokens`, Groq says `Requested token count exceeds the
+ * model's maximum context length`, and OpenAI puts the diagnosis in the code
+ * while the message says only `Please reduce the length of the messages`.
+ */
+const OVERFLOW_TEXT =
+  /\b(?:maximum context length|context length|context[_\s-]?length|context window|context size|prompt is too long|prompt too long|input is too long|input length|exceeds the (?:model'?s? )?maximum|exceeds the available|requested token count exceeds|messages resulted in|reduce the length of the messages|request entity too large|too many tokens|token limit)\b/i;
+
+/** Message text for the permanent failures that arrive without a code. */
+const PERMANENT_STREAM_TEXT =
+  /\b(?:invalid api key|incorrect api key|api key (?:is )?(?:invalid|missing|expired)|no api key|unauthori[sz]ed|invalid authentication|permission denied|insufficient (?:quota|credit|balance)|quota exceeded|out of credits|payment required|model (?:not found|does not exist|is not available)|account (?:is )?(?:deactivated|suspended)|content policy)\b/i;
+
+const OVERFLOW_ADVICE =
+  "Retrying will not help — this conversation does not fit the model's context window. Start a new one with /clear, or switch to a model with a larger window.";
+
+/** The closing line of a failure, derived from what actually happens next. */
+function retryAdvice(retriable: boolean, permanentAdvice?: string): string {
+  if (retriable) return "The harness will retry with backoff.";
+  return permanentAdvice ?? "Retrying will not help — check the URL, the key, and the model name.";
 }
 
 /**
@@ -256,10 +380,7 @@ export function describeHttpFailure(
     : body.trim()
       ? `it answered with a body that is not a usable error (${contentType}, ${body.length} bytes)`
       : `it answered with an empty body (${contentType})`;
-  const next = retriable
-    ? "The harness will retry with backoff."
-    : "Retrying will not help — check the URL, the key, and the model name.";
-  return `${head}: ${shape}. ${next}`;
+  return `${head}: ${shape}. ${retryAdvice(retriable)}`;
 }
 
 function parseErrorMessage(body: string): string | undefined {
