@@ -44,6 +44,22 @@ class Screen {
   private scrollback: string[] = [];
   private row = 0;
   private col = 0;
+  /**
+   * Escape sequences that would have changed the text grid and were not
+   * modelled here, with a count each. Reported at the end of the run, and a
+   * non-empty one fails it.
+   *
+   * This is the driver’s honesty check. A sequence that moves the cursor or
+   * erases cells makes the reconstructed frame a guess, and a frame that is
+   * wrong in a way nobody can see is the one kind of wrong this whole thing
+   * exists to catch — so a new one fails the run instead of quietly changing
+   * what the driver can see. Sequences that only affect attributes are
+   * deliberately not here: see `ignored`.
+   */
+  readonly unhandled = new Map<string, number>();
+
+  /** Sequences that were recognised and deliberately have no effect on a text grid. */
+  ignored = 0;
 
   constructor(private readonly rows: number) {
     this.lines = Array.from({ length: rows }, () => "");
@@ -87,6 +103,16 @@ class Screen {
 
   private control(params: string, final: string): void {
     const n = Number.parseInt(params, 10) || 0;
+    // Sequences that only affect attributes, handled before the switch because
+    // none of them moves a character and grouping them here says so once.
+    // `m` is SGR — colour, bold, dim, underline, of which this screen draws
+    // none, as the top of the file says. `h` and `l` are DECSET/DECRST: Ink
+    // wraps every write in 2026 (synchronized output, so a frame lands in one
+    // piece) and hides the cursor around its own writes.
+    if (final === "m" || final === "h" || final === "l") {
+      this.ignored += 1;
+      return;
+    }
     switch (final) {
       case "A":
         this.row = Math.max(0, this.row - Math.max(1, n));
@@ -104,13 +130,17 @@ class Screen {
         this.col = Math.max(0, (Number.parseInt(params, 10) || 1) - 1);
         break;
       case "J":
-        // 0J clears from the cursor down, 2J the whole screen, and 3J the
-        // scrollback buffer. `clearTerminal` is all three, so handling only 2J
-        // left the cursor stranded and the repaint landing on the wrong rows.
+        // 0J clears from the cursor down, 1J from the cursor up, 2J the whole
+        // screen, and 3J the scrollback buffer. `clearTerminal` is all three,
+        // so handling only 2J left the cursor stranded and the repaint landing
+        // on the wrong rows. `1J` was treated as `0J`, which erased more than
+        // the sequence asked for.
         if (n === 2) {
           this.lines = Array.from({ length: this.rows }, () => "");
         } else if (n === 3) {
           this.scrollback = [];
+        } else if (n === 1) {
+          for (let i = 0; i <= this.row; i += 1) this.lines[i] = "";
         } else {
           for (let i = this.row; i < this.lines.length; i += 1) this.lines[i] = "";
         }
@@ -128,10 +158,35 @@ class Screen {
         }
         break;
       case "K":
-        // Erase from the cursor to end of line.
-        this.lines[this.row] = (this.lines[this.row] ?? "").slice(0, this.col);
+        // 0K erases from the cursor to the end of the line, 1K from the start
+        // of the line to the cursor, and 2K the whole line. The parameter is
+        // the whole meaning of this sequence.
+        //
+        // It used to be ignored, so `2K` — which is what log-update emits to
+        // repaint, and does so for every row of every frame — was read as
+        // `0K` and kept every character to the right of the cursor. On a
+        // resize, where the frame gets shorter and the leftover rows are
+        // erased at whatever column the cursor happened to be sitting at,
+        // that manufactured precisely the stale text the driver appeared to
+        // have found: a lens that invents a bug sends someone to fix the
+        // app for it.
+        {
+          const line = this.lines[this.row] ?? "";
+          if (n === 1) {
+            this.lines[this.row] = line.slice(this.col) + " ".repeat(this.col);
+          } else if (n === 2) {
+            this.lines[this.row] = "";
+          } else {
+            this.lines[this.row] = line.slice(0, this.col);
+          }
+        }
         break;
+
       default:
+        this.unhandled.set(
+          `${final}${params ? `;${params}` : ""}`,
+          (this.unhandled.get(`${final}${params ? `;${params}` : ""}`) ?? 0) + 1,
+        );
         break;
     }
   }
@@ -218,6 +273,25 @@ function resizeTerminal(stdout: PassThrough, columns: number, rows: number, scre
   screen.resize(rows);
   stdout.emit("resize");
 }
+
+/** Narrow the terminal without changing its height. */
+const narrowTerminal = (stdout: PassThrough, screen: Screen): void =>
+  resizeTerminal(stdout, 44, SCREEN_ROWS, screen);
+
+/** A terminal with fewer rows, at the width the run started at. */
+const shortTerminal = (stdout: PassThrough, screen: Screen): void =>
+  resizeTerminal(stdout, SCREEN_COLUMNS, 24, screen);
+
+/** Back to the size the whole run started at. */
+const wideTerminal = (stdout: PassThrough, screen: Screen): void =>
+  resizeTerminal(stdout, SCREEN_COLUMNS, SCREEN_ROWS, screen);
+
+// Width and height are separate accidents and these frames move one at a
+// time. Resizing both together put a 44-column, 30-row frame on screen, and
+// a frame that short is tall enough for Ink to abandon its incremental path
+// and repaint with `clearTerminal` — after which stale rows from the narrow
+// layout appeared in the next wide frame, with no way to tell whether the
+// width or the height had put them there. Each axis is now its own frame.
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -418,7 +492,30 @@ async function main(): Promise<void> {
   const broken: string[] = [];
   const seen = new Map<string, string>();
   const repeated: string[] = [];
-  const show = (label: string) => {
+
+  /**
+   * Wait until the rendered screen stops changing.
+   *
+   * A frame captured mid-repaint is a frame nobody will ever see. Ink repaints
+   * in several writes — clear, then rewrite, and on a resize a full-screen
+   * repaint — so a capture that lands between them shows half of the old
+   * layout over half of the new one. That is how the 44-column frames came to
+   * carry, on some runs and not others, two stale 88-column lines and a second
+   * copy of the composer: the rows were real, and then they were not, which is
+   * exactly the signature of a bad capture and not of a bad frame.
+   */
+  const settle = async (): Promise<void> => {
+    let previous = screen.render();
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      await wait(20);
+      const next = screen.render();
+      if (next === previous) return;
+      previous = next;
+    }
+  };
+
+  const show = async (label: string): Promise<void> => {
+    await settle();
     const body = screen.render();
     const previous = seen.get(label);
     if (previous === body) repeated.push(label);
@@ -431,7 +528,7 @@ async function main(): Promise<void> {
   };
 
   await wait(300);
-  show("1 · empty transcript, composer idle");
+  await show("1 · empty transcript, composer idle");
 
 /** Every question the driver has submitted, in order. */
 const submitted: string[] = [];
@@ -488,7 +585,7 @@ const ask = async (question: string): Promise<void> => {
   submitted.push("run something slow");
   stdin.write("run something slow");
   await wait(150);
-  show("2 · typed input");
+  await show("2 · typed input");
 
   stdin.write("\r");
   // Into a command that runs for a second: this is the frame the whole driver
@@ -499,7 +596,7 @@ const ask = async (question: string): Promise<void> => {
   // what makes that true on a slow machine too.
   await askedFor("run something slow", 1);
   await wait(150);
-  show("3 · a tool call is running, and nothing asks");
+  await show("3 · a tool call is running, and nothing asks");
 
   // Type the next question while the command is still running, and try to send
   // it. The composer used to be inactive for the duration of a turn, so every
@@ -518,11 +615,11 @@ const ask = async (question: string): Promise<void> => {
   await wait(150);
   stdin.write("\r");
   await wait(250);
-  show("4 · typing during a turn is kept, and the send is refused");
+  await show("4 · typing during a turn is kept, and the send is refused");
 
   await askedFor("run something slow", 2);
   await wait(150);
-  show("5 · its result arrives on its own");
+  await show("5 · its result arrives on its own");
 
   // The turn is over. The text is still in the composer, untouched, and one more
   // Enter sends it — which is the whole point of keeping it.
@@ -533,35 +630,35 @@ const ask = async (question: string): Promise<void> => {
   await waitFor(committed);
   await settled();
   submitted.push(typed);
-  show("6 · the read that was typed early goes through unchanged");
+  await show("6 · the read that was typed early goes through unchanged");
 
   await ask("write a summary of it");
-  show("7 · a write lands with no confirmation");
+  await show("7 · a write lands with no confirmation");
 
   await ask("how many lines is it?");
-  show("8 · a failed shell command shows why, not just that it failed");
+  await show("8 · a failed shell command shows why, not just that it failed");
 
   stdin.write("/help");
   await wait(100);
   stdin.write("\r");
   await wait(250);
-  show("9 · /help");
+  await show("9 · /help");
 
   stdin.write("/model");
   await wait(120);
   stdin.write("\r");
   await wait(250);
-  show("10 · /model picker");
+  await show("10 · /model picker");
 
   stdin.write("\u001b");
   await wait(200);
-  show("11 · picker dismissed with Esc");
+  await show("11 · picker dismissed with Esc");
 
   stdin.write("/clear");
   await wait(120);
   stdin.write("\r");
   await wait(250);
-  show("12 · /clear starts a new conversation");
+  await show("12 · /clear starts a new conversation");
 
   // Overflow: several tall answers. The transcript no longer sheds its head to
   // stay on screen — it goes to the terminal's scrollback — but the composer
@@ -574,7 +671,7 @@ const ask = async (question: string): Promise<void> => {
   ]) {
     await ask(question);
   }
-  show("13 · a transcript taller than the terminal");
+  await show("13 · a transcript taller than the terminal");
 
   submitted.push("this one fails");
   stdin.write("this one fails");
@@ -583,42 +680,51 @@ const ask = async (question: string): Promise<void> => {
   // The failure is thrown before any frame, so there is no second request to
   // wait for; the error notice is the last thing the turn writes.
   await wait(600);
-  show("14 · the endpoint answers 403 with an HTML page");
+  await show("14 · the endpoint answers 403 with an HTML page");
 
   // A narrow terminal. Every column here is load-bearing: the opening card
   // sizes itself to the width, the transcript wraps to it, `fitTail` trims
   // the live region against it, and the composer sits under all of it. A
   // layout that overflows is invisible at 88 columns and obvious at 44.
-  resizeTerminal(stdout, 44, 30, screen);
+  narrowTerminal(stdout, screen);
   await wait(250);
-  show("15 · a 44-column terminal");
+  await show("15 · a 44-column terminal");
+  wideTerminal(stdout, screen);
+  await wait(200);
+
+  // A short terminal. Height takes a different path through Ink than width
+  // does, so it gets its own frame instead of sharing one.
+  shortTerminal(stdout, screen);
+  await wait(250);
+  await show("16 · a 24-row terminal, transcript still reachable");
+  wideTerminal(stdout, screen);
+  await wait(200);
 
   // The same narrow width *during* a streaming answer. This is the case the
   // idle frame cannot reach: `fitTail` re-trims on every token against a
   // column count that just changed under it, so the trimming is the thing
   // being exercised, not the static layout.
-  resizeTerminal(stdout, SCREEN_COLUMNS, SCREEN_ROWS, screen);
   await wait(150);
   await begin("explain the reducer in detail, and take your time");
   await askedFor("explain the reducer in detail, and take your time", 1);
   await wait(240);
-  resizeTerminal(stdout, 44, 30, screen);
+  narrowTerminal(stdout, screen);
   await wait(240);
-  show("16 · resized to 44 columns mid-answer");
-  resizeTerminal(stdout, SCREEN_COLUMNS, SCREEN_ROWS, screen);
+  await show("17 · resized to 44 columns mid-answer");
+  wideTerminal(stdout, screen);
   await settled();
-  show("17 · back to full width, answer intact");
+  await show("18 · back to full width, answer intact");
 
   // Esc, which the footer has been promising for the whole run. A quarter of
   // a minute of real process is running when it is pressed.
   await begin("cancel this");
   await askedFor("cancel this", 1);
   await wait(250);
-  show("18 · a long tool call is running");
+  await show("19 · a long tool call is running");
   stdin.write("\u001b");
   await settled();
   await wait(300);
-  show("19 · Esc cancels the turn, and says so");
+  await show("20 · Esc cancels the turn, and says so");
 
   // The promise on the footer is that Esc stops the turn. Two things have
   // to hold: the user is told, and the turn does not carry on afterwards.
@@ -680,6 +786,18 @@ const ask = async (question: string): Promise<void> => {
       app.unmount();
       process.exit(1);
     }
+  }
+
+  if (screen.unhandled.size > 0) {
+    process.stderr.write(
+      "\npreview failed: the terminal emulator did not understand " +
+        `${screen.unhandled.size} escape sequence(s) that move the cursor or erase cells, ` +
+        `so at least one frame above is a guess (and ${screen.ignored} attribute-only ones were ignored): ` +
+        JSON.stringify(Object.fromEntries(screen.unhandled)) +
+        "\n",
+    );
+    app.unmount();
+    process.exit(1);
   }
 
   if (repeated.length > 0) {

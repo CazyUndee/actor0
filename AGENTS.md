@@ -124,6 +124,37 @@ mostly-additive diff, which is easy to skim past.
   `d2339f4`. When a timing test is red once and green once, look for the two
   clocks before you look at the code.
 
+## The TUI preview can lie to you
+
+`npm run check:tui` is a viewing aid as much as a test, and it has three
+ways of showing a bug that is not in the app. All three bit during the
+resize frames, and all three are fixed — the point is to recognise them
+next time rather than to go looking in `ui/`.
+
+- **A missing escape sequence reads as a layout bug.** `Screen` ignored the
+  parameter on `K`, so `ESC[2K` (erase the whole line — what log-update emits
+  to repaint every row) was treated as "erase up to the cursor" and kept
+  whatever was to the right of it. That manufactured the stale rows a
+  resize is supposed to remove. It now models `0K`/`1K`/`2K` and `0J`/`1J`/
+  `2J`/`3J`, and any sequence it still cannot model is counted in
+  `unhandled` and fails the run, while attribute-only ones (`m`, `h`, `l`) are
+  counted in `ignored` so the two are never confused.
+- **A capture mid-repaint is a frame nobody will ever see.** Ink repaints in
+  several writes, so a `show()` can land between them and record half the
+  old layout over half the new one. The signature is a row that is there on
+  one run and not the next. `show()` now waits for the screen to stop
+  changing first.
+- **Changing two axes at once makes a frame unattributable.** A 44-column,
+  30-row frame is short enough for Ink to abandon its incremental path and
+  repaint with `clearTerminal`, and the residue afterwards could have come
+  from either the width or the height. Width and height now have separate
+  frames (`narrowTerminal`, `shortTerminal`).
+
+Before believing anything a frame shows, check it against a control: the
+same resize applied to a plain two-`<Text>` Ink app, whose correct output
+is easy to reason about. That is what separated the emulator's bug from
+Ink's behaviour here.
+
 ## Behaviour worth knowing before changing it
 
 - A shell command has **no** default timeout, deliberately: a 120s default
