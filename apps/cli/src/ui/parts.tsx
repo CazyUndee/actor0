@@ -137,9 +137,13 @@ export function bannerActivity(live: Live): string {
  * The fences are carried rather than consumed so a pass that trims the text
  * (`fitTail`) can flatten and rejoin without losing them.
  */
+/** Which way a table column lines its cells up. */
+export type Align = "left" | "center" | "right";
+
 export type Segment =
   | { kind: "text"; text: string }
-  | { kind: "code"; open: string; body: string[]; close: string };
+  | { kind: "code"; open: string; body: string[]; close: string }
+  | { kind: "table"; header: string[]; align: Align[]; rows: string[][] };
 
 /**
  * A line that opens or closes a fence: up to three spaces of indent, then a
@@ -151,6 +155,201 @@ export type Segment =
  * word-wrapped for the rest of its body.
  */
 const FENCE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+/**
+ * A table's delimiter cell: `:---:` centres, `:---` is left, `---:` is right,
+ * and a bare `---` is left, which is the default and needs no marker.
+ */
+const RULE = /^:?-+:?$/;
+
+/**
+ * Stands in for an escaped pipe while cells are being split.
+ *
+ * A control character rather than a space, because a cell may legitimately
+ * contain a space — and a placeholder that collides with real content
+ * moves a cell boundary silently, which is the exact failure this function
+ * exists to prevent.
+ */
+const ESCAPED_PIPE = "\u0000";
+
+/**
+ * Split a pipe row into its cells.
+ *
+ * The outer pipes are optional, which GFM allows. An escaped `\|` is a literal
+ * pipe rather than a separator — done with a placeholder rather than a
+ * lookbehind, for the reason Claude Code gives in its own markdown parser:
+ * a lookbehind defeats the JIT on some of the engines this ships to.
+ */
+function cells(line: string): string[] {
+  const body = line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .replace(/\\\|/g, ESCAPED_PIPE);
+  return body.split("|").map((cell) => cell.trim().split(ESCAPED_PIPE).join("|"));
+}
+
+/** Read the alignment a delimiter cell asks for. */
+function alignmentOf(mark: string): Align {
+  const left = mark.startsWith(":");
+  const right = mark.endsWith(":");
+  if (left && right) return "center";
+  if (right) return "right";
+  return "left";
+}
+
+/**
+ * Read the table starting at `start`, if there is one.
+ *
+ * The delimiter row is what makes this a table rather than prose that happens to
+ * contain a pipe, and prose containing a pipe is everywhere: shell pipelines,
+ * `a | b`, set notation. So a header row alone is not enough — it must be
+ * followed by a row whose cells are all `:?-+:?` and whose count matches.
+ *
+ * A one-column table is left as prose: there is no column to line anything up
+ * against, and the grid would be a box around a single sentence.
+ */
+function tableAt(
+  lines: string[],
+  start: number,
+): { header: string[]; align: Align[]; rows: string[][]; next: number } | undefined {
+  const header = cells(lines[start]!);
+  const delimiter = lines[start + 1];
+  if (header.length < 2 || delimiter === undefined) return undefined;
+  const marks = cells(delimiter);
+  if (marks.length !== header.length) return undefined;
+  if (!marks.every((mark) => RULE.test(mark))) return undefined;
+
+  const rows: string[][] = [];
+  let next = start + 2;
+  while (
+    next < lines.length &&
+    lines[next]!.includes("|") &&
+    cells(lines[next]!).length === header.length
+  ) {
+    rows.push(cells(lines[next]!));
+    next += 1;
+  }
+  // `rows` is allowed to be empty. A header with no body is what a table looks
+  // like for the frames between its delimiter row and its first row arriving,
+  // and rendering it as prose would make it visibly flip shape mid-stream.
+  return { header, align: marks.map(alignmentOf), rows, next };
+}
+
+/** Break a run of prose into text and table segments. */
+function splitTables(lines: string[]): Segment[] {
+  const out: Segment[] = [];
+  let pending: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const table = tableAt(lines, index);
+    if (!table) {
+      pending.push(lines[index]!);
+      index += 1;
+      continue;
+    }
+    if (pending.length > 0) {
+      out.push({ kind: "text", text: pending.join("\n") });
+      pending = [];
+    }
+    out.push({
+      kind: "table",
+      header: table.header,
+      align: table.align,
+      rows: table.rows,
+    });
+    index = table.next;
+  }
+  if (pending.length > 0) out.push({ kind: "text", text: pending.join("\n") });
+  return out;
+}
+
+/**
+ * Pad `content` to `targetWidth` according to `align`.
+ *
+ * Ported from Claude Code's `padAligned`, which is worth copying exactly: the
+ * caller passes the visible width separately, so styling inside `content`
+ * cannot change how much padding is added and quietly break every column after
+ * it.
+ */
+export function padAligned(
+  content: string,
+  displayWidth: number,
+  targetWidth: number,
+  align: Align,
+): string {
+  const padding = Math.max(0, targetWidth - displayWidth);
+  if (align === "center") {
+    const left = Math.floor(padding / 2);
+    return " ".repeat(left) + content + " ".repeat(padding - left);
+  }
+  if (align === "right") return " ".repeat(padding) + content;
+  return content + " ".repeat(padding);
+}
+
+/**
+ * Lay a table out as a grid, or as key/value lines when the grid will not fit.
+ *
+ * The grid is Claude Code's plain-text table layout, taken from the `table`
+ * case of its `formatToken`: a column is as wide as the widest cell in it and
+ * never less than three, cells are padded with `padAligned`, and each row is
+ * trimmed at the end so the last column does not drag a tail of spaces behind
+ * it. The separator row is `width + 2` dashes because the cells are rendered
+ * with a space either side — dashes that were only `width` long would sit under
+ * the text and one column left of where the reader expects a rule.
+ *
+ * A grid wider than the terminal is never rendered. Ink would cut the last
+ * column off mid-word, and a value that has migrated out of its own column is
+ * worse than no table at all — it is confidently attached to the wrong row.
+ * Claude Code answers that with a vertical format and so does this: the content
+ * is the thing being read, the shape is not.
+ *
+ * Every returned line is one physical row that Ink will not re-wrap, so callers
+ * can take these as the rows they are: the grid is exactly its own border wide,
+ * and the fallback obeys the same `proseWidth` budget as every other sentence
+ * in the transcript.
+ */
+export function renderTable(table: Extract<Segment, { kind: "table" }>, columns: number): string[] {
+  const widths = table.header.map((cell, column) => {
+    let width = cell.length;
+    for (const row of table.rows) width = Math.max(width, row[column]?.length ?? 0);
+    return Math.max(width, 3);
+  });
+  const rule = (cellsIn: string[]): string =>
+    (
+      "| " +
+      cellsIn
+        .map((cell, column) =>
+          padAligned(cell, cell.length, widths[column]!, table.align[column]!) + " | ",
+        )
+        .join("")
+    ).trimEnd();
+  const border = 1 + widths.reduce((sum, width) => sum + width + 3, 0);
+
+  // A header with no rows keeps the grid even when it is too wide: the
+  // vertical fallback of a row-less table is nothing at all, and a table that
+  // renders as nothing is worse than one whose header is cut short.
+  if (border > columns && table.rows.length > 0) {
+    const out: string[] = [];
+    const divider = "-".repeat(Math.max(1, Math.min(proseWidth(columns) - 1, 40)));
+    table.rows.forEach((row, index) => {
+      if (index > 0) out.push(divider);
+      row.forEach((cell, column) => {
+        const label = table.header[column] ?? `Column ${column + 1}`;
+        // Wrapped here, by this function, so that the "every line fits" promise
+        // above holds for the fallback too and callers need no second rule.
+        out.push(...wrapText(`${label}: ${cell}`, columns).split("\n"));
+      });
+    });
+    return out;
+  }
+
+  return [
+    rule(table.header),
+    "|" + widths.map((width) => "-".repeat(width + 2) + "|").join(""),
+    ...table.rows.map((row) => rule(table.header.map((_, column) => row[column] ?? ""))),
+  ];
+}
+
 
 /**
  * Split text into prose and fenced code.
@@ -177,7 +376,7 @@ export function segments(text: string): Segment[] {
 
   const flushProse = (): void => {
     if (prose.length === 0) return;
-    out.push({ kind: "text", text: prose.join("\n") });
+    out.push(...splitTables(prose));
     prose = [];
   };
   const endBlock = (close: string): void => {
@@ -222,6 +421,19 @@ export function segments(text: string): Segment[] {
 }
 
 /**
+ * The width prose is really wrapped to: two columns short of the terminal, and
+ * never narrower than 20.
+ *
+ * Exported because it is a promise the rest of the renderer has to keep. The
+ * key/value table fallback wraps by the same rule, and `fitTail` budgets rows
+ * against what is actually painted — so anything sizing itself against raw
+ * `columns` is measuring a width no line will ever be.
+ */
+export function proseWidth(columns: number): number {
+  return Math.max(20, columns - 2);
+}
+
+/**
  * Wrap to the terminal at spaces, and leave the break behind.
  *
  * Ink wraps a `<Text>` through wrap-ansi with `trim: false`, which keeps the
@@ -231,7 +443,7 @@ export function segments(text: string): Segment[] {
  * width is known up front rather than re-guessed by the row budget afterwards.
  */
 export function wrapText(text: string, columns: number): string {
-  const width = Math.max(20, columns - 2);
+  const width = proseWidth(columns);
   const out: string[] = [];
   for (const line of text.split("\n")) {
     if (line.length <= width) {
@@ -276,6 +488,20 @@ function Lines({
               {line || " "}
             </Text>
           ))
+        ) : segment.kind === "table" ? (
+          // Already laid out to the terminal by `renderTable`, which promises
+          // every line it returns fits `columns`. Wrapping it again here would
+          // reflow the grid straight back into the ragged fragments the table
+          // was turned into in the first place.
+          // eslint-disable-next-line react/no-array-index-key -- grid rows are positional and append-only
+          <Fragment key={`g${index}`}>
+            {renderTable(segment, columns).map((line, rowIndex) => (
+              // eslint-disable-next-line react/no-array-index-key -- grid rows are positional and append-only
+              <Text key={`g${rowIndex}`} wrap="truncate-end">
+                {line || " "}
+              </Text>
+            ))}
+          </Fragment>
         ) : (
           // Code is never wrapped. A line too long for the terminal is cut with
           // Ink's own ellipsis rather than folded, because a folded command is
@@ -548,6 +774,10 @@ export function fitTail(text: string, rows: number, columns: number): string {
   for (const segment of segments(text)) {
     if (segment.kind === "text") {
       physical.push(...wrapText(segment.text, columns).split("\n"));
+      continue;
+    }
+    if (segment.kind === "table") {
+      physical.push(...renderTable(segment, columns));
       continue;
     }
     physical.push(segment.open, ...segment.body);

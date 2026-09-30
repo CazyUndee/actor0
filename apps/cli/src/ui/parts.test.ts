@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bannerActivity, bannerLines, fitTail, segments, shortenPath, toolDetail, toolRowFailed, wrapText } from "./parts.js";
+import {
+  bannerActivity,
+  bannerLines,
+  fitTail,
+  proseWidth,
+  renderTable,
+  segments,
+  shortenPath,
+  toolDetail,
+  toolRowFailed,
+  wrapText,
+  type Segment,
+} from "./parts.js";
 
 /**
  * The footer's layout arithmetic and the live region's height budget, without
@@ -348,4 +360,154 @@ test("a very long failure is capped and says how much was dropped", () => {
   const detail = toolDetail("error", Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n"));
   assert.equal(detail.split("\n").length, 9);
   assert.match(detail.split("\n").at(-1)!, /22 more lines$/);
+});
+
+const TABLE = [
+  "| Command | What it does | Cost |",
+  "| --- | --- | --- |",
+  "| npm test | every suite | 20s |",
+  "| npm run build | harness then cli | 8s |",
+].join("\n");
+
+/** The one table segment in `text`, failing loudly if there is not exactly one. */
+function tableIn(text: string): Extract<Segment, { kind: "table" }> {
+  const tables = segments(text).filter((segment) => segment.kind === "table");
+  assert.equal(tables.length, 1, `expected one table segment in ${JSON.stringify(text)}`);
+  return tables[0] as Extract<Segment, { kind: "table" }>;
+}
+
+/** A grid row's cells, with the padding stripped, for comparing what lined up. */
+function cellsOf(line: string): string[] {
+  return line.split("|").slice(1, -1).map((cell) => cell.trim());
+}
+
+/**
+ * The physical rows `Lines` will paint, composed the same way the component
+ * composes them. A test that budgets rows against this is measuring what the
+ * reader sees rather than how many lines of markdown the model happened to
+ * write.
+ */
+function physicalRows(text: string, columns: number): string[] {
+  const out: string[] = [];
+  for (const segment of segments(text)) {
+    if (segment.kind === "text") {
+      out.push(...wrapText(segment.text, columns).split("\n"));
+    } else if (segment.kind === "table") {
+      out.push(...renderTable(segment, columns));
+    } else {
+      out.push(segment.open, ...segment.body);
+      if (segment.close) out.push(segment.close);
+    }
+  }
+  return out;
+}
+
+test("a markdown table is laid out as a grid, every value under its own header", () => {
+  const lines = renderTable(tableIn(TABLE), 100);
+  assert.equal(lines.length, 4, "header, rule, and one line per row");
+  // Every line the same width is what "aligned" means here. The header is the
+  // one trimmed at the end, so it is the one to measure everything against.
+  for (const line of lines) assert.equal(line.length, lines[0]!.length);
+  assert.deepEqual(cellsOf(lines[0]!), ["Command", "What it does", "Cost"]);
+  assert.deepEqual(cellsOf(lines[2]!), ["npm test", "every suite", "20s"]);
+  assert.deepEqual(cellsOf(lines[3]!), ["npm run build", "harness then cli", "8s"]);
+});
+
+test("the rule under a grid spans the padded cell, not the text inside it", () => {
+  const lines = renderTable(tableIn("| A | B |\n| --- | --- |\n| 1 | 2 |"), 100);
+  assert.deepEqual(lines, ["| A   | B   |", "|-----|-----|", "| 1   | 2   |"]);
+  // The cells are three wide and the rule is five, because every cell is
+  // rendered with a space either side. A rule of three would sit under the text
+  // and a column to the left of where a reader looks for it.
+  assert.equal(lines[1]!.length, lines[0]!.length);
+});
+
+test("alignment markers are honoured: :--- left, :---: centre, ---: right", () => {
+  const lines = renderTable(tableIn("| l | c | r |\n| :--- | :---: | ---: |\n| a | b | c |"), 100);
+  assert.deepEqual(lines, ["| l   |  c  |   r |", "|-----|-----|-----|", "| a   |  b  |   c |"]);
+});
+
+test("a column is as wide as its widest cell, and the grid is drawn only if it fits", () => {
+  const wide = renderTable(tableIn(TABLE), 100);
+  const border = wide[0]!.length;
+  // Command 13, What it does 16, Cost 4 — each cell plus a space either side.
+  assert.equal(border, 1 + (13 + 3) + (16 + 3) + (4 + 3));
+  for (const line of wide) assert.equal(line.length, border);
+  // One column narrower and the grid is not drawn at all, because Ink would
+  // cut the last column off mid-value and leave it attached to nothing.
+  for (const line of renderTable(tableIn(TABLE), border - 1)) {
+    assert.ok(!line.startsWith("|"), `a grid that does not fit was drawn: ${line}`);
+  }
+});
+
+test("a grid too wide for the terminal becomes key/value lines and loses no value", () => {
+  const lines = renderTable(tableIn(TABLE), 20);
+  // Whitespace-normalised: a value long enough to wrap is still present, it
+  // just has a newline inside it now. What must never happen is one vanishing.
+  const joined = lines.join(" ").replace(/\s+/g, " ");
+  for (const value of ["npm test", "every suite", "20s", "npm run build", "harness then cli", "8s"]) {
+    assert.ok(joined.includes(value), `dropped ${value} on the way to key/value`);
+  }
+  assert.ok(lines.includes("Command: npm test"));
+  // This is the whole point: a value that migrates out of its own column is
+  // worse than no table, because it is confidently attached to the wrong row.
+  assert.equal(lines.includes("20s"), false, "a bare value has lost its label");
+});
+
+test("the key/value fallback obeys the same row budget as prose", () => {
+  const border = renderTable(tableIn(TABLE), 100)[0]!.length;
+  // Only widths where the grid does *not* fit, so this is really the fallback
+  // being measured. At a width where the grid is drawn it is sized to its own
+  // content instead, and comparing that against `proseWidth` compares two
+  // different things.
+  const narrow = [12, 20, 30, border - 1].filter((columns) => columns < border);
+  assert.ok(narrow.length >= 3, `expected several fallback widths, got ${narrow.length}`);
+  for (const columns of narrow) {
+    for (const line of renderTable(tableIn(TABLE), columns)) {
+      // The fallback *is* prose, so it inherits `proseWidth` exactly — the
+      // two-column margin and the floor of 20. Sizing it against raw `columns`
+      // is how the rule under it used to overflow by one.
+      assert.ok(
+        line.length <= proseWidth(columns),
+        `${line.length} > ${proseWidth(columns)} at columns ${columns}: ${JSON.stringify(line)}`,
+      );
+    }
+  }
+});
+
+test("a pipe in prose is not a table, however many of them there are", () => {
+  for (const text of [
+    "Pipe one into the other: a | b",
+    "| a | b |\n| c | d |",
+    "One | Two | Three\nnot a delimiter row at all |",
+  ]) {
+    assert.equal(segments(text).some((segment) => segment.kind === "table"), false, text);
+  }
+});
+
+test("a header with no rows is still a table, because that is what streaming looks like", () => {
+  const table = tableIn("| Command | Cost |\n| --- | --- |\n");
+  assert.deepEqual(table.rows, []);
+  assert.equal(renderTable(table, 80).length, 2);
+});
+
+test("an escaped pipe stays inside its cell instead of making a new one", () => {
+  const table = tableIn("| a | b |\n| --- | --- |\n| x \\| y | z |");
+  assert.deepEqual(table.rows, [["x | y", "z"]]);
+});
+
+test("fitTail's row budget counts a table by what it renders, at every width", () => {
+  const answer = `intro\n\n${TABLE}\n\n\`\`\`sh\nnpm run build\n\`\`\`\n\nafter`;
+  for (const columns of [20, 44, 100]) {
+    const painted = physicalRows(answer, columns);
+    for (const rows of [1, 2, 5, painted.length - 1, painted.length]) {
+      const kept = fitTail(answer, rows, columns).split("\n");
+      const where = `columns ${columns}, rows ${rows}`;
+      assert.equal(kept.length, Math.min(rows, painted.length), where);
+      // Not just the right count — the right rows. A budget counted in lines of
+      // markdown instead of rendered rows gets this wrong the moment a table
+      // is wrapped, which is precisely when it matters.
+      assert.deepEqual(kept, painted.slice(-rows), where);
+    }
+  }
 });

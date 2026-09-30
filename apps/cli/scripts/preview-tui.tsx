@@ -282,6 +282,13 @@ const narrowTerminal = (stdout: PassThrough, screen: Screen): void =>
 const shortTerminal = (stdout: PassThrough, screen: Screen): void =>
   resizeTerminal(stdout, SCREEN_COLUMNS, 24, screen);
 
+/**
+ * Narrower than `narrowTerminal`, because 36 is the width at which a
+ * three-column table can no longer be drawn as a grid at all.
+ */
+const gridlessTerminal = (stdout: PassThrough, screen: Screen): void =>
+  resizeTerminal(stdout, 36, SCREEN_ROWS, screen);
+
 /** Back to the size the whole run started at. */
 const wideTerminal = (stdout: PassThrough, screen: Screen): void =>
   resizeTerminal(stdout, SCREEN_COLUMNS, SCREEN_ROWS, screen);
@@ -431,6 +438,32 @@ function scriptedTurn(input: string, round: Round): AsyncGenerator<ModelEvent> {
     const long = `npm run --workspace @actor0/cli build -- --mode production --sourcemap`;
     return (async function* () {
       for (const piece of ["Here is the command:\n\n```sh\n", long, "\n```\n\nThen run the tests.\n"]) {
+        await wait(PACE_MS);
+        yield text(piece);
+      }
+      yield usage;
+      yield done;
+    })();
+  }
+
+  if (input.includes("the table")) {
+    // A data table, which the prompt permits — it only rules tables out for
+    // layout. Folded by the word wrapper it lost its shape entirely: the
+    // delimiter row showed as literal dashes and the values separated from
+    // their own rows, so `20s` read as a row of its own.
+    return (async function* () {
+      for (const piece of [
+        "Three ways to run it:\n\n",
+        "| Command | What it does | Cost |\n",
+        "| :--- | :---: | ---: |\n",
+        "| npm test | every suite | 20s |\n",
+        [
+          "| npm run typecheck | types only, no tests | 8s |",
+          "| npm run check:tui | drives the TUI driver | 4s |",
+          "",
+          "Pick `npm test` before pushing anything.",
+        ].join("\n"),
+      ]) {
         await wait(PACE_MS);
         yield text(piece);
       }
@@ -779,6 +812,23 @@ const ask = async (question: string): Promise<void> => {
   await ask("show me the command");
   await show("20 · a fenced code block is not word-wrapped");
 
+  await ask("show me the table");
+  await show("21 · a table is laid out as a grid");
+
+  // The same question in a terminal too narrow to hold the grid. The resize has
+  // to come *before* the answer, not after it: the transcript is static once
+  // written, so narrowing afterwards re-renders the live region and leaves the
+  // committed answer exactly as it was. That frame looked right and tested
+  // nothing — it showed the grid under a caption promising key/value.
+  gridlessTerminal(stdout, screen);
+  await wait(250);
+  await ask("show me the table again");
+  // Nothing may be cut off the right here. A value that has migrated out of its
+  // own column is read as belonging to the row below it.
+  await show("22 · too narrow for a grid, so it reads as key/value");
+  wideTerminal(stdout, screen);
+  await wait(200);
+
   // The first question of the run has to still be in the terminal’s scrollback.
   if (!screen.renderAll().includes("what is in notes.md?")) {
     process.stderr.write(
@@ -793,11 +843,11 @@ const ask = async (question: string): Promise<void> => {
   await begin("cancel this");
   await askedFor("cancel this", 1);
   await wait(250);
-  await show("21 · a long tool call is running");
+  await show("23 · a long tool call is running");
   stdin.write("\u001b");
   await settled();
   await wait(300);
-  await show("22 · Esc cancels the turn, and says so");
+  await show("24 · Esc cancels the turn, and says so");
 
   // The promise on the footer is that Esc stops the turn. Two things have
   // to hold: the user is told, and the turn does not carry on afterwards.

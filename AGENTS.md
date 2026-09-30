@@ -164,6 +164,16 @@ Ink's behaviour here.
   finished and fails on a difference, which is the only thing that catches it.
   Four call sites lost their `await` when a later patch renumbered labels
   with `sed`; a floating frame is silent, so assume it happened.
+- **A frame that resizes _after_ the answer has committed is testing
+  nothing.** The transcript is `<Static>`, so a finished answer is written
+  once and never re-laid-out. Narrow the terminal after an answer lands and
+  only the live region re-renders: the committed answer stays exactly as
+  it was. The frame reads plausibly — it has the new width, the new
+  prompt, the old content — and it asserts nothing about the new width.
+  The order has to be **resize, then ask**. Frame 22 was wrong this way
+  first: captioned "too narrow for a grid" over a wide grid, exit 0,
+  no failure. A frame's caption is a claim; check that the content
+  actually contradicts the previous frame.
 
 ## The prompt promised markdown the renderer never did
 
@@ -190,6 +200,24 @@ wrap-then-slice fails only the row-budget one. An unterminated fence is the
 streaming case, not an edge case — for most of a streaming answer the closing
 fence has not arrived yet, so treating it as prose wraps exactly the content
 that is about to become code.
+
+A table goes through the same trap one step further on, and it is worth
+knowing the shape of it because it is a **data-loss** bug, not an ugly
+one. Folded by the word wrapper, the `| --- |` delimiter row prints as
+literal dashes and each value separates from its own row: at 44 columns
+`20s` arrives as a row by itself, and the reader is left to guess which
+command it belonged to. So a table is now a segment of its own and is
+never re-wrapped.
+
+**Size against `proseWidth(columns)`, never against `columns`.** Prose is
+wrapped to two columns short of the terminal and never narrower than 20,
+because Ink's `trim: false` leaves the break space on the next line.
+Anything that measures itself against raw `columns` is measuring a width
+no line will ever be — that is how the rule under a narrow table came to
+overflow its own budget by one. The grid is the one exception: it is
+sized to its content, so it is checked against `columns` because what it
+must not exceed is the terminal. Both are right, and mixing them up is
+the bug.
 
 ## Behaviour worth knowing before changing it
 
