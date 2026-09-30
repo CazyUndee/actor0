@@ -114,6 +114,15 @@ mostly-additive diff, which is easy to skim past.
   on anything that awaits a real async generator. Write a real test file.
 - A const annotated as a domain type inside a spread chain will widen `kind`
   to `string` and fail against the interface (TS2345). Annotate the const.
+- **A test's hang-breaker timeout must sit well above the bound it asserts.**
+  They are two different timers and only one of them is the test's. `tools.test.ts`
+  set `timeout: 5` and then asserted `elapsed < 5_000` on the same command, so
+  on a loaded machine the tool killed the process first and its rejection escaped
+  the test — one red run out of two, on code that had not changed. The breaker's
+  only job is to end a hang, so it has an order of magnitude of headroom (30s
+  timeout, 10s assertion). This is the second timeout flake here; the first was
+  `d2339f4`. When a timing test is red once and green once, look for the two
+  clocks before you look at the code.
 
 ## Behaviour worth knowing before changing it
 

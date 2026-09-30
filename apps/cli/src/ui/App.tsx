@@ -244,7 +244,16 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
               const kept: ConversationState = partial.trim()
                 ? { ...state, entries: [...state.entries, { kind: "assistant", text: partial, partial: true }] }
                 : state;
-              return withNotice({ ...kept, live: emptyLive() }, "warn", "cancelled");
+              // "cancelled" on its own says only that the turn stopped. What a
+              // person who pressed Esc needs to know is what they have left, and
+              // the answer is everything above: the interrupted call is now a row
+              // of its own, because the harness reports it, and anything that
+              // had streamed is kept below it.
+              return withNotice(
+                { ...kept, live: emptyLive() },
+                "warn",
+                "cancelled \u2014 what you see above is all that was kept",
+              );
             });
           } else {
             // The failed turn is thrown away, not saved — but the live region

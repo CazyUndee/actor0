@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AbortedTurnError,
+  CANCELLED_TOOL_RESULT,
   DEFAULT_HARNESS_CONFIG,
   INTERRUPT_MARKER,
   RETRY_JITTER_RATIO,
@@ -310,6 +311,66 @@ test("a cancel during tool calls answers every call, including the unstarted one
       "every result must pair with a call",
     );
   }
+});
+
+test("a cancel mid-tool is reported to the host, and only for the call that was running", async () => {
+  // The transcript already carried a `[cancelled]` answer for the
+  // interrupted call, but nothing was emitted, so a host that reflects
+  // events watched the spinner vanish and then rendered a turn in which
+  // no command had ever been launched — while the next turn's model was
+  // handed the call and its answer. The row has to exist on both sides.
+  const controller = new AbortController();
+  const running: ToolCall = { id: "call_1", type: "function", function: { name: "shell", arguments: "{}" } };
+  const neverStarted: ToolCall = { id: "call_2", type: "function", function: { name: "shell", arguments: "{}" } };
+  const definition: ToolDefinition = {
+    type: "function",
+    function: { name: "shell", description: "run a shell command", parameters: { type: "object" } },
+  };
+  const toolHost: ToolHost = {
+    definitions: () => [definition],
+    async execute(_call, signal) {
+      // Listen before aborting: a signal that is already aborted never
+      // dispatches to a listener added afterwards, and waiting on one hangs.
+      await new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+        controller.abort();
+      });
+      return "unreachable";
+    },
+  };
+  const model = scriptedModel([
+    await events(
+      { type: "tool_call", tool_calls: [running, neverStarted] },
+      { type: "done" },
+    ),
+  ]);
+  const observed: HarnessEvent[] = [];
+
+  await assert.rejects(
+    runAgentTurn({
+      model,
+      messages: [],
+      input: "go",
+      toolHost,
+      signal: controller.signal,
+      config: fastConfig,
+      observer: { event: (event) => { observed.push(event); } },
+    }),
+    AbortedTurnError,
+  );
+
+  // One event, for the call that was in flight, carrying the error the
+  // transcript carries — so the cross the user sees and the sentence the
+  // model reads cannot be worded differently.
+  const results = observed.filter((event) => event.type === "tool_result");
+  assert.equal(results.length, 1, "only the running call is reported");
+  const reported = results[0] as Extract<HarnessEvent, { type: "tool_result" }>;
+  assert.equal(reported.call.id, running.id);
+  assert.equal(reported.output, CANCELLED_TOOL_RESULT);
+  assert.equal(reported.error, CANCELLED_TOOL_RESULT, "a cancelled call is an error row, not a tick");
+
+  // And the transcript still answers both calls, or a resume is rejected.
+  assert.ok(observed.some((event) => event.type === "tool_start"));
 });
 
 test("the interrupt marker never fabricates text and never doubles up", () => {

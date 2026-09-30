@@ -143,6 +143,23 @@ class Screen {
     this.lines.push("");
   }
 
+  /**
+   * Resize the viewport, the way a window drag does.
+   *
+   * Shrinking pushes whole lines off the top into scrollback rather than
+   * dropping them: a grid that simply lost rows would be reclaiming them
+   * from nowhere, and every narrow frame would then look like the driver
+   * had eaten history. Growing opens blank rows at the bottom.
+   */
+  resize(rows: number): void {
+    while (this.lines.length > rows) {
+      const gone = this.lines.shift();
+      if (gone !== undefined) this.scrollback.push(gone);
+    }
+    while (this.lines.length < rows) this.lines.push("");
+    this.row = Math.max(0, Math.min(this.lines.length - 1, this.row));
+  }
+
   /** What the user can see right now: the viewport only. */
   render(): string {
     return this.lines.join("\n").replace(/\s+$/, "");
@@ -188,6 +205,20 @@ function fakeStdout(): PassThrough {
   return stream;
 }
 
+/**
+ * Change the simulated terminal's size, as a window drag does.
+ *
+ * Mutating `columns` on its own would have tested a terminal nobody has:
+ * nothing would repaint, and `useTerminalSize` — which is the only thing
+ * the banner, the transcript and `fitTail` read their width from — would
+ * keep reporting the old one forever.
+ */
+function resizeTerminal(stdout: PassThrough, columns: number, rows: number, screen: Screen): void {
+  Object.assign(stdout, { columns, rows });
+  screen.resize(rows);
+  stdout.emit("resize");
+}
+
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -223,6 +254,14 @@ const SLOW_COMMAND = process.platform === "win32" ? "ping -n 2 127.0.0.1 >nul" :
 
 /** A command no shell has, so the failure path is real and not a missing tool. */
 const MISSING_COMMAND = "no-such-command-actor0-preview";
+
+/**
+ * A command long enough that cancelling it is a real interruption.
+ *
+ * The turn that issues it must never be waited out — the driver presses Esc
+ * and moves on — so this only has to outlive the cancel, not the run.
+ */
+const LONG_COMMAND = process.platform === "win32" ? "ping -n 30 127.0.0.1 >nul" : "sleep 25";
 
 type Round = number;
 
@@ -286,6 +325,18 @@ function scriptedTurn(input: string, round: Round): AsyncGenerator<ModelEvent> {
         });
       })()
       : (async function* () { yield* answer("Wrote summary.md."); })();
+  }
+
+  if (input.includes("cancel this")) {
+    // Round 1 exists only so a frame that has NOT cancelled is loud: if the
+    // abort ever stopped working, the model gets asked a second time and this
+    // answer — which says so in words — lands in the transcript after the user
+    // pressed Esc and walked away.
+    return round === 0
+      ? (async function* () { yield tool("c5", "shell", { command: LONG_COMMAND }); })()
+      : (async function* () {
+        yield* answer("This answer arrived, so nothing cancelled the turn.");
+      })();
   }
 
   if (input.includes("how many lines")) {
@@ -400,6 +451,15 @@ const running = (): boolean => screen.render().includes(BUSY_FOOTER);
 
 /** Wait until the UI is telling the user it is idle. */
 const settled = (): Promise<void> => waitFor(() => !running());
+
+/** Type a question and send it, without waiting for the turn that follows. */
+const begin = async (question: string): Promise<void> => {
+  await settled();
+  submitted.push(question);
+  stdin.write(question);
+  await wait(120);
+  stdin.write("\r");
+};
 
 /** Type a question, submit it, and do not return until its turn has finished. */
 const ask = async (question: string): Promise<void> => {
@@ -524,6 +584,72 @@ const ask = async (question: string): Promise<void> => {
   // wait for; the error notice is the last thing the turn writes.
   await wait(600);
   show("14 · the endpoint answers 403 with an HTML page");
+
+  // A narrow terminal. Every column here is load-bearing: the opening card
+  // sizes itself to the width, the transcript wraps to it, `fitTail` trims
+  // the live region against it, and the composer sits under all of it. A
+  // layout that overflows is invisible at 88 columns and obvious at 44.
+  resizeTerminal(stdout, 44, 30, screen);
+  await wait(250);
+  show("15 · a 44-column terminal");
+
+  // The same narrow width *during* a streaming answer. This is the case the
+  // idle frame cannot reach: `fitTail` re-trims on every token against a
+  // column count that just changed under it, so the trimming is the thing
+  // being exercised, not the static layout.
+  resizeTerminal(stdout, SCREEN_COLUMNS, SCREEN_ROWS, screen);
+  await wait(150);
+  await begin("explain the reducer in detail, and take your time");
+  await askedFor("explain the reducer in detail, and take your time", 1);
+  await wait(240);
+  resizeTerminal(stdout, 44, 30, screen);
+  await wait(240);
+  show("16 · resized to 44 columns mid-answer");
+  resizeTerminal(stdout, SCREEN_COLUMNS, SCREEN_ROWS, screen);
+  await settled();
+  show("17 · back to full width, answer intact");
+
+  // Esc, which the footer has been promising for the whole run. A quarter of
+  // a minute of real process is running when it is pressed.
+  await begin("cancel this");
+  await askedFor("cancel this", 1);
+  await wait(250);
+  show("18 · a long tool call is running");
+  stdin.write("\u001b");
+  await settled();
+  await wait(300);
+  show("19 · Esc cancels the turn, and says so");
+
+  // The promise on the footer is that Esc stops the turn. Two things have
+  // to hold: the user is told, and the turn does not carry on afterwards.
+  // The second is the one that matters — a spinner that stops while a
+  // minute-long command keeps running is a lie about the machine.
+  // The promise on the footer is that Esc stops the turn, and what it
+  // leaves behind. A cancel that quietly forgets the command it killed
+  // produces a transcript claiming the turn did nothing, while the
+  // session the next turn resumes from says a command ran — so the row
+  // is checked by its own sentence, which nothing else on screen can
+  // produce.
+  const after = screen.renderAll();
+  if (!after.includes("cancelled")) {
+    process.stderr.write("\npreview failed: Esc stopped the turn without saying so\n");
+    app.unmount();
+    process.exit(1);
+  }
+  if (!after.includes("interrupted around this call")) {
+    process.stderr.write(
+      "\npreview failed: Esc killed the tool call and left no row for it — the transcript claims nothing ran\n",
+    );
+    app.unmount();
+    process.exit(1);
+  }
+  if ((roundsAsked.get("cancel this") ?? 0) !== 1) {
+    process.stderr.write(
+      "\npreview failed: the turn kept going after Esc — the model was asked again\n",
+    );
+    app.unmount();
+    process.exit(1);
+  }
 
   // The regression this guards. The transcript used to be a bounded window that
   // was redrawn on every frame, so it overwrote the terminal's scrollback and

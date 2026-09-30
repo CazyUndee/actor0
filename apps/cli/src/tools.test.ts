@@ -493,17 +493,27 @@ test("a command that reads stdin is told there is none", async () => {
   // A command that reads input has to be told there is none, or it waits for
   // input that is never coming. The default stdin is a pipe, and a pipe nobody
   // closes never reaches EOF: with no default timeout on this tool that wait
-  // is an hour, ended only by the user noticing. A short timeout is set here
-  // so a regression fails in seconds instead of hanging the suite.
+  // is an hour, ended only by the user noticing. So a timeout is set here, and
+  // it has to be the hang-breaker only — nothing else.
+  //
+  // It used to be five seconds, matching the bound the assertion checked, and
+  // that is a race with the machine rather than with the code: the tool's
+  // timer and the assertion's were the same five seconds, so whenever the
+  // suite ran under load the tool killed the command first and the rejection
+  // escaped the test. It failed once in a full green run and passed the next,
+  // which is the worst of both. The breaker's job is to end a hang, so it
+  // sits an order of magnitude above the assertion: a regression waits half
+  // a minute and fails, and the fast path still finishes in milliseconds.
   const started = Date.now();
   const out = await host(scratch()).execute(
     call("shell", {
       command: script("cat", "cmd /c more", "cmd /c more"),
-      timeout: 5,
+      timeout: 30,
     }),
     signal,
   );
-  assert.ok(Date.now() - started < 5_000, `waited ${Date.now() - started}ms for input that never came`);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 10_000, `waited ${elapsed}ms for input that never came`);
   assert.match(out, /no output|exited with code/);
 });
 

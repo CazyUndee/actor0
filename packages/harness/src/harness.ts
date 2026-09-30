@@ -70,6 +70,18 @@ export function withInterruptMarker(text: string): string {
 }
 
 /**
+ * What a tool call that a cancel cut short is answered with.
+ *
+ * It is the model's half of the record: the call happened, the command may
+ * have done anything, and nobody knows what it produced. Exported because
+ * the same sentence is now also the event the host shows the user, and a
+ * host that renders its own copy must not be able to word it differently
+ * from the one the next turn's model reads.
+ */
+export const CANCELLED_TOOL_RESULT =
+  "[cancelled] The turn was interrupted around this call, so its result is unknown. Run it again if you still need it.";
+
+/**
  * Thrown when the caller aborted a turn. Carries the transcript as the turn
  * left it — the input, every finished round, answers for calls the cancel cut
  * short, and the partial answer marked interrupted — so a host can persist an
@@ -378,6 +390,22 @@ export async function runAgentTurn(options: {
           if (options.signal.aborted) {
             // This call's answer is unknown and the rest never started; say
             // so, or the saved transcript dangles and the resume is rejected.
+            //
+            // And say it *out loud*, which is the half that was missing. The
+            // sentence went only into the transcript, so a host that reflects
+            // events saw a spinner for a command the user had just killed and
+            // then a transcript claiming the turn did nothing at all — while
+            // the next turn's model was handed the call and its `[cancelled]`
+            // answer. One surface described a turn in which nothing happened
+            // and the other one in which a command ran. Only the in-flight
+            // call gets an event: the calls after it never started, and a row
+            // for those would report work the user never saw begin.
+            await emit(options.observer, {
+              type: "tool_result",
+              call,
+              output: CANCELLED_TOOL_RESULT,
+              error: CANCELLED_TOOL_RESULT,
+            });
             abortTurn(messages, "", [call, ...result.toolCalls.slice(index + 1)]);
           }
           failedThisRound += 1;
@@ -705,8 +733,7 @@ function abortTurn(messages: ChatMessage[], partialText: string, unanswered: Too
     transcript.push({ role: "assistant", content: "", tool_calls: [call] });
     transcript.push({
       role: "tool",
-      content:
-        "[cancelled] The turn was interrupted around this call, so its result is unknown. Run it again if you still need it.",
+      content: CANCELLED_TOOL_RESULT,
       tool_call_id: call.id,
       name: call.function.name,
     });
