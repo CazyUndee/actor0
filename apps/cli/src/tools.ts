@@ -1,5 +1,5 @@
 import type { ToolCall, ToolDefinition, ToolHost } from "@actor0/harness";
-import { readFile, realpath, stat, writeFile, mkdir } from "node:fs/promises";
+import { readFile, realpath, stat, writeFile, mkdir, open } from "node:fs/promises";
 import { isAbsolute, relative, resolve, dirname, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
@@ -165,6 +165,48 @@ function escapes(rel: string): boolean {
 // --- read ------------------------------------------------------------------
 
 /**
+ * Bytes examined when deciding whether a file is binary.
+ *
+ * Git uses 8000 and so does this: the answer is settled long before it, and
+ * reading the head means a 400MB video costs one small read instead of the
+ * whole thing decoded to a string.
+ */
+const BINARY_SNIFF_BYTES = 8_000;
+
+/**
+ * Why `path` cannot be read as text, or undefined when it can.
+ *
+ * A NUL byte in the first few KB is the same test git uses, and it is the one
+ * that matters here because of what it does to UTF-16: that encoding puts a NUL
+ * between every ASCII character, so a perfectly readable file decodes to
+ * `h\0e\0l\0l\0o\0` — which looks like text to a model and is read as if it
+ * were. Refusing it with a message that names the possibility is strictly better
+ * than returning that.
+ *
+ * Claude Code makes the same call, by file extension instead, and with the same
+ * result: a picture is refused before it is read rather than returned as
+ * `\ufffdPNG\r\n\u001a\n`. The extension test misses every binary with no
+ * extension and every text file that merely looks binary; this one needs no
+ * list to rot.
+ */
+async function binaryReason(target: string, asked: string): Promise<string | undefined> {
+  const handle = await open(target, "r");
+  try {
+    const head = Buffer.alloc(Math.min(BINARY_SNIFF_BYTES, (await handle.stat()).size || BINARY_SNIFF_BYTES));
+    const read = await handle.read(head, 0, head.length, 0);
+    const at = head.subarray(0, read.bytesRead).indexOf(0);
+    if (at === -1) return undefined;
+    return (
+      `${asked} is not text: a NUL byte at offset ${at}. That is what a binary looks like ` +
+      `decoded as UTF-8, and it can also mean the file is UTF-16. This tool returns UTF-8 text. ` +
+      `Use the shell tool instead — \`file ${asked}\` to identify it, or \`iconv -f UTF-16 ${asked}\` to convert it.`
+    );
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * Cut one line to the column cap, or say that nothing changed.
  *
  * The marker is part of the output on purpose. A line cut without one is a
@@ -293,7 +335,15 @@ const readTool: CliTool = {
     const target = await within(ctx.cwd, requireString(args, "path"));
     const info = await stat(target);
     if (info.isDirectory()) throw new Error(`${target} is a directory — list it with the shell tool, or read a file inside it`);
+    const asked = String(args.path ?? target);
+    const notText = await binaryReason(target, asked);
+    if (notText) throw new Error(notText);
+
     const raw = await readFile(target, "utf8");
+    // An empty file is a fact, not a failure. Returning nothing here makes an
+    // empty file indistinguishable from a read that produced no output, and a
+    // model that cannot tell those apart either retries it or invents contents.
+    if (raw.length === 0) return "(the file is empty: 0 bytes)";
     const all = raw.split("\n");
     if (all.length > 0 && all[all.length - 1] === "") all.pop();
 

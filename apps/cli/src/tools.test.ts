@@ -162,6 +162,69 @@ test("a line exactly at the cap is left alone", async () => {
   const out = await host(dir).execute(call("read", { path: "edge.txt" }), signal);
   assert.equal(out, `${line}\n`, "500 columns fits; only what is past them is cut");
 });
+test("a binary file is refused before it is decoded", async () => {
+  // Measured on the real tool: a 75-byte PNG came back as
+  // "�PNG\r\n\u001a\n\u0000\u0000\u0000\rIHDR..." — 74 characters of mojibake that
+  // look like a corrupted file rather than a picture, and cost a round to
+  // discover. Claude Code refuses binaries for the same reason, by extension;
+  // the NUL test needs no list to rot and catches an extensionless one.
+  const dir = scratch();
+  const png = Buffer.from(
+    "89504e470d0a1a0a0000000d494844520000000100000001080600000" +
+      "01f15c4890000000a49444154789c6360000002000100ffff03000006000557bfabd4" +
+      "0000000049454e44ae426082",
+    "hex",
+  );
+  writeFileSync(join(dir, "shot.png"), png);
+  await assert.rejects(
+    () => host(dir).execute(call("read", { path: "shot.png" }), signal),
+    (error: unknown) => {
+      const message = (error as Error).message;
+      assert.match(message, /shot\.png is not text/);
+      assert.match(message, /NUL byte at offset 8/, "the offset is named so the model can look");
+      assert.match(message, /Use the shell tool instead/, "a refusal with no way forward is just a wall");
+      return true;
+    },
+  );
+});
+
+test("a UTF-16 file is refused rather than returned with a NUL between every letter", async () => {
+  // The case the NUL test earns its keep on. `h\0e\0l\0l\0o\0` looks like text
+  // to a model, so it is read as if it were — and it is not a corrupted file,
+  // it is a perfectly good file in an encoding this tool does not return.
+  const dir = scratch();
+  writeFileSync(join(dir, "wide.txt"), Buffer.from("hello world\n", "utf16le"));
+  await assert.rejects(
+    () => host(dir).execute(call("read", { path: "wide.txt" }), signal),
+    (error: unknown) => {
+      assert.match((error as Error).message, /can also mean the file is UTF-16/);
+      assert.match((error as Error).message, /iconv/, "the message names the conversion that would work");
+      return true;
+    },
+  );
+});
+
+test("an empty file says so instead of returning nothing", async () => {
+  // An empty tool result is a fact the model cannot use: it is the same
+  // signal as a read that produced no output, so the model either retries or
+  // invents contents. This mirrors the shell tool's `(no output)`.
+  const dir = scratch();
+  writeFileSync(join(dir, "empty.txt"), "");
+  assert.equal(await host(dir).execute(call("read", { path: "empty.txt" }), signal), "(the file is empty: 0 bytes)");
+});
+
+test("an ordinary file is untouched by the sniff", async () => {
+  // The check reads the first 8KB and nothing else, so a file with no NUL in
+  // its head has to come back exactly as it was — including one comfortably
+  // longer than the sniff window, and comfortably inside the paging caps so
+  // this is about the sniff and not about line numbers appearing.
+  const dir = scratch();
+  const body = `${"line of text\n".repeat(1_000)}tail\n`;
+  assert.ok(Buffer.byteLength(body) > 8_000, "the file has to outlast the sniff window to mean anything");
+  writeFileSync(join(dir, "long.txt"), body);
+  assert.equal(await host(dir).execute(call("read", { path: "long.txt" }), signal), body);
+});
+
 
 test("a paged read reports the file's line count, not the window's", async () => {
   // `limit` says how much the model wants, not how much the file has. The
