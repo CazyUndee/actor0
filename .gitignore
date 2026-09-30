@@ -12,3 +12,8 @@
 *.tsbuildinfo
 .DS_Store
 /notes/cc/
+/.freebuff/
+
+# Agent scratch: patch scripts, probe outputs, capture logs. Not part of the
+# product, and the one thing in a working tree that a stray `git add -A` would
+# happily publish.
