@@ -423,6 +423,30 @@ function scriptedTurn(input: string, round: Round): AsyncGenerator<ModelEvent> {
       : (async function* () { yield* answer("It could not run, and the row above says why."); })();
   }
 
+  if (input.includes("one paragraph")) {
+    // One paragraph, with no newline in it anywhere.
+    //
+    // Every other answer in this script is blank-line separated, so every other
+    // answer reaches the live region as many short lines — and a row budget
+    // that counts lines handles that shape perfectly well. The bug this frame
+    // was added for lived in the other one: a single unbroken stream arrives as
+    // a *single* line, so a budget that counts lines counted it once however
+    // many rows it filled. Long enough to overflow a 40-row terminal alone.
+    const paragraph = Array.from(
+      { length: 60 },
+      (_, i) =>
+        "The harness owns execution and the CLI owns the surface, which is sentence " + i + " of one unbroken paragraph.",
+    ).join(" ");
+    return (async function* () {
+      for (const chunk of paragraph.match(/.{1,240}/g) ?? []) {
+        await wait(PACE_MS);
+        yield text(chunk);
+      }
+      yield usage;
+      yield done;
+    })();
+  }
+
   // A deliberately tall answer: the transcript has to drop its head rather than
   // push the composer off the bottom of the terminal, and the driver is the
   // only place that failure is visible.
@@ -514,8 +538,21 @@ async function main(): Promise<void> {
     }
   };
 
+  /** Labels a capture started with, whether or not it got to finish. */
+  const started: string[] = [];
+  const finished: string[] = [];
   const show = async (label: string): Promise<void> => {
+    // `show` became async when it learned to wait for the screen to settle,
+    // and every call site had to grow an `await`. One that did not is silent:
+    // the capture pauses in `settle()`, the driver keeps typing, and the frame
+    // records the screen as it was after the *next* thing happened. Nothing
+    // downstream catches that — lint has no type-aware rules on the scripts, and
+    // the repeated-frame check cannot, because the content really did change.
+    // So the count is the check: a frame that started and did not finish is one
+    // nobody awaited, and the run says which.
+    started.push(label);
     await settle();
+    finished.push(label);
     const body = screen.render();
     const previous = seen.get(label);
     if (previous === body) repeated.push(label);
@@ -715,16 +752,31 @@ const ask = async (question: string): Promise<void> => {
   await settled();
   await show("18 · back to full width, answer intact");
 
+  // The shape the row budget used to get wrong, on the screen. A frame taller
+  // than the terminal gets repainted with `clearTerminal` and takes the
+  // scrollback with it, which is what the assertion under this one checks.
+  await ask("explain it as one paragraph please");
+  await show("19 · one unbroken paragraph, composer still on screen");
+
+  // The first question of the run has to still be in the terminal’s scrollback.
+  if (!screen.renderAll().includes("what is in notes.md?")) {
+    process.stderr.write(
+      "\npreview failed: a single-paragraph answer took the scrollback with it — the first question is gone\n",
+    );
+    app.unmount();
+    process.exit(1);
+  }
+
   // Esc, which the footer has been promising for the whole run. A quarter of
   // a minute of real process is running when it is pressed.
   await begin("cancel this");
   await askedFor("cancel this", 1);
   await wait(250);
-  await show("19 · a long tool call is running");
+  await show("20 · a long tool call is running");
   stdin.write("\u001b");
   await settled();
   await wait(300);
-  await show("20 · Esc cancels the turn, and says so");
+  await show("21 · Esc cancels the turn, and says so");
 
   // The promise on the footer is that Esc stops the turn. Two things have
   // to hold: the user is told, and the turn does not carry on afterwards.
@@ -800,6 +852,16 @@ const ask = async (question: string): Promise<void> => {
     process.exit(1);
   }
 
+  if (finished.length !== started.length) {
+    process.stderr.write(
+      "\npreview failed: show() was called without awaiting it, so these frames were " +
+        "still waiting for the screen to settle when the run ended: " +
+        started.slice(finished.length).join(", ") +
+        "\n",
+    );
+    app.unmount();
+    process.exit(1);
+  }
   if (repeated.length > 0) {
     process.stderr.write(
       `\npreview failed: ${repeated.length} frame(s) were identical to the frame before them \u2014 ` +

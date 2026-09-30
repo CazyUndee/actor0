@@ -155,6 +155,16 @@ same resize applied to a plain two-`<Text>` Ink app, whose correct output
 is easy to reason about. That is what separated the emulator's bug from
 Ink's behaviour here.
 
+- **`show()` is async, so every call site must `await` it — and nothing else
+  catches a missing one.** A frame capture that does not await pauses in
+  `settle()`, the driver keeps typing, and the frame records the screen as it
+  was after the *next* thing happened. `eslint` has no type-aware rules on
+  `apps/cli/scripts`, and the repeated-frame check cannot see it because the
+  content genuinely changed. The driver counts frames started against frames
+  finished and fails on a difference, which is the only thing that catches it.
+  Four call sites lost their `await` when a later patch renumbered labels
+  with `sed`; a floating frame is silent, so assume it happened.
+
 ## Behaviour worth knowing before changing it
 
 - A shell command has **no** default timeout, deliberately: a 120s default
