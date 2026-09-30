@@ -22,7 +22,13 @@ export default tseslint.config(
     // Build output and the tsbuildinfo files that sit beside the sources. These
     // are gitignored, but a stale `dist/` from a previous build would otherwise
     // be linted as if it were source.
-    ignores: ['**/dist/**', '**/node_modules/**', '**/target/**'],
+    //
+    // `.freebuff/` is agent scratch: patch scripts, probe outputs and source
+    // fragments kept out of the tree by `.gitignore`. ESLint does not read
+    // `.gitignore`, so without naming it here a half-finished fragment — which is
+    // what scratch is, most of the time — fails `npm run lint` for whoever
+    // happens to be running it.
+    ignores: ['**/dist/**', '**/node_modules/**', '**/target/**', '.freebuff/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

@@ -25,7 +25,6 @@ import { spawn, spawnSync } from "node:child_process";
  * failing on a Windows file. Those details are what separate a tool the model
  * can drive from one it fights.
  */
-
 export type ToolContext = {
   cwd: string;
   signal: AbortSignal;
@@ -42,6 +41,21 @@ type CliTool = {
 
 const MAX_READ_LINES = 2_000;
 const MAX_READ_BYTES = 50_000;
+
+/**
+ * Columns kept from one line before it is cut.
+ *
+ * The byte cap bounds the *file*; it says nothing about a file that is one
+ * line. A minified bundle, a lockfile entry, a base64 data URI or one CSV row
+ * passes the 50KB budget as a single 50,000-character line the model cannot
+ * read, cannot navigate, and may quote back verbatim into a write — and a
+ * line number in front of it is no help, because there is only the one.
+ *
+ * Claude Code puts the same number on ripgrep (`--max-columns 500`) for the
+ * same reason. It is not a tuned number: it is a width at which a human can
+ * still read the line, which is the only test that matters for a cut this blunt.
+ */
+const MAX_LINE_COLUMNS = 500;
 const MAX_OUTPUT_BYTES = 30_000;
 const MAX_TIMEOUT_SECONDS = 3_600;
 
@@ -148,8 +162,62 @@ function escapes(rel: string): boolean {
 
 /** `cwd` is usually the same directory for every call in a turn; resolve it once. */
 
-
 // --- read ------------------------------------------------------------------
+
+/**
+ * Cut one line to the column cap, or say that nothing changed.
+ *
+ * The marker is part of the output on purpose. A line cut without one is a
+ * silently edited file: the model would read the first 500 columns as the whole
+ * line and edit as though the rest did not exist, which is the same class of lie
+ * as a truncated result that claims to be complete.
+ */
+function cutLine(line: string): { text: string; cut: boolean } {
+  if (line.length <= MAX_LINE_COLUMNS) return { text: line, cut: false };
+  return {
+    text: `${line.slice(0, MAX_LINE_COLUMNS)} [cut: +${line.length - MAX_LINE_COLUMNS} chars]`,
+    cut: true,
+  };
+}
+
+/**
+ * Say which lines were cut, and how to read one whole.
+ *
+ * A count is not actionable: the model cannot `sed -n` line 1 of 4,213. The
+ * numbers are the whole point, so they are listed — bounded, because a minified
+ * file has one enormous line and a lockfile has thousands of merely long ones.
+ */
+function cutNotice(numbers: number[], asked: string): string {
+  const one = numbers.length === 1;
+  const shown = numbers.slice(0, 5);
+  const rest = numbers.length - shown.length;
+  // With one line, "(1)" says nothing the sentence has not already said.
+  const where = one ? "" : `(lines ${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""})`;
+  return (
+    `[${numbers.length} line${one ? "" : "s"} longer than ${MAX_LINE_COLUMNS} characters${where ? ` ${where}` : ""} ` +
+    `${one ? "was" : "were"} cut above. To read ${one ? "it" : "one of them"} whole, use the shell tool: ` +
+    `sed -n '${shown[0]}p' ${asked} | fold -w ${MAX_LINE_COLUMNS}.]`
+  );
+}
+
+/**
+ * Put a note under a body without stacking blank lines.
+ *
+ * A file that ends in a newline plus the separator the note needs is three
+ * newlines, which reads as a gap in the transcript rather than as formatting.
+ */
+function withNotice(body: string, note: string): string {
+  return `${body.replace(/\n+$/, "")}\n\n${note}`;
+}
+function cutLongLines(text: string): { text: string; lines: number[] } {
+  const cut: number[] = [];
+  const out = text.split("\n").map((line, i) => {
+    const result = cutLine(line);
+    if (result.cut) cut.push(i + 1);
+    return result.text;
+  });
+  return { text: out.join("\n"), lines: cut };
+}
 
 /**
  * Slice `lines` to the line and byte caps, reporting what survived.
@@ -168,7 +236,7 @@ function capLines(
   lines: string[],
   startLine: number,
   totalLines: number,
-): { text: string; nextOffset?: number } {
+): { text: string; nextOffset?: number; cuts: number[] } {
   let byteCount = 0;
   let end = 0;
   for (; end < lines.length && end < MAX_READ_LINES; end++) {
@@ -178,9 +246,16 @@ function capLines(
     }
     byteCount += lineBytes;
   }
-  const shown = lines.slice(0, end).map((line, i) => `${startLine + i}\t${line}`);
+  // Cut before the number goes on, so the marker lands inside the line and the
+  // column it happened at stays visible.
+  const cuts: number[] = [];
+  const shown = lines.slice(0, end).map((line, i) => {
+    const cut = cutLine(line);
+    if (cut.cut) cuts.push(startLine + i);
+    return `${startLine + i}\t${cut.text}`;
+  });
   const remaining = lines.length - end;
-  if (remaining <= 0) return { text: shown.join("\n") };
+  if (remaining <= 0) return { text: shown.join("\n"), cuts };
   const nextOffset = startLine + end;
   // Reaching the line cap means the loop ran out of lines budget; stopping
   // early means the next line would have busted the byte cap.
@@ -191,6 +266,7 @@ function capLines(
   return {
     text: `${shown.join("\n")}\n\n[Showing lines ${startLine}-${startLine + end - 1} of ${totalLines} (${why}). Use offset=${nextOffset} to continue.]`,
     nextOffset,
+    cuts,
   };
 }
 
@@ -200,7 +276,7 @@ const readTool: CliTool = {
     function: {
       name: "read",
       description:
-        "Read a text file. Returns its contents verbatim. Files are capped at 2000 lines / 50KB; when the cap bites, the output ends with the exact offset=N to pass next. Prefer this over shelling out to `cat` — it is cheaper and it pages deterministically.",
+        "Read a text file. Files are capped at 2000 lines / 50KB, and any single line longer than 500 characters is cut with a marker saying so; when either cap bites, the output ends with the exact offset=N to pass next. Prefer this over shelling out to `cat` — it is cheaper and it pages deterministically.",
       parameters: {
         type: "object",
         properties: {
@@ -226,7 +302,11 @@ const readTool: CliTool = {
     // round-trip noise — to quote the file back in an edit.
     const fits = all.length <= MAX_READ_LINES && Buffer.byteLength(raw, "utf8") <= MAX_READ_BYTES;
     if (fits && args.offset === undefined && args.limit === undefined) {
-      return raw;
+      // Byte for byte when nothing was cut. The line cap is the only thing in
+      // here that edits the bytes, so the test is on the bytes rather than on
+      // a flag: if the cut changed nothing, `raw` goes back exactly as it was.
+      const cut = cutLongLines(raw);
+      return cut.lines.length === 0 ? raw : withNotice(cut.text, cutNotice(cut.lines, String(args.path)));
     }
 
     const start = Math.max(1, Math.floor(Number(args.offset) || 1));
@@ -238,16 +318,17 @@ const readTool: CliTool = {
       : all.length;
     const slice = all.slice(start - 1, start - 1 + window);
     const capped = capLines(slice, start, all.length);
+    const cut = capped.cuts.length > 0 ? `\n\n${cutNotice(capped.cuts, String(args.path))}` : "";
     const moreAfterWindow = start - 1 + slice.length < all.length;
     if (!capped.nextOffset && moreAfterWindow) {
       const nextOffset = start + slice.length;
-      return `${capped.text}\n\n[${all.length - (start - 1 + slice.length)} more lines in file. Use offset=${nextOffset} to continue.]`;
+      return `${capped.text}\n\n[${all.length - (start - 1 + slice.length)} more lines in file. Use offset=${nextOffset} to continue.]${cut}`;
     }
     // A paged read that has run out of file says so. Without it the last
     // page is indistinguishable from a page whose note was merely lost, and
     // the model cannot tell when to stop paging.
-    if (!capped.nextOffset) return `${capped.text}\n\n[End of file: ${all.length} lines.]`;
-    return capped.text;
+    if (!capped.nextOffset) return `${capped.text}\n\n[End of file: ${all.length} lines.]${cut}`;
+    return `${capped.text}${cut}`;
   },
 };
 

@@ -101,6 +101,68 @@ test("a limit that stops short still tells the model where the file continues", 
   assert.match(out, /more lines in file/);
 });
 
+test("a single enormous line is cut, and the cut is reported", async () => {
+  // The byte cap bounds the file, not the line. A minified bundle, a lockfile
+  // entry, one base64 blob or one CSV row passes 50KB as a single 160,000-
+  // character line, and the model cannot read it, navigate it, or safely quote
+  // it back into a write. Claude Code puts the same 500-column cap on ripgrep.
+  const dir = scratch();
+  writeFileSync(join(dir, "bundle.js"), "var a=1;".repeat(20_000));
+  const out = await host(dir).execute(call("read", { path: "bundle.js" }), signal);
+  assert.ok(out.length < 1_000, `a 160,000-character line came back as ${out.length} characters`);
+  assert.match(out, /\[cut: \+159500 chars\]/, "the marker says how much is missing, not just that something was");
+});
+
+test("a cut line is never cut silently", async () => {
+  // The failure this guards is an edit, not an overflow: a line cut without a
+  // marker reads as the whole line, and the model edits as though the rest of
+  // it does not exist.
+  const dir = scratch();
+  writeFileSync(join(dir, "long.txt"), `${"x".repeat(900)}\nshort\n`);
+  const out = await host(dir).execute(call("read", { path: "long.txt" }), signal);
+  assert.match(out, /\[1 line longer than 500 characters was cut above\./);
+  assert.match(out, /sed -n '1p' long\.txt/, "a count alone is not actionable — the note has to name the line");
+  assert.match(out, /short\n/, "the rest of the file comes back untouched");
+});
+
+test("the cut notice names every long line, not just the first", async () => {
+  const dir = scratch();
+  writeFileSync(join(dir, "two.txt"), `${"x".repeat(900)}\n${"y".repeat(700)}\nshort\n`);
+  const out = await host(dir).execute(call("read", { path: "two.txt" }), signal);
+  assert.match(out, /\[2 lines longer than 500 characters \(lines 1, 2\) were cut above\./);
+});
+
+test("a file whose lines all fit comes back byte for byte", async () => {
+  // The cap must not touch anything. The unpaged path returns `raw` untouched
+  // when nothing was cut, trailing newline included — the description used to
+  // promise "verbatim", and it is still true for every ordinary file.
+  const dir = scratch();
+  const body = "hello world\nsecond line\n";
+  writeFileSync(join(dir, "note.txt"), body);
+  assert.equal(await host(dir).execute(call("read", { path: "note.txt" }), signal), body);
+});
+
+test("a cut is reported on the paged path too, with the file's line numbers", async () => {
+  const dir = scratch();
+  writeFileSync(join(dir, "mixed.txt"), ["short", "x".repeat(900), "short"].join("\n"));
+  const out = await host(dir).execute(call("read", { path: "mixed.txt", offset: 1, limit: 3 }), signal);
+  assert.match(out, /^1\tshort\n2\tx{500}/, "the marker lands inside the line, after its number");
+  assert.match(
+    out,
+    /was cut above\. To read it whole, use the shell tool: sed -n '2p' mixed\.txt/,
+    "the number is the line in the file, not the page's offset into it",
+  );
+  assert.match(out, /\[End of file: 3 lines\.\]/, "both notes survive: the paging one and the cut one");
+});
+
+test("a line exactly at the cap is left alone", async () => {
+  const dir = scratch();
+  const line = "x".repeat(500);
+  writeFileSync(join(dir, "edge.txt"), `${line}\n`);
+  const out = await host(dir).execute(call("read", { path: "edge.txt" }), signal);
+  assert.equal(out, `${line}\n`, "500 columns fits; only what is past them is cut");
+});
+
 test("a paged read reports the file's line count, not the window's", async () => {
   // `limit` says how much the model wants, not how much the file has. The
   // note used to end "of <window end>", so asking for 2500 lines of a
