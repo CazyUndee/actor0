@@ -409,27 +409,28 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
  * puts Ink into the clear-and-repaint mode that destroys the scrollback.
  *
  * The head goes and the tail stays, because the newest tokens are the ones
- * being read. Wrapping is counted rather than assumed: a single 400-character
- * line occupies several terminal rows, and budgeting by line count would let it
- * straight through.
+ * being read. The budget is in rendered rows, not in lines: a 400-character
+ * paragraph occupies six terminal rows at 78 columns, and budgeting by line
+ * count would let it straight through.
  *
- * The newest line is always kept even when it alone over-runs the budget. A
- * long paragraph arrives as one line before it wraps, so a strict budget would
- * blank the live region for exactly the moment it has something to show — and
- * a turn that has visibly produced nothing looks like a turn that has stalled.
+ * The text is wrapped before it is counted, and the row that is always kept is
+ * the newest row rather than the newest line. Those are the same thing until
+ * the model answers in one unbroken paragraph — which several models do, and
+ * which arrives as a *single* line. Counting first, the cost of that one line
+ * exceeded the entire budget, and the rule that always keeps the newest line
+ * kept all of it. Measured against the real renderer, a 3,419-character
+ * paragraph produced a 42-row live region in a 40-row terminal, which is
+ * precisely the condition under which Ink stops painting incrementally and
+ * wipes the scrollback to repaint — the one outcome this function exists to
+ * prevent, and a single unbroken paragraph away.
  */
 export function fitTail(text: string, rows: number, columns: number): string {
   if (rows <= 0) return "";
-  const width = Math.max(20, columns - 2);
-  const kept: string[] = [];
-  let used = 0;
-  for (const line of text.split("\n").reverse()) {
-    const cost = Math.max(1, Math.ceil(line.length / width));
-    if (kept.length > 0 && used + cost > rows) break;
-    used += cost;
-    kept.unshift(line);
-  }
-  return kept.join("\n");
+  // Wrapping first is what makes the arithmetic below true: every line it
+  // returns is at most `width` wide, so every line costs exactly one row and
+  // slicing the tail is the budget. `Lines` wraps again on the way out, which
+  // is a no-op on text that already fits.
+  return wrapText(text, columns).split("\n").slice(-rows).join("\n");
 }
 
 /** The volatile region: in-flight reasoning, streamed text, and activity. */

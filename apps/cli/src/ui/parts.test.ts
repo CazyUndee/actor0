@@ -96,22 +96,32 @@ test("the tail is kept and the head dropped", () => {
   assert.deepEqual(kept.split("\n"), ["line 45", "line 46", "line 47", "line 48", "line 49"]);
 });
 
-test("wrapping is counted, so wide lines cannot slip past the budget", () => {
+test("the budget is in rows, so wide lines cannot slip past it", () => {
   // Four 201-character lines occupy three terminal rows each at 78 columns.
   // Counting them as four lines would pass all twelve rows through a seven-row
-  // budget.
+  // budget. Counting before wrapping got the opposite thing wrong: it kept
+  // whole lines and so kept more rows than the budget said.
   const wide = `${0}${"x".repeat(200)}`;
   const source = Array.from({ length: 4 }, (_, i) => `${i}${"x".repeat(200)}`).join("\n");
   assert.equal(wide.length, 201);
   const kept = fitTail(source, 7, 80);
-  assert.equal(kept.split("\n").length, 2, "only two 3-row lines fit in a 7-row budget");
+  assert.equal(kept.split("\n").length, 7, "exactly the budget, no more");
+  for (const line of kept.split("\n")) assert.ok(line.length <= 78, `line of ${line.length} columns`);
 });
 
-test("the newest line survives even when it alone over-runs the budget", () => {
-  // Dropping it would blank the live region exactly when there is something to
-  // show, which reads as a stalled turn rather than a tall paragraph.
+test("an unbroken paragraph is trimmed to the budget, not kept whole", () => {
+  // The one case the old rule broke on. A model that answers in a single
+  // paragraph streams it as one line, so "always keep the newest line" kept
+  // all six rows of it through a three-row budget — and a frame that tall is
+  // what makes Ink wipe the scrollback to repaint. The newest *row* is what
+  // has to survive; the rest of the paragraph is what gets dropped.
   const kept = fitTail("x".repeat(400), 3, 80);
-  assert.equal(kept.length, 400);
+  assert.equal(kept.split("\n").length, 3, "a 400-character paragraph is six rows, not one");
+  for (const line of kept.split("\n")) assert.ok(line.length <= 78, `line of ${line.length} columns`);
+  // 400 characters at 78 columns is six rows — five of 78 and one of 10 —
+  // and the three kept are the last of them: 78 + 78 + 10, the tail of what
+  // was said rather than the head.
+  assert.equal(kept.split("\n").join(""), "x".repeat(166), "the tail of the paragraph, not the head");
 });
 
 test("a zero or negative budget yields nothing rather than throwing", () => {
@@ -122,8 +132,9 @@ test("a zero or negative budget yields nothing rather than throwing", () => {
 test("a budget of one row still shows the newest line", () => {
   const kept = fitTail("old\nnewest", 1, 80);
   assert.equal(kept, "newest");
+  const wrapped = fitTail("head " + "y".repeat(400) + " tail", 1, 80);
+  assert.ok(wrapped.length <= 78 && wrapped.endsWith("tail"), `one row must end at the newest text, got ${JSON.stringify(wrapped.slice(-12))}`);
 });
-
 test("wrapping leaves no leading space on the continuation line", () => {
   // Ink wraps with trim:false and keeps the space it broke on, so pre-wrapping
   // is what keeps ordinary prose from looking mis-indented.
