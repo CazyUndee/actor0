@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bannerActivity, bannerLines, fitTail, shortenPath, toolDetail, toolRowFailed, wrapText } from "./parts.js";
+import { bannerActivity, bannerLines, fitTail, segments, shortenPath, toolDetail, toolRowFailed, wrapText } from "./parts.js";
 
 /**
  * The footer's layout arithmetic and the live region's height budget, without
@@ -135,6 +135,71 @@ test("a budget of one row still shows the newest line", () => {
   const wrapped = fitTail("head " + "y".repeat(400) + " tail", 1, 80);
   assert.ok(wrapped.length <= 78 && wrapped.endsWith("tail"), `one row must end at the newest text, got ${JSON.stringify(wrapped.slice(-12))}`);
 });
+test("a fenced code block is a segment, and the fences survive it", () => {
+  const parts = segments("before\n```ts\nconst x = 1;\n```\nafter");
+  assert.deepEqual(parts, [
+    { kind: "text", text: "before" },
+    { kind: "code", open: "```ts", body: ["const x = 1;"], close: "```" },
+    { kind: "text", text: "after" },
+  ]);
+});
+
+test("an unterminated fence is still code — that is the streaming case", () => {
+  // For most of a streaming answer the closing fence has not arrived. Treating
+  // the half-block as prose is what wraps the content that is about to be code.
+  const parts = segments("here it is:\n```sh\nnpm run build");
+  assert.equal(parts.length, 2);
+  assert.equal(parts[1]?.kind, "code");
+  assert.deepEqual(parts[1], { kind: "code", open: "```sh", body: ["npm run build"], close: "" });
+});
+
+test("four-space indentation is code, not a closing fence", () => {
+  // A docstring or a YAML block containing an indented ``` must not end the
+  // block. CommonMark allows up to three spaces of fence indent, and the rule is
+  // load-bearing: without it the rest of a real code block gets word-wrapped.
+  const body = ['    ```', "    still code", "    ```"];
+  const parts = segments(["```py", ...body, "```"].join("\n"));
+  assert.equal(parts.length, 1);
+  assert.equal(parts[0]?.kind, "code");
+  assert.deepEqual(parts[0], { kind: "code", open: "```py", body, close: "```" });
+});
+
+test("tildes fence too, and a backtick run does not close a tilde fence", () => {
+  const tilde = segments(["~~~", "a ``` inside", "~~~"].join("\n"));
+  assert.deepEqual(tilde, [{ kind: "code", open: "~~~", body: ["a ``` inside"], close: "~~~" }]);
+});
+
+test("a longer fence closes a shorter opening", () => {
+  const parts = segments(["````", "```", "````"].join("\n"));
+  assert.deepEqual(parts, [{ kind: "code", open: "````", body: ["```"], close: "````" }]);
+});
+
+test("a code line costs one row however long it is", () => {
+  // The budget used to wrap first and count afterwards, which put prose and
+  // code through the same arithmetic and wrapped a command to fit a row count.
+  const command = `npm run ${"very-long-package-name ".repeat(6)}`;
+  assert.ok(command.length > 78);
+  const kept = fitTail(["intro", "```sh", command, "```", "outro"].join("\n"), 5, 80);
+  assert.ok(kept.includes(command), "a code line past the width is carried whole, not folded");
+  assert.equal(kept.split("\n").length, 5, "and it still costs exactly the one row it occupies");
+});
+
+test("a tail that starts inside a code block keeps rendering as code", () => {
+  // Trimming mid-block leaves an unterminated fence, which has to survive as
+  // code rather than turning the rest of the answer into prose.
+  const text = ["one", "```js", "a", "b", "c", "```", "after"].join("\n");
+  const kept = fitTail(text, 7, 80);
+  assert.deepEqual(
+    segments(kept),
+    [
+      { kind: "text", text: "one" },
+      { kind: "code", open: "```js", body: ["a", "b", "c"], close: "```" },
+      { kind: "text", text: "after" },
+    ],
+    "a tail that keeps both fences must reassemble into the same segments",
+  );
+});
+
 test("wrapping leaves no leading space on the continuation line", () => {
   // Ink wraps with trim:false and keeps the space it broke on, so pre-wrapping
   // is what keeps ordinary prose from looking mis-indented.

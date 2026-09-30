@@ -132,6 +132,96 @@ export function bannerActivity(live: Live): string {
 }
 
 /**
+ * One piece of an answer: prose, or a fenced code block with its fences intact.
+ *
+ * The fences are carried rather than consumed so a pass that trims the text
+ * (`fitTail`) can flatten and rejoin without losing them.
+ */
+export type Segment =
+  | { kind: "text"; text: string }
+  | { kind: "code"; open: string; body: string[]; close: string };
+
+/**
+ * A line that opens or closes a fence: up to three spaces of indent, then a
+ * run of three or more backticks or tildes, then anything.
+ *
+ * Three spaces is CommonMark's rule and it is load-bearing here, not pedantry.
+ * A run of four or more is code indentation, so a Python docstring or a YAML
+ * block containing an indented ``` does not close the block early and get
+ * word-wrapped for the rest of its body.
+ */
+const FENCE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+
+/**
+ * Split text into prose and fenced code.
+ *
+ * The prompt tells the model that "GitHub markdown renders: fenced code
+ * blocks", and none of it did: every answer went through the same word wrapper,
+ * which breaks a long line inside a code block at an arbitrary column. A
+ * wrapped `npm run` is neither runnable nor readable, and a wrapped JSON blob
+ * is worse than not showing it.
+ *
+ * An unterminated fence is a code block to the end of the text, and that is the
+ * streaming case rather than an edge case — for most of a streaming answer the
+ * closing fence has not arrived yet. Treating it as prose would wrap exactly the
+ * content that is about to be code.
+ */
+export function segments(text: string): Segment[] {
+  const out: Segment[] = [];
+  let prose: string[] = [];
+  /** The opening fence line, info string and all, for rendering. */
+  let open = "";
+  /** The fence run alone, for comparing a candidate closer against. */
+  let fence = "";
+  let body: string[] = [];
+
+  const flushProse = (): void => {
+    if (prose.length === 0) return;
+    out.push({ kind: "text", text: prose.join("\n") });
+    prose = [];
+  };
+  const endBlock = (close: string): void => {
+    out.push({ kind: "code", open, body, close });
+    // Both, or the next line after the block joins it: the fence stays set and
+    // the rest of the answer arrives as code.
+    open = "";
+    fence = "";
+    body = [];
+  };
+
+  for (const line of text.split("\n")) {
+    const match = FENCE.exec(line);
+    if (fence !== "") {
+      const closes =
+        match !== null &&
+        match[2]!.startsWith(fence[0]!) &&
+        match[2]!.length >= fence.length &&
+        match[3]!.trim() === "";
+      if (closes) endBlock(line.trim());
+      else body.push(line);
+      continue;
+    }
+    if (match) {
+      flushProse();
+      fence = match[2]!;
+      open = line.trim();
+      continue;
+    }
+    prose.push(line);
+  }
+
+  if (fence !== "") {
+    flushProse();
+    // Still open at the end: the answer stopped mid-block, or the tokens have
+    // not arrived yet.
+    out.push({ kind: "code", open, body, close: "" });
+    return out;
+  }
+  flushProse();
+  return out;
+}
+
+/**
  * Wrap to the terminal at spaces, and leave the break behind.
  *
  * Ink wraps a `<Text>` through wrap-ansi with `trim: false`, which keeps the
@@ -178,12 +268,32 @@ function Lines({
 }) {
   return (
     <>
-      {wrapText(text, columns).split("\n").map((line, index) => (
-        // eslint-disable-next-line react/no-array-index-key -- transcript lines are positional and append-only
-        <Text key={index} color={tone} dimColor={dim} wrap="truncate-end">
-          {line || " "}
-        </Text>
-      ))}
+      {segments(text).map((segment, index) =>
+        segment.kind === "text" ? (
+          wrapText(segment.text, columns).split("\n").map((line, lineIndex) => (
+            // eslint-disable-next-line react/no-array-index-key -- transcript lines are positional and append-only
+            <Text key={`t${index}-${lineIndex}`} color={tone} dimColor={dim} wrap="truncate-end">
+              {line || " "}
+            </Text>
+          ))
+        ) : (
+          // Code is never wrapped. A line too long for the terminal is cut with
+          // Ink's own ellipsis rather than folded, because a folded command is
+          // not a command — and the fence markers are dimmed so the code reads
+          // as a quotation instead of as three more lines of the answer.
+          // eslint-disable-next-line react/no-array-index-key -- segments are positional and append-only
+          <Fragment key={`b${index}`}>
+            <Text color={color.dim}>{segment.open}</Text>
+            {segment.body.map((line, lineIndex) => (
+              // eslint-disable-next-line react/no-array-index-key -- code lines are positional and append-only
+              <Text key={`c${lineIndex}`} wrap="truncate-end">
+                {line || " "}
+              </Text>
+            ))}
+            {segment.close ? <Text color={color.dim}>{segment.close}</Text> : null}
+          </Fragment>
+        ),
+      )}
     </>
   );
 }
@@ -426,11 +536,24 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
  */
 export function fitTail(text: string, rows: number, columns: number): string {
   if (rows <= 0) return "";
-  // Wrapping first is what makes the arithmetic below true: every line it
-  // returns is at most `width` wide, so every line costs exactly one row and
-  // slicing the tail is the budget. `Lines` wraps again on the way out, which
-  // is a no-op on text that already fits.
-  return wrapText(text, columns).split("\n").slice(-rows).join("\n");
+  // Flattened to physical lines first, because the budget is in rendered rows
+  // and a row is not the same thing as a line of input. Prose is wrapped — and
+  // so becomes exactly as many rows as it takes — while a line of code is one
+  // row no matter how long it is, because `Lines` does not wrap code.
+  //
+  // Wrapping first and counting afterwards used to be the whole implementation,
+  // and it put code and prose through the same arithmetic. The fences are
+  // carried in the segments, so rejoining the tail cannot lose one.
+  const physical: string[] = [];
+  for (const segment of segments(text)) {
+    if (segment.kind === "text") {
+      physical.push(...wrapText(segment.text, columns).split("\n"));
+      continue;
+    }
+    physical.push(segment.open, ...segment.body);
+    if (segment.close) physical.push(segment.close);
+  }
+  return physical.slice(-rows).join("\n");
 }
 
 /** The volatile region: in-flight reasoning, streamed text, and activity. */

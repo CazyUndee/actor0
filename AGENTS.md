@@ -165,6 +165,32 @@ Ink's behaviour here.
   Four call sites lost their `await` when a later patch renumbered labels
   with `sed`; a floating frame is silent, so assume it happened.
 
+## The prompt promised markdown the renderer never did
+
+`turn.ts` tells the model *"GitHub markdown renders: fenced code blocks with a
+language tag"*, and for the whole life of the CLI every answer went through one
+word wrapper — fences, tables, headings and all. A fenced command was folded at
+whatever column the wrap landed on, which is neither runnable nor readable.
+
+Two things follow, and both are traps for the next person:
+
+- **A prompt is a specification, not decoration.** When one names a rendering
+  behaviour, go check that the renderer does it. Nothing else in the repo will
+  tell you: no test renders an answer, and the model produces perfectly good
+  markdown that quietly loses half its meaning on the way to the screen.
+- **The row budget has to be counted in rendered rows, not lines of input.**
+  `fitTail` cannot "wrap, then slice the last N lines" once code exists, because
+  a line of code costs exactly one row however long it is while prose costs as
+  many as it wraps into. Segments carry their fences so a tail can be flattened,
+  budgeted, and rejoined without losing one.
+
+Both halves are independently load-bearing, and the suite proves it: neutering
+`segments()` fails all seven fence tests, while putting `fitTail` back to
+wrap-then-slice fails only the row-budget one. An unterminated fence is the
+streaming case, not an edge case — for most of a streaming answer the closing
+fence has not arrived yet, so treating it as prose wraps exactly the content
+that is about to become code.
+
 ## Behaviour worth knowing before changing it
 
 - A shell command has **no** default timeout, deliberately: a 120s default

@@ -423,6 +423,22 @@ function scriptedTurn(input: string, round: Round): AsyncGenerator<ModelEvent> {
       : (async function* () { yield* answer("It could not run, and the row above says why."); })();
   }
 
+  if (input.includes("the command")) {
+    // An answer with a fenced code block in it, and a line in that block
+    // longer than 78 columns. This is the shape the prompt promises renders
+    // and did not: every line went through the word wrapper, so the command
+    // arrived folded at an arbitrary column — neither runnable nor readable.
+    const long = `npm run --workspace @actor0/cli build -- --mode production --sourcemap`;
+    return (async function* () {
+      for (const piece of ["Here is the command:\n\n```sh\n", long, "\n```\n\nThen run the tests.\n"]) {
+        await wait(PACE_MS);
+        yield text(piece);
+      }
+      yield usage;
+      yield done;
+    })();
+  }
+
   if (input.includes("one paragraph")) {
     // One paragraph, with no newline in it anywhere.
     //
@@ -758,6 +774,11 @@ const ask = async (question: string): Promise<void> => {
   await ask("explain it as one paragraph please");
   await show("19 · one unbroken paragraph, composer still on screen");
 
+  // Markdown the prompt promises renders. The block is committed by now, so
+  // this frame shows the committed rendering rather than a half-streamed one.
+  await ask("show me the command");
+  await show("20 · a fenced code block is not word-wrapped");
+
   // The first question of the run has to still be in the terminal’s scrollback.
   if (!screen.renderAll().includes("what is in notes.md?")) {
     process.stderr.write(
@@ -772,11 +793,11 @@ const ask = async (question: string): Promise<void> => {
   await begin("cancel this");
   await askedFor("cancel this", 1);
   await wait(250);
-  await show("20 · a long tool call is running");
+  await show("21 · a long tool call is running");
   stdin.write("\u001b");
   await settled();
   await wait(300);
-  await show("21 · Esc cancels the turn, and says so");
+  await show("22 · Esc cancels the turn, and says so");
 
   // The promise on the footer is that Esc stops the turn. Two things have
   // to hold: the user is told, and the turn does not carry on afterwards.
