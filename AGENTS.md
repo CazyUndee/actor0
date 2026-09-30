@@ -219,6 +219,39 @@ sized to its content, so it is checked against `columns` because what it
 must not exceed is the terminal. Both are right, and mixing them up is
 the bug.
 
+## Adding a tool touches four places, and two of them are tripwires
+
+`grep` was the fifth tool. Registering it was one line in the `TOOLS` array;
+everything else was found by a test failing and is easy to miss:
+
+1. **`TOOLS`** in `tools.ts`. The array order *is* the order the
+   unknown-tool error lists, so a test asserts that whole string.
+2. **"the five tools are advertised, and nothing else"** — the count is in
+   the test's own name, so it fails when the tool set changes, which is
+   the point. Keep the name honest.
+3. **"every tool verb in the prompt is a real tool"** — the list is written
+   out separately from `TOOLS`, so a new tool is a prompt lie until both
+   are updated.
+4. **The system prompt itself.** A tool the prompt never mentions is a
+   tool the model does not reach for, and nothing fails: the definition is
+   in the request, the tests are green, and the model goes back to
+   shelling out. This is the same trap as the markdown line below, in a
+   different place.
+
+Two things that bit while writing it, both worth not rediscovering:
+
+- **A relative path needs a resolved base.** `relative(cwd, file)` where
+  `cwd` is still unresolved produces a chain of `../..` for every result —
+  and `within()` resolves paths while `ctx.cwd` does not, so the two are
+  different strings for one directory. That is invisible on a normal
+  checkout and total on a temp dir, which is a symlink on macOS. Build
+  the display path from `realpath(cwd)` and carry the absolute path
+  alongside it rather than joining the two back together.
+- **Never write `*/` inside a doc comment.** A JSDoc that explains a glob
+  with the obvious example — `**/` crosses directories — ends at the
+  `*/` and the rest of the sentence parses as TypeScript. It surfaced as
+  four unrelated syntax errors hundreds of lines from the cause.
+
 ## Behaviour worth knowing before changing it
 
 - A shell command has **no** default timeout, deliberately: a 120s default

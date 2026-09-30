@@ -1,6 +1,6 @@
 import type { ToolCall, ToolDefinition, ToolHost } from "@actor0/harness";
-import { readFile, realpath, stat, writeFile, mkdir, open } from "node:fs/promises";
-import { isAbsolute, relative, resolve, dirname, sep } from "node:path";
+import { readFile, readdir, realpath, stat, writeFile, mkdir, open } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, dirname, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
 /**
@@ -878,7 +878,358 @@ const shellTool: CliTool = {
   },
 };
 
-const TOOLS: CliTool[] = [readTool, writeTool, editTool, shellTool];
+/**
+ * A string that may be absent.
+ *
+ * `requireString` rejects an empty value, which is right for a path and wrong
+ * for a parameter the caller may legitimately omit or send as `""`. Used by
+ * `grep`, whose `path`, `include` and `output_mode` are all optional.
+ */
+function optionalText(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new Error(`parameter "${key}" must be a string`);
+  return value;
+}
+
+// --- grep -------------------------------------------------------------------
+
+/**
+ * Directories a search never descends into.
+ *
+ * `node_modules` and `.git` are the two that are both enormous and never what
+ * was asked for. Everything else — `dist`, `build`, `target` — is left alone,
+ * because sometimes the answer really is in the build output, and a tool that
+ * quietly hides directories is worse than one that searches too much.
+ */
+const SKIP_DIRECTORIES = new Set([".git", "node_modules"]);
+
+/**
+ * How many files to open before giving up, and say so.
+ *
+ * A search over a home directory or a filesystem root has no natural end, and
+ * a tool that can be made to hang is a tool the model will eventually hang on.
+ */
+const MAX_SEARCH_FILES = 20_000;
+
+/** Results before the answer is cut, unless the caller asked for more. */
+const DEFAULT_HEAD_LIMIT = 250;
+
+/** What `grep` was asked to hand back. */
+type GrepMode = "files_with_matches" | "content" | "count";
+
+/**
+ * Translate a glob into a regular expression.
+ *
+ * A doubled star followed by a slash crosses directories; a single star and a
+ * question mark do not. Everything else is literal — so this cannot be the
+ * glob with its stars left in place, because the dot in `*.ts` has to stay a
+ * dot.
+ *
+ * `wholePath` decides whether the result is anchored. A glob with no slash in
+ * it is matched against the file name as well as the path, which is what
+ * ripgrep and gitignore both do, and it is the only reading under which the
+ * `*.ts` that everybody actually writes reaches `apps/cli/ui/parts.tsx`.
+ */
+function globToRegExp(glob: string, wholePath: boolean): RegExp {
+  let out = "";
+  for (let i = 0; i < glob.length; i += 1) {
+    const char = glob[i]!;
+    if (char === "*") {
+      if (glob[i + 1] === "*") {
+        if (glob[i + 2] === "/") {
+          out += "(?:[^/]+/)*";
+          i += 2;
+        } else {
+          out += ".*";
+          i += 1;
+        }
+      } else {
+        out += "[^/]*";
+      }
+      continue;
+    }
+    if (char === "?") {
+      out += "[^/]";
+      continue;
+    }
+    out += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(wholePath ? `^${out}$` : out);
+}
+
+/** One file to search, and the path to show the model for it. */
+type SearchFile = { abs: string; rel: string };
+
+/**
+ * Every file under `dir`, each with its path relative to `base`.
+ *
+ * The absolute path is carried alongside the display path rather than being
+ * reconstructed by joining the two: `base` and `dir` need not share a prefix
+ * once the caller has scoped the search to a subdirectory, and a path built by
+ * joining is then a path to some file that does not exist.
+ */
+async function* eachFile(dir: string, base: string): AsyncGenerator<SearchFile> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (SKIP_DIRECTORIES.has(entry.name)) continue;
+      yield* eachFile(full, base);
+      continue;
+    }
+    // A symlink can point at its own ancestor, so following one turns a search
+    // into an infinite walk — and it can also step outside the directory the
+    // caller confined the search to.
+    if (!entry.isFile()) continue;
+    yield { abs: full, rel: relative(base, full).split(sep).join("/") };
+  }
+}
+
+/**
+ * A NUL in the first chunk of a file means it is not text.
+ *
+ * The test git uses, for the same reason: UTF-16 text is full of them and would
+ * otherwise match a pattern often enough to look like a real hit. `read`
+ * refuses these by extension and by content; a search has no extension list to
+ * go on, so it is the content test alone.
+ */
+function looksBinary(head: string): boolean {
+  return head.includes("\0");
+}
+
+/**
+ * What a search owes the model when it did not look at everything.
+ *
+ * An empty result meaning "I read 4,000 files and nothing matched" is a
+ * different instruction to the model than one meaning "I could not read
+ * anything", and collapsing them into a bare "no matches" is how a model
+ * answers from its own memory with total confidence. So the number of files
+ * actually searched is stated on the empty case, and the count of binary files
+ * skipped is stated always — a pattern that only occurs inside a compiled
+ * binary has to read as not-found rather than as not-looked-at.
+ */
+function grepScope(scanned: number, binary: number, limited: boolean): string {
+  const bits = [`searched ${scanned.toLocaleString("en-US")} file${scanned === 1 ? "" : "s"}`];
+  if (binary > 0) bits.push(`skipped ${binary} binary file${binary === 1 ? "" : "s"}`);
+  if (limited) bits.push(`stopped at the ${MAX_SEARCH_FILES.toLocaleString("en-US")}-file limit`);
+  return `[${bits.join(", ")}]`;
+}
+
+const grepTool: CliTool = {
+  definition: {
+    type: "function",
+    function: {
+      name: "grep",
+      description:
+        "Search file contents with a regular expression and get back the matching paths, the matching lines with context, or the match counts. Prefer this to grep, rg or find in the shell: the same search then behaves identically on every platform, needs no quoting, and cannot stall behind a shell that has no grep at all. The pattern is a JavaScript regular expression rather than a glob or a literal, so escape what is only special to regex (write \\{ for a literal brace). An include glob with no slash in it matches the file name, so *.ts reaches apps/cli/ui/parts.tsx. With multiline set, a match is reported at the line it starts on. Skips .git and node_modules.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "JavaScript regular expression to search for." },
+          path: { type: "string", description: "A file or directory to search. Defaults to the whole working directory." },
+          include: { type: "string", description: "Only search paths matching this glob, e.g. \"*.ts\" or \"apps/**/test.ts\"." },
+          output_mode: {
+            type: "string",
+            enum: ["files_with_matches", "content", "count"],
+            description: "What to return: matching paths (the default), matching lines with context, or the number of matching lines per file.",
+          },
+          context: { type: "number", description: "Lines to show either side of each match, for output_mode \"content\". Defaults to 0." },
+          case_insensitive: { type: "boolean", description: "Match without regard to case. Defaults to false." },
+          multiline: {
+            type: "boolean",
+            description: "Let the pattern cross line ends, and make ^ and $ match at line boundaries. Defaults to false.",
+          },
+          head_limit: { type: "number", description: `Stop after this many results. Defaults to ${DEFAULT_HEAD_LIMIT}.` },
+        },
+        required: ["pattern"],
+      },
+    },
+  },
+  label: (args) => `grep ${String(args.pattern ?? "")}`,
+  async run(args, ctx) {
+    const pattern = requireString(args, "pattern");
+    const scope = optionalText(args, "path") || ".";
+    const root = await within(ctx.cwd, scope);
+    const mode = (optionalText(args, "output_mode") || "files_with_matches") as GrepMode;
+    if (!["files_with_matches", "content", "count"].includes(mode)) {
+      throw new Error(`output_mode must be files_with_matches, content or count, not ${mode}`);
+    }
+    const context = Math.max(0, Math.floor(Number(args.context ?? 0)) || 0);
+    const caseInsensitive = args.case_insensitive === true;
+    const multiline = args.multiline === true;
+
+    // `g` only when the pattern may cross lines, because a global regex is
+    // stateful and `test()` on one advances `lastIndex` — which turns a
+    // line-by-line scan into one that silently matches every other line.
+    let matcher: RegExp;
+    try {
+      matcher = new RegExp(pattern, `${caseInsensitive ? "i" : ""}${multiline ? "gm" : ""}`);
+    } catch (error) {
+      throw new Error(
+        `pattern is not a valid regular expression: ${pattern} (${(error as Error).message})`,
+      );
+    }
+
+    const glob = optionalText(args, "include");
+    const wholePath = glob === undefined ? undefined : globToRegExp(glob, true);
+    const fileNameOnly =
+      glob !== undefined && !glob.includes("/") ? globToRegExp(glob, false) : undefined;
+    const inScope = (rel: string): boolean => {
+      if (!wholePath) return true;
+      if (wholePath.test(rel)) return true;
+      if (!fileNameOnly) return false;
+      const slash = rel.lastIndexOf("/");
+      return fileNameOnly.test(slash === -1 ? rel : rel.slice(slash + 1));
+    };
+
+    const asked = Math.floor(Number(args.head_limit ?? DEFAULT_HEAD_LIMIT));
+    const headLimit = Number.isFinite(asked) && asked > 0 ? asked : DEFAULT_HEAD_LIMIT;
+
+    // Real paths, or the display paths come out as a chain of `../..`. The
+    // temp directory is the usual culprit: it is a symlink on macOS, so `cwd`
+    // and the path `within` resolved are different strings for one folder.
+    const base = await realpath(ctx.cwd).catch(() => ctx.cwd);
+    const rootIsDirectory = await stat(root)
+      .then((info) => info.isDirectory())
+      .catch(() => {
+        throw new Error(`path does not exist: ${scope}`);
+      });
+
+    const seen: SearchFile[] = [];
+    if (rootIsDirectory) {
+      for await (const file of eachFile(root, base)) seen.push(file);
+    } else {
+      seen.push({ abs: root, rel: relative(base, root).split(sep).join("/") });
+    }
+    const files = seen.filter((file) => inScope(file.rel));
+
+    const out: string[] = [];
+    const notes: string[] = [];
+    const cutLines: number[] = [];
+    let scanned = 0;
+    let binary = 0;
+    let limited = false;
+    let stopped = false;
+
+    for (const file of files) {
+      if (out.length >= headLimit) {
+        stopped = true;
+        break;
+      }
+      if (scanned >= MAX_SEARCH_FILES) {
+        limited = true;
+        break;
+      }
+      scanned += 1;
+      let text: string;
+      try {
+        text = await readFile(file.abs, "utf8");
+      } catch {
+        // A file that vanished between listing and reading is not a failure of
+        // the search, and reporting it as one would be noise.
+        continue;
+      }
+      if (looksBinary(text.slice(0, 8_000))) {
+        binary += 1;
+        continue;
+      }
+
+      const lines = text.split("\n");
+      /** The lines a match starts on. */
+      const matched = new Set<number>();
+      /** Matches counted apart, because two of them can start on one line. */
+      let found = 0;
+
+      if (multiline) {
+        for (let m = matcher.exec(text); m !== null; m = matcher.exec(text)) {
+          found += 1;
+          matched.add(text.slice(0, m.index).split("\n").length - 1);
+          // A zero-width match would otherwise spin on one index for ever.
+          if (m[0].length === 0) matcher.lastIndex += 1;
+        }
+      } else {
+        for (let i = 0; i < lines.length; i += 1) {
+          if (!matcher.test(lines[i]!)) continue;
+          found += 1;
+          matched.add(i);
+        }
+      }
+      if (found === 0) continue;
+
+      if (mode === "files_with_matches") {
+        out.push(file.rel);
+        continue;
+      }
+      if (mode === "count") {
+        out.push(`${file.rel}:${found}`);
+        continue;
+      }
+
+      const shown = new Set(matched);
+      for (const i of matched) {
+        for (let near = i - context; near <= i + context; near += 1) {
+          if (near >= 0 && near < lines.length) shown.add(near);
+        }
+      }
+      // Sorted, because a Set iterates in insertion order — every match would
+      // print before any of its own context.
+      for (const i of [...shown].sort((a, b) => a - b)) {
+        const isMatch = matched.has(i);
+        // `path:12:text` for a match and `path-12-` for a context line: the
+        // separator carries the line number either way, so a context line can
+        // never read as a match by looking at the text alone.
+        out.push(`${file.rel}${isMatch ? ":" : "-"}${i + 1}${isMatch ? ":" : "-"} ${lines[i] ?? ""}`);
+      }
+    }
+
+    if (out.length === 0) {
+      if (seen.length === 0) {
+        return (
+          `[searched 0 files] there is nothing to search at ${scope}, so nothing can ` +
+          `match ${pattern}. Check that path names a real file or directory.`
+        );
+      }
+      if (files.length === 0) {
+        return (
+          `[searched 0 files] include: ${glob} excluded all ${seen.length} file${seen.length === 1 ? "" : "s"} ` +
+          `under ${scope}. Widen the glob or drop it.`
+        );
+      }
+      return `No matches for ${pattern}. ${grepScope(scanned, binary, limited)}.`;
+    }
+
+    if (stopped) {
+      notes.push(
+        `[showing the first ${headLimit} of ${files.length.toLocaleString("en-US")} candidate files; ` +
+          `raise head_limit, narrow the pattern, or set include to filter]`,
+      );
+    }
+    const { text, lines: cut } = cutLongLines(out.join("\n"));
+    cutLines.push(...cut);
+    if (limited) notes.push(grepScope(scanned, binary, true));
+
+    let body = text;
+    if (body.length > MAX_OUTPUT_BYTES) {
+      // The head, not the tail. A shell log puts its error last, so the tail is
+      // the useful half; but a search is aimed at the *first* matches — the ones
+      // nearest the pattern — and the tail of a grep is the alphabetically last
+      // file in the tree.
+      const cut = body.slice(0, MAX_OUTPUT_BYTES);
+      const at = cut.lastIndexOf("\n");
+      body = at > 0 ? cut.slice(0, at) : cut;
+      notes.unshift(
+        `[output truncated: kept the first ${body.length.toLocaleString("en-US")} of ` +
+          `${text.length.toLocaleString("en-US")} characters, because the first matches are the ones ` +
+          `the pattern was aimed at]`,
+      );
+    }
+    if (cutLines.length > 0) notes.push(cutNotice(cutLines, "the file"));
+    return notes.length > 0 ? withNotice(body, notes.join("\n")) : body;
+  },
+};
+
+const TOOLS: CliTool[] = [readTool, writeTool, editTool, grepTool, shellTool];
 const BY_NAME = new Map(TOOLS.map((tool) => [tool.definition.function.name, tool]));
 
 /** A `ToolHost` backed by the CLI's own tools. */
