@@ -263,6 +263,61 @@ Three things that bit while writing it, all worth not rediscovering:
   *states* the old behaviour in its own name, that is the finding, not
   the obstacle — read what the test claims before you change it.
 
+## The endpoint is the only source of truth about the endpoint
+
+`OVERFLOW_TEXT` in `packages/harness/src/model-client.ts` lists the ways a
+provider can say "this conversation does not fit". Its first four clauses were
+written against Anthropic-shaped prose, four tests fed exactly those strings,
+and all four passed. None of them was a string this CLI's endpoint had ever
+sent.
+
+The endpoint says something else entirely, and this was measured against it
+rather than assumed:
+
+    POST https://aestral-chat.vercel.app/api/chat
+    400  {"error":"Message too large (50k char limit)"}
+
+Not a code, not prose, and — the part that matters — **50,000 characters per
+message**, not per request and not in tokens. Two messages of 25,000 each are
+accepted; 50,001 characters in one message is refused.
+
+So the whole overflow recovery path — `OVERFLOW_RECOVERY_TOKENS`,
+`recoveryHistory`, the "four things have to hold" logic, the tests for all of
+it — was fully built, fully green, and **unreachable**. A real request that
+did not fit came back to the user as:
+
+    Message too large (50k char limit). Retrying will not help — check the URL,
+    the key, and the model name.
+
+All three of which were fine. Worth knowing when the next thing is written
+against a provider that does not exist: **a parser tested only on strings you
+invented has proved nothing about the wire.** The fix is a real request against
+the real host, which costs one round trip and settles it.
+
+Two things the measurement changed, beyond the pattern:
+
+- `message too large`, and **not** a bare `too large`. "Output too large" is
+  a truncated answer, not a conversation that does not fit, and reading it as an
+  overflow compacts the transcript of a conversation that fitted perfectly.
+- `read` is safe at the limit by luck rather than by design: its 50,000
+  **byte** cap lands at ~43,600 characters once a cut notice is appended.
+  Bytes and characters are not the same unit, and the one that is enforced is
+  characters.
+
+## Neutering across a package boundary needs a rebuild
+
+The harness is consumed by the CLI through its built `dist/`, not its source.
+Reverting a harness file and re-running the CLI suite proves **nothing** — the
+CLI keeps loading the built copy, and a test that should have failed passes.
+
+So after changing anything under `packages/harness/src/`:
+
+    npm --workspace @actor0/harness run build
+
+before running `apps/cli` tests to check it. `npm run typecheck` does this
+via `pretypecheck`, which is why the defect only shows up when the suites are
+run directly — which is exactly how they get run while iterating.
+
 ## A listing cannot hide what a search may hide
 
 `grep` skips `.git` and `node_modules` outright, and that is right:

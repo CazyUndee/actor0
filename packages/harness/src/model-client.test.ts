@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ModelTransportError, OpenAiCompatibleModel } from "./model-client.js";
+import { ModelTransportError, OpenAiCompatibleModel, isContextOverflow } from "./model-client.js";
 import type { ModelEvent, ToolCall } from "./types.js";
 
 test("a streamed tool call is assembled the same at every chunk boundary", async () => {
@@ -379,6 +379,37 @@ test("an overflow sent as a bare message is recognised without a code", async ()
   const bare = await streamFailure(errorStream({ error: "Requested token count exceeds the model's maximum context length" }));
   assert.equal(bare.retriable, false);
   assert.match(bare.message, /ended the stream with an error/);
+});
+test("the size error the endpoint actually sends is recognised as an overflow", async () => {
+  // This is the body `https://aestral-chat.vercel.app/api/chat` returns, byte
+  // for byte, for a request that does not fit — a 400, not a code, not prose.
+  //
+  // Every other test in this file fed a provider that does not serve this
+  // CLI, and all of them passed, and none of their strings had ever come back
+  // from it. The overflow recovery was fully built, fully tested, and
+  // unreachable: a real request that did not fit came back as a failure with
+  // "check the URL, the key, and the model name" attached, all three of which
+  // were fine.
+  const error = await streamFailure(
+    errorStream({ error: "Message too large (50k char limit)" }),
+  );
+  assert.equal(error.retriable, false, "asking again with the same history would fail identically");
+  assert.match(error.message, /50k char limit/, "the provider's own diagnosis was dropped");
+  assert.match(error.message, /context window/, "the overflow advice is missing");
+  assert.ok(
+    !/check the URL, the key, and the model name/i.test(error.message),
+    `the wrong advice is attached to a size failure: ${error.message}`,
+  );
+});
+
+test("an answer that was too long is not a conversation that is too long", () => {
+  // "Output too large" is a truncated answer, and the recovery for it is to
+  // ask again with less history — which changes nothing, because the history
+  // was never the problem. Reading it as an overflow compacts the transcript
+  // of a conversation that fitted perfectly well.
+  assert.equal(isContextOverflow("Output too large"), false);
+  assert.equal(isContextOverflow("response exceeded the maximum output length"), false);
+  assert.equal(isContextOverflow("Message too large (50k char limit)"), true);
 });
 
 test("a transient in-stream error is still retried", async () => {

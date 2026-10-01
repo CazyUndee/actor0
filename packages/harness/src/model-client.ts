@@ -447,16 +447,38 @@ const PERMANENT_STREAM_TYPES =
   /\b(?:invalid[_\s-]?request(?:[_\s-]?error)?|authentication[_\s-]?error|permission[_\s-]?error|not[_\s-]?found[_\s-]?error|billing[_\s-]?error|account[_\s-]?error|insufficient[_\s-]?quota|request[_\s-]?too[_\s-]?large)\b/i;
 
 /**
- * Message text, for the servers that send neither code nor type. Every
- * provider words this differently and no two agree: Anthropic says `prompt is
- * too long: 137500 tokens > 135000 maximum`, vLLM and DeepSeek say `This
- * model's maximum context length is 32768 tokens. However, your messages
- * resulted in 40000 tokens`, Groq says `Requested token count exceeds the
- * model's maximum context length`, and OpenAI puts the diagnosis in the code
- * while the message says only `Please reduce the length of the messages`.
+ * Text that means "this conversation does not fit", across the providers that
+ * say it.
+ *
+ * Every provider words this differently and no two agree: Anthropic says
+ * `prompt is too long: 137500 tokens > 135000 maximum`, vLLM and DeepSeek say
+ * `This model's maximum context length is 32768 tokens. However, your
+ * messages resulted in 40000 tokens`, Groq says `Requested token count
+ * exceeds the model's maximum context length`, and OpenAI puts the diagnosis
+ * in the code while the message says only `Please reduce the length of the
+ * messages`.
+ *
+ * The first four clauses of this pattern were written against a provider that
+ * does not serve this CLI. They match, and the four tests that cover them
+ * pass, and none of them is a string the endpoint has ever sent — so the
+ * whole overflow recovery path was unreachable in production: a real request
+ * that did not fit came back as a bare failure, with no compaction, no retry,
+ * and the raw body as the only clue.
+ *
+ * The last two clauses are what it actually answers, measured against
+ * `https://aestral-chat.vercel.app/api/chat`: a 400 carrying exactly
+ * `{"error":"Message too large (50k char limit)"}`. The limit is 50,000
+ * characters per message, not per request and not in tokens, which is a
+ * different failure from the one the rest of this pattern describes and needs
+ * its own words rather than a shared one.
+ *
+ * `message too large` and not a bare `too large`, on purpose: "output too
+ * large" is a truncated answer, not a conversation that does not fit, and
+ * reading it as an overflow would compact the history and ask again for a
+ * request that was never the problem.
  */
 const OVERFLOW_TEXT =
-  /\b(?:maximum context length|context length|context[_\s-]?length|context window|context size|prompt is too long|prompt too long|input is too long|input length|exceeds the (?:model'?s? )?maximum|exceeds the available|requested token count exceeds|messages resulted in|reduce the length of the messages|request entity too large|too many tokens|token limit)\b/i;
+  /\b(?:maximum context length|context length|context[_\s-]?length|context window|context size|prompt is too long|prompt too long|input is too long|input length|exceeds the (?:model'?s? )?maximum|exceeds the available|requested token count exceeds|messages resulted in|reduce the length of the messages|request entity too large|too many tokens|token limit|char(?:acter)?s? limit|message too large)\b/i;
 
 /** Message text for the permanent failures that arrive without a code. */
 const PERMANENT_STREAM_TEXT =

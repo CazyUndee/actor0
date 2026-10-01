@@ -290,6 +290,37 @@ test("a request the model calls too big is asked again with a compacted history"
   }
 });
 
+test("the endpoint's own size error triggers the recovery, not just the classifier", async () => {
+  // The classifier test proves the string is recognised. This proves the
+  // consequence: the turn is compacted and asked again once, rather than dying
+  // with a size error the user can do nothing about. Before the fix this
+  // reached the user as "Message too large (50k char limit). Retrying will not
+  // help — check the URL, the key, and the model name."
+  const endpointFrame = { error: "Message too large (50k char limit)" };
+  const { server, baseUrl, bodies } = await startServer((turn) =>
+    turn === 0 ? [endpointFrame] : textFrames("You were looking at a file that says hello."),
+  );
+  try {
+    const { result } = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: bulkyHistory(),
+      input: "and now, what did it say?",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(bodies.length, 2, "the turn must be re-asked exactly once");
+    assert.ok(
+      (bodies[1] as string).length < (bodies[0] as string).length / 2,
+      `the retry re-sent the same size: ${(bodies[1] as string).length} vs ${(bodies[0] as string).length}`,
+    );
+    assert.match(bodies[1] as string, /result cleared/, "the retry must clear a payload, not drop a message");
+    assert.match(result.text, /says hello/);
+    assert.equal(result.messages.length, bulkyHistory().length + 3, "nothing may be dropped but the new exchange");
+  } finally {
+    await close(server);
+  }
+});
 test("an overflow that compaction cannot fix is reported, not asked again", async () => {
   // Nothing clearable: the bulk is the conversation itself. Asking again with
   // the identical transcript is the death spiral a recovery is meant to end.
