@@ -656,6 +656,63 @@ test("every tool the prompt names is a tool the host actually has", () => {
   assert.ok(names.includes(example), `the example names ${example}, which is not a real tool`);
 });
 
+test("the prompt's tool count is the registry's, not a number someone remembered", () => {
+  // The prompt told the model it had four tools while five were registered, and
+  // no test failed: the count was a literal in a string array, so adding a tool
+  // could not change it. It is now read off the registry.
+  //
+  // Both spellings are read, because the shape a literal takes is exactly what
+  // this has to catch — the original was the word "four", and a parser that
+  // only understood digits would wave that straight through.
+  const words = [
+    "zero", "one", "two", "three", "four", "five",
+    "six", "seven", "eight", "nine", "ten",
+  ];
+  const asNumber = (said: string): number => {
+    const digits = /^\d+$/.test(said) ? Number(said) : words.indexOf(said);
+    assert.ok(digits >= 0, `the count "${said}" is neither a number nor a count word`);
+    return digits;
+  };
+
+  const names = createToolHost({ cwd: cwd() }).definitions().map((d) => d.function.name);
+  const claimed = /(\w+) tools that execute immediately/.exec(defaultSystemPrompt());
+  assert.ok(claimed, "the opening must still state how many tools there are");
+  const said = asNumber(claimed[1]!);
+  assert.equal(
+    said,
+    names.length,
+    `the prompt claims ${said} tool${said === 1 ? "" : "s"}; the host has ${names.length}`,
+  );
+});
+
+test("the tool-choice sentence names every registered tool exactly once", () => {
+  // The same drift, one clause at a time. This sentence used to leave `grep`
+  // out entirely and route searching to the shell, four tools after the tool
+  // that does it was added. Derived from the registry, it cannot; this checks
+  // the derivation rather than the wording, so a reworded hint stays legal.
+  const names = createToolHost({ cwd: cwd() }).definitions().map((d) => d.function.name);
+  const sentence = /^Tool choice: (.*)$/m.exec(defaultSystemPrompt());
+  assert.ok(sentence, "the prompt must still carry a tool-choice sentence");
+  const named = [...sentence[1]!.matchAll(/`(\w+)`/g)].map((match) => match[1]!);
+  assert.deepEqual(named, names, "the sentence must name the tools, in the registry's order");
+});
+
+test("every tool says what it is for, so the sentence is not a list of names", () => {
+  // A name with no clause after it is worse than an absent tool: the model
+  // learns nothing about when to reach for it, and the sentence reads as if it
+  // had said something. The clause is read out of the prompt rather than out of
+  // the builder, so a prompt that stops carrying the sentence fails here too.
+  const sentence = /^Tool choice: (.*)$/m.exec(defaultSystemPrompt())?.[1] ?? "";
+  for (const name of createToolHost({ cwd: cwd() }).definitions().map((d) => d.function.name)) {
+    const clause = new RegExp(`\`${name}\` for ([^,.]+)`).exec(sentence);
+    assert.ok(clause, `the sentence gives ${name} no clause`);
+    assert.ok(
+      clause[1]!.trim().length > 8,
+      `the clause for ${name} is "${clause[1]}", which says nothing`,
+    );
+  }
+});
+
 test("cancelledTurnMessages adopts the harness transcript and strips the prompt", () => {
   const error = new AbortedTurnError(
     [

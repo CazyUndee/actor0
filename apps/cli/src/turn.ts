@@ -15,7 +15,14 @@ import type { ResolvedProvider } from "./config.js";
 import { totalUsage } from "./conversation.js";
 import { formatProjectContext, loadProjectContext } from "./context.js";
 import { compactHistory, measureHistory } from "./history.js";
-import { resolveShell, shellNotes, type ResolvedShell, type ShellFamily } from "./tools.js";
+import {
+  TOOL_COUNT,
+  resolveShell,
+  shellNotes,
+  toolChoiceSentence,
+  type ResolvedShell,
+  type ShellFamily,
+} from "./tools.js";
 
 /**
  * Everything the CLI needs to run one turn, expressed in harness terms.
@@ -66,7 +73,7 @@ export function defaultSystemPrompt(shell: ResolvedShell = resolveShell()): stri
   const verbs = SHELL_VERBS[shell.family];
   return [
   "You are a coding agent running in a terminal on the user's machine, with",
-  "four tools that execute immediately and without confirmation. Paths are",
+  `${TOOL_COUNT} tools that execute immediately and without confirmation. Paths are`,
   "relative to the working directory; nothing outside it is reachable.",
   "",
   "## The loop",
@@ -80,11 +87,7 @@ export function defaultSystemPrompt(shell: ResolvedShell = resolveShell()): stri
   "3. Verify. Run the project's own tests or build with `shell` and report what",
   "   actually happened. Never report success you did not observe.",
   "",
-  "Tool choice: `edit` for changing part of an existing file (exact string",
-  "match; it fails loudly rather than clobbering), `write` for new files or",
-  "whole-file rewrites, `read` for file contents (paged; it names the offset",
-  "to continue at), `shell` for everything else — searching, git, listing,",
-  "test runners, package managers.",
+  toolChoiceSentence(),
   "",
   shellNotes(shell),
   "",

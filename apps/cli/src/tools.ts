@@ -34,6 +34,16 @@ type CliTool = {
   definition: ToolDefinition;
   /** One line for the activity line in the transcript. */
   label: (args: Record<string, unknown>, ctx: ToolContext) => string;
+  /**
+   * What the tool is for, in one clause, for the prompt's tool-choice sentence.
+   *
+   * Required rather than optional, so that a new tool cannot be registered
+   * without saying what it is for. That sentence used to be written out by
+   * hand in the prompt, which is how it came to say four tools after a fifth
+   * was added, and to keep routing searching to the shell after a tool was
+   * added to do exactly that.
+   */
+  hint: string;
   run: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string>;
 };
 
@@ -331,6 +341,7 @@ const readTool: CliTool = {
     },
   },
   label: (args) => `read ${String(args.path ?? "")}`,
+  hint: "reading a file (paged; it names the offset to continue at)",
   async run(args, ctx) {
     const target = await within(ctx.cwd, requireString(args, "path"));
     const info = await stat(target);
@@ -402,6 +413,7 @@ const writeTool: CliTool = {
     },
   },
   label: (args) => `write ${String(args.path ?? "")}`,
+  hint: "a new file, or a whole-file rewrite",
   async run(args, ctx) {
     const target = await within(ctx.cwd, requireString(args, "path"));
     const content = requireText(args, "content");
@@ -464,6 +476,7 @@ const editTool: CliTool = {
     },
   },
   label: (args) => `edit ${String(args.path ?? "")}`,
+  hint: "changing part of an existing file (exact string match; it fails loudly rather than clobbering)",
   async run(args, ctx) {
     const target = await within(ctx.cwd, requireString(args, "path"));
     const oldString = requireString(args, "old_string");
@@ -780,6 +793,7 @@ const shellTool: CliTool = {
     },
   },
   label: (args) => String(args.command ?? "").replace(/\s+/g, " ").trim(),
+  hint: "everything else — git, listing, test runners, package managers",
   async run(args, ctx) {
     const command = requireString(args, "command");
     const shell = resolveShell();
@@ -1047,6 +1061,7 @@ const grepTool: CliTool = {
     },
   },
   label: (args) => `grep ${String(args.pattern ?? "")}`,
+  hint: "searching inside files",
   async run(args, ctx) {
     const pattern = requireString(args, "pattern");
     const scope = optionalText(args, "path") || ".";
@@ -1230,6 +1245,33 @@ const grepTool: CliTool = {
 };
 
 const TOOLS: CliTool[] = [readTool, writeTool, editTool, grepTool, shellTool];
+
+/**
+ * How many tools the CLI offers, for the prompt to count out loud.
+ *
+ * The prompt is the one place a model is told what it has, so a count written
+ * there is a claim about the registry, and it was written by hand. Adding a
+ * tool and not editing that number leaves the prompt asserting something false
+ * about the thing the model has to decide with, and nothing fails: the tool
+ * is in the request, the tests are green, and the model believes it has four.
+ */
+export const TOOL_COUNT = TOOLS.length;
+
+/**
+ * One sentence naming every tool and what it is for, in the registry's order.
+ *
+ * The registry is the only list of tools there is, so this is derived from it
+ * rather than transcribed. The hand-written version had drifted in two ways at
+ * once — it named four tools when there were five, and it told the model to
+ * use the shell for searching after a tool had been added to do exactly that.
+ * A sentence assembled from the registry cannot describe a set of tools that
+ * does not exist.
+ */
+export function toolChoiceSentence(): string {
+  const each = TOOLS.map((tool) => `\`${tool.definition.function.name}\` for ${tool.hint}`);
+  return `Tool choice: ${each.join(", ")}.`;
+}
+
 const BY_NAME = new Map(TOOLS.map((tool) => [tool.definition.function.name, tool]));
 
 /** A `ToolHost` backed by the CLI's own tools. */
