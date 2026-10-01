@@ -2,7 +2,7 @@ import type { ChatMessage, ModelClient } from "@actor0/harness";
 import { applyEvent, initialConversation, type ConversationState } from "./conversation.js";
 import { resolveProvider, type CliConfig } from "./config.js";
 import { createToolHost } from "./tools.js";
-import { cancelledTurnMessages, forStorage, runTurn, usageSummary } from "./turn.js";
+import { cancelledTurnMessages, failedTurnMessages, forStorage, runTurn, usageSummary } from "./turn.js";
 import { saveSession } from "./session.js";
 
 /**
@@ -133,14 +133,16 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
     persist(transcript);
     return 0;
   } catch (error) {
-    // A caller's SIGINT aborts the turn; the harness hands the transcript back
-    // (AbortedTurnError), so adopt it — same as the TUI — and print what
-    // streamed before the interrupt, which is still the best answer there is.
-    // The cut fragment is in the live region (no `done` ever fired); earlier
-    // rounds' prose was committed to entries as each tool call landed.
-    const cancelled = cancelledTurnMessages(error);
-    if (cancelled) {
-      transcript = cancelled;
+    // A caller's SIGINT aborts the turn, and any other failure ends it
+    // the same way (AbortedTurnError / FailedTurnError): the harness
+    // hands the transcript back, so adopt it — same as the TUI — and
+    // print what streamed before the end, which is still the best
+    // answer there is. The cut fragment is in the live region (no
+    // `done` ever fired); earlier rounds' prose was committed to
+    // entries as each tool call landed.
+    const recovered = cancelledTurnMessages(error) ?? failedTurnMessages(error);
+    if (recovered) {
+      transcript = recovered;
       const fragment = state.live.text.trim();
       if (fragment) {
         out.write(`${fragment.trimEnd()}\n`);

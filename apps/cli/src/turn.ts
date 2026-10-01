@@ -1,10 +1,12 @@
 import {
   DEFAULT_HARNESS_CONFIG,
   INTERRUPT_MARKER,
+  FAILED_MARKER,
   OpenAiCompatibleModel,
   isContextOverflowError,
   runAgentTurn,
   type AbortedTurnError,
+  type FailedTurnError,
   type ChatMessage,
   type HarnessEvent,
   type ModelClient,
@@ -380,6 +382,9 @@ export function usageSummary(usage: RunResult["usage"]): string | undefined {
 /** Marker appended to an answer a cancel cut short; see `withInterruptMarker`. */
 export { INTERRUPT_MARKER };
 
+/** Marker appended to an answer a failed turn cut short; see `withFailedMarker`. */
+export { FAILED_MARKER };
+
 /**
  * The transcript to persist when a turn was cancelled.
  *
@@ -400,4 +405,26 @@ export function cancelledTurnMessages(error: unknown): ChatMessage[] | undefined
     return undefined;
   }
   return forStorage(aborted.messages);
+}
+
+/**
+ * The transcript to persist when a turn failed.
+ *
+ * The harness throws `FailedTurnError` when a turn fails for any
+ * reason other than a cancel, and its `messages` hold the exchange
+ * as the user watched it: the input, every finished round, and the
+ * partial answer marked failed. Same strip as `cancelledTurnMessages`
+ * — the system prompt is re-seeded on load, and storing it would
+ * duplicate a growing preamble on every resume.
+ *
+ * Returns undefined when the error carries no transcript (any error
+ * that is not a failed turn misused here), so the caller can fall
+ * back to what it had rather than saving something wrong.
+ */
+export function failedTurnMessages(error: unknown): ChatMessage[] | undefined {
+  const failed = error as Partial<FailedTurnError> | null;
+  if (!failed || failed.name !== "FailedTurnError" || !Array.isArray(failed.messages)) {
+    return undefined;
+  }
+  return forStorage(failed.messages);
 }

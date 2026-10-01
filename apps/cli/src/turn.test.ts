@@ -11,12 +11,14 @@ import {
   seedSystemPrompt,
   forStorage,
   cancelledTurnMessages,
+  failedTurnMessages,
   defaultSystemPrompt,
   INTERRUPT_MARKER,
+  FAILED_MARKER,
   PROVIDER_PROMPT_FLOOR_CHARS,
   promptClearsProviderFloor,
 } from "./turn.js";
-import { AbortedTurnError, type ChatMessage } from "@actor0/harness";
+import { AbortedTurnError, FailedTurnError, type ChatMessage } from "@actor0/harness";
 import { createToolHost, resolveShell } from "./tools.js";
 import { applyEvent, initialConversation } from "./conversation.js";
 
@@ -767,6 +769,44 @@ test("cancelledTurnMessages rejects anything that is not an abort carrying a tra
   assert.equal(cancelledTurnMessages({ name: "AbortedTurnError", messages: "not an array" }), undefined);
   assert.equal(
     cancelledTurnMessages(Object.assign(new Error("no transcript"), { name: "AbortedTurnError" })),
+    undefined,
+  );
+});
+
+test("failedTurnMessages adopts the harness transcript and strips the prompt", () => {
+  const error = new FailedTurnError(
+    [
+      { role: "system", content: "the seeded prompt" },
+      { role: "user", content: "go" },
+      { role: "assistant", content: `part\n\n${FAILED_MARKER}` },
+    ],
+    "part",
+    new Error("connection reset"),
+  );
+  assert.deepEqual(failedTurnMessages(error), [
+    { role: "user", content: "go" },
+    { role: "assistant", content: `part\n\n${FAILED_MARKER}` },
+  ]);
+  // The caller shows this message, so it has to be the failure's
+  // own — not a generic "turn failed" that says nothing.
+  assert.equal(error.partialText, "part");
+  assert.match(error.message, /connection reset/);
+});
+
+test("failedTurnMessages rejects anything that is not a failed turn carrying a transcript", () => {
+  // A mislabeled error must not let a caller save the wrong history.
+  assert.equal(failedTurnMessages(undefined), undefined);
+  assert.equal(failedTurnMessages(null), undefined);
+  assert.equal(failedTurnMessages(new Error("something else")), undefined);
+  assert.equal(failedTurnMessages({ name: "FailedTurnError", messages: "not an array" }), undefined);
+  assert.equal(
+    failedTurnMessages(Object.assign(new Error("no transcript"), { name: "FailedTurnError" })),
+    undefined,
+  );
+  // An abort is not a failure: the two recoveries stay distinct, so
+  // an aborted turn is never adopted through this door.
+  assert.equal(
+    failedTurnMessages(new AbortedTurnError([{ role: "user", content: "go" }], "")),
     undefined,
   );
 });

@@ -4,11 +4,14 @@ import {
   AbortedTurnError,
   CANCELLED_TOOL_RESULT,
   DEFAULT_HARNESS_CONFIG,
+  FAILED_MARKER,
   INTERRUPT_MARKER,
   RETRY_JITTER_RATIO,
+  FailedTurnError,
   retryDelay,
   runAgentTurn,
   runModelRound,
+  withFailedMarker,
   withInterruptMarker,
 } from "./harness.js";
 import { ModelTransportError } from "./model-client.js";
@@ -371,6 +374,136 @@ test("a cancel mid-tool is reported to the host, and only for the call that was 
 
   // And the transcript still answers both calls, or a resume is rejected.
   assert.ok(observed.some((event) => event.type === "tool_start"));
+});
+
+test("a turn that fails after a finished round hands back the exchange", async () => {
+  // Round one ran a tool for real; round two's request dies with a
+  // non-retriable transport error. The rounds before the failure are
+  // facts — the tool ran, its result is already in the model's
+  // context — so the error has to carry them, the same way an abort
+  // does. Without that, a caller that throws the error away rewinds
+  // the session to before the turn, and a resume re-does work the
+  // disk already has.
+  const running: ToolCall = { id: "call_1", type: "function", function: { name: "inspect", arguments: "{}" } };
+  const definition: ToolDefinition = {
+    type: "function",
+    function: { name: "inspect", description: "inspect", parameters: { type: "object" } },
+  };
+  const toolHost: ToolHost = {
+    definitions: () => [definition],
+    async execute() {
+      return "observed";
+    },
+  };
+  const model = scriptedModel([
+    await events({ type: "tool_call", tool_calls: [running] }, { type: "done" }),
+    // Round two: a fragment streams, then the endpoint gives up.
+    (async function* () {
+      yield { type: "token", delta: "half an answer" };
+      throw new ModelTransportError("connection reset", false);
+    })(),
+  ]);
+
+  let thrown: unknown;
+  await assert.rejects(
+    runAgentTurn({
+      model,
+      messages: [],
+      input: "go",
+      toolHost,
+      signal: new AbortController().signal,
+      config: fastConfig,
+    }),
+    (error: unknown) => {
+      thrown = error;
+      return true;
+    },
+  );
+
+  const error = thrown as FailedTurnError;
+  assert.ok(error instanceof FailedTurnError);
+  assert.equal(error.partialText, "half an answer");
+  // The caller shows this message, so it has to say what the
+  // endpoint said — not that a turn failed.
+  assert.match(error.message, /connection reset/);
+  // The finished round keeps its call and its answer, the fragment
+  // is marked failed, and the two never mix: a resume reads round
+  // one as done and round two as cut short.
+  assert.deepEqual(error.messages, [
+    { role: "user", content: "go" },
+    { role: "assistant", content: "", tool_calls: [running] },
+    { role: "tool", content: "observed", tool_call_id: "call_1", name: "inspect" },
+    { role: "assistant", content: `half an answer\n\n${FAILED_MARKER}` },
+  ]);
+});
+
+test("a turn that fails before anything streamed still records the question", async () => {
+  // The smallest failure — the very first request is refused. The
+  // question the user asked has to survive it: without a transcript,
+  // a restart cannot even show that the question was asked.
+  const model: ModelClient = {
+    // eslint-disable-next-line require-yield -- the point of this model is that it throws before it can yield anything
+    async *stream() {
+      throw new ModelTransportError("model not found", false);
+    },
+  };
+  let thrown: unknown;
+  await assert.rejects(
+    runAgentTurn({
+      model,
+      messages: [],
+      input: "go",
+      signal: new AbortController().signal,
+      config: fastConfig,
+    }),
+    (error: unknown) => {
+      thrown = error;
+      return true;
+    },
+  );
+  const error = thrown as FailedTurnError;
+  assert.ok(error instanceof FailedTurnError);
+  assert.deepEqual(error.messages, [
+    { role: "user", content: "go" },
+    { role: "assistant", content: FAILED_MARKER },
+  ]);
+});
+
+test("a stream error that is not a transport error still carries its streamed text", async () => {
+  // Anything a stream throws is wrapped in a ModelTransportError —
+  // and the wrapper is a new object, so the fragment has to be moved
+  // onto it, or the text the user watched stream is lost even though
+  // the harness carries it out.
+  const model: ModelClient = {
+    async *stream() {
+      yield { type: "token", delta: "streamed then" };
+      throw new TypeError("cannot read properties of undefined");
+    },
+  };
+  let thrown: unknown;
+  await assert.rejects(
+    runAgentTurn({
+      model,
+      messages: [],
+      input: "go",
+      signal: new AbortController().signal,
+      config: fastConfig,
+    }),
+    (error: unknown) => {
+      thrown = error;
+      return true;
+    },
+  );
+  const error = thrown as FailedTurnError;
+  assert.ok(error instanceof FailedTurnError);
+  assert.equal(error.partialText, "streamed then");
+  assert.match(error.message, /cannot read properties/i);
+});
+
+test("the failure marker never fabricates text", () => {
+  assert.equal(withFailedMarker("partly done"), `partly done\n\n${FAILED_MARKER}`);
+  assert.equal(withFailedMarker("  "), FAILED_MARKER);
+  assert.equal(withFailedMarker(""), FAILED_MARKER);
 });
 
 test("the interrupt marker never fabricates text and never doubles up", () => {

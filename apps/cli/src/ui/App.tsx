@@ -11,7 +11,7 @@ import {
   withUserInput,
   type ConversationState,
 } from "../conversation.js";
-import { cancelledTurnMessages, forStorage, runTurn, usageSummary } from "../turn.js";
+import { cancelledTurnMessages, failedTurnMessages, forStorage, runTurn, usageSummary } from "../turn.js";
 import { newSessionId, saveSession } from "../session.js";
 import { parseSlash, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
@@ -226,15 +226,22 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           const tokens = usageSummary(result.usage);
           if (tokens) notice("info", tokens);
         } catch (error) {
-          // The harness hands the transcript back on abort (AbortedTurnError):
-          // the input, every finished round, honest answers for the calls the
-          // cancel cut short, and the partial answer marked interrupted.
-          // Adopting it is what makes a cancel survive a restart — without
+          // The harness hands the transcript back on abort (AbortedTurnError)
+          // and on any other turn failure (FailedTurnError): the input,
+          // every finished round, honest answers for the calls a cancel cut
+          // short, and the partial answer marked interrupted or failed.
+          // Adopting it is what makes the turn survive a restart — without
           // this, messagesRef still holds the state from before the turn and
           // the save below quietly rewinds the session to it, losing an
-          // exchange the user watched happen.
-          const cancelled = cancelledTurnMessages(error);
-          if (cancelled) messagesRef.current = cancelled;
+          // exchange the user watched happen. The save reads the live
+          // mirror, so the adoption has to advance it too: skipping that
+          // step is how the abort path once promised a restart-surviving
+          // cancel the TUI never actually delivered.
+          const recovered = cancelledTurnMessages(error) ?? failedTurnMessages(error);
+          if (recovered) {
+            messagesRef.current = recovered;
+            updateLive(recovered);
+          }
 
           if (controller.signal.aborted) {
             // Keep whatever streamed before the cancel — discarding it would
@@ -256,10 +263,19 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
               );
             });
           } else {
-            // The failed turn is thrown away, not saved — but the live region
-            // must still be cleared here, or the streamed text, the tool
-            // spinner and the status line freeze on screen above the error.
-            setConversation((state) => withNotice({ ...state, live: emptyLive() }, "error", (error as Error).message));
+            // A failed turn keeps its fragment on screen the way a cancel
+            // does: the text above the error is the part of the answer
+            // that made it out, and it is saved — marked failed — in the
+            // transcript adopted above. The live region must still be
+            // cleared here, or the streamed text, the tool spinner and
+            // the status line freeze on screen above the error.
+            setConversation((state) => {
+              const partial = state.live.text;
+              const kept: ConversationState = partial.trim()
+                ? { ...state, entries: [...state.entries, { kind: "assistant", text: partial, partial: true }] }
+                : state;
+              return withNotice({ ...kept, live: emptyLive() }, "error", (error as Error).message);
+            });
           }
         } finally {
           abortRef.current = null;

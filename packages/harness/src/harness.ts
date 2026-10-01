@@ -69,6 +69,20 @@ export function withInterruptMarker(text: string): string {
   return trimmedEnd ? `${trimmedEnd}\n\n${INTERRUPT_MARKER}` : INTERRUPT_MARKER;
 }
 
+/** Marker appended to an answer a failed turn cut short. */
+export const FAILED_MARKER = "[failed]";
+
+/**
+ * `text` with the failure marker appended, or the marker alone when
+ * the failure landed before anything streamed. The marker is what
+ * tells a resumed session that the text above it is a fragment of a
+ * failed attempt, not a completed answer the model stands behind.
+ */
+export function withFailedMarker(text: string): string {
+  const trimmedEnd = text.trimEnd();
+  return trimmedEnd ? `${trimmedEnd}\n\n${FAILED_MARKER}` : FAILED_MARKER;
+}
+
 /**
  * What a tool call that a cancel cut short is answered with.
  *
@@ -100,6 +114,33 @@ export class AbortedTurnError extends Error {
   ) {
     super("The operation was aborted");
     this.name = "AbortedTurnError";
+  }
+}
+
+/**
+ * Thrown when a turn failed for any reason other than a cancel: the
+ * endpoint refused the request, the stream died mid-answer, a retry
+ * budget ran out. Carries the transcript as the turn left it — the
+ * input, every finished round, and the partial answer marked failed
+ * — so a host can persist an exchange whose later rounds really
+ * happened. Without it, a mid-turn failure rewinds the conversation
+ * to before the turn: tool calls that ran and files that changed
+ * vanish from the saved session, and a resume replays them from zero
+ * as though they never happened. Claude Code yields the error into
+ * the conversation instead of rewinding, and so does this.
+ *
+ * The transcript is API-valid by construction (see `failedTurn`), so
+ * a host can save it as-is and the next request will be accepted.
+ */
+export class FailedTurnError extends Error {
+  constructor(
+    readonly messages: ChatMessage[],
+    /** What the failed attempt had streamed, without the marker. */
+    readonly partialText: string,
+    cause?: unknown,
+  ) {
+    super(cause === undefined ? "The turn failed" : errorMessage(cause), { cause });
+    this.name = "FailedTurnError";
   }
 }
 
@@ -256,18 +297,23 @@ async function runModelAttempt(
       usage,
     };
   } catch (error) {
-    if (outerSignal.aborted) {
-      // The attempt's streamed text dies here — the round loop above cannot
-      // see it — so it rides on the error to `abortTurn`, which puts it in the
-      // transcript the caller persists. Without this, the text the user
-      // watched stream would be the one thing the saved session loses.
-      (error as { attemptText?: string }).attemptText = attemptText;
-      throw error;
-    }
+    // The attempt's streamed text dies here — the round loop above cannot
+    // see it — so it rides on the error to whichever end consumes it:
+    // `abortTurn` for a cancel, `failedTurn` for any other failure.
+    // Without this, the text the user watched stream would be the one
+    // thing the saved session loses.
+    (error as { attemptText?: string }).attemptText = attemptText;
+    if (outerSignal.aborted) throw error;
     if (attemptText && isRetriable(error)) await emit(observer, { type: "reset", attemptText });
     if (isRetriable(error)) throw error;
     if (error instanceof ModelTransportError) throw error;
-    throw new ModelTransportError(errorMessage(error), false);
+    // The wrapper is a new object, so the fragment has to be moved onto
+    // it — or the text is lost even though the harness carries it out.
+    const wrapped = new ModelTransportError(errorMessage(error), false) as ModelTransportError & {
+      attemptText?: string;
+    };
+    wrapped.attemptText = attemptText;
+    throw wrapped;
   } finally {
     outerSignal.removeEventListener("abort", abortOuter);
     if (iterator?.return) await iterator.return();
@@ -313,7 +359,11 @@ export async function runAgentTurn(options: {
       // check, the backoff sleep, the stream itself. It still has to leave
       // through `abortTurn`, or the caller loses the transcript below.
       if (options.signal.aborted) abortTurn(messages, attemptTextOf(error), []);
-      throw error;
+      // So does every other failure. The rounds behind this one are real
+      // work that really happened; `failedTurn` keeps them and the
+      // streamed fragment instead of rewinding the session to the
+      // question the turn started from.
+      failedTurn(messages, attemptTextOf(error), error);
     }
     roundText = result.text;
     allUsage.push(...result.usage);
@@ -740,4 +790,34 @@ function abortTurn(messages: ChatMessage[], partialText: string, unanswered: Too
   }
   transcript.push({ role: "assistant", content: withInterruptMarker(partialText) });
   throw new AbortedTurnError(transcript, partialText);
+}
+
+/**
+ * Leave a failed turn the way the user watched it, not the way the
+ * code unwound.
+ *
+ * A turn that fails mid-flight has usually already done real work:
+ * tool calls that ran, files that changed, results that came back.
+ * Throwing the raw error instead would rewind the session to before
+ * the turn — the user's question included, if the failure came
+ * before the first round finished — and a restart would replay work
+ * that already happened. Claude Code yields the error into the
+ * conversation instead, and so does this: the partial answer is
+ * appended with a failure marker and the whole transcript rides out
+ * on the error, so a host can save exactly what happened.
+ *
+ * Unlike a cancel, nothing was interrupted mid-flight, so there are no
+ * unanswered calls to answer: the round loop catches only model
+ * failures, and a tool failure is recorded per-call as it happens.
+ *
+ * The result is API-valid by construction: no dangling call, no
+ * unanswered `tool_calls` — the shapes a provider rejects the whole
+ * request over.
+ */
+function failedTurn(messages: ChatMessage[], partialText: string, cause: unknown): never {
+  const transcript: ChatMessage[] = [
+    ...messages,
+    { role: "assistant", content: withFailedMarker(partialText) },
+  ];
+  throw new FailedTurnError(transcript, partialText, cause);
 }

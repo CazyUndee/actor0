@@ -409,8 +409,28 @@ export function isContextOverflow(message: string): boolean {
  * same shape must not be compacted around. Both spellings land here: a 400
  * whose body is the diagnosis, and an error frame inside a 200.
  */
-export function isContextOverflowError(error: unknown): error is ModelTransportError {
-  return error instanceof ModelTransportError && !error.retriable && isContextOverflow(error.message);
+/**
+ * A request the endpoint will never accept, however often it is
+ * sent — the one transport failure with a host-level recovery
+ * (compact the history and ask again), which is why this is a
+ * classifier and not just a message match.
+ *
+ * It also looks through a `FailedTurnError`: a turn that failed
+ * mid-flight wraps the transport error that ended it (see
+ * `failedTurn`), and without the unwrap every such failure reads
+ * as an unknown error, so the recovery never fires and a turn the
+ * endpoint merely refused rewinds the session instead of being
+ * asked again. That makes the return a plain boolean rather than
+ * a type predicate — in the wrapped case the error is a
+ * `FailedTurnError`, not the `ModelTransportError` the old
+ * signature claimed — and its one caller reads it as a gate.
+ */
+export function isContextOverflowError(error: unknown): boolean {
+  if (error instanceof ModelTransportError) {
+    return !error.retriable && isContextOverflow(error.message);
+  }
+  const wrapped = (error as { cause?: unknown } | null | undefined)?.cause;
+  return wrapped instanceof ModelTransportError && !wrapped.retriable && isContextOverflow(wrapped.message);
 }
 
 /** The in-stream error as a failure a person can act on. */

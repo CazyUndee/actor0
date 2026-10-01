@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { OpenAiCompatibleModel, type ModelClient } from "@actor0/harness";
+import { OpenAiCompatibleModel, ModelTransportError, FAILED_MARKER, type ModelClient } from "@actor0/harness";
 import { runPrintTurn } from "./print.js";
 import { loadSession } from "./session.js";
 import { sessionsDir } from "./paths.js";
@@ -126,6 +126,48 @@ test("a run against a restored session writes the exchange back", async () => {
   } finally {
     await close(server);
   }
+});
+
+test("a mid-turn failure prints what streamed and still persists the exchange", async () => {
+  // The headless twin of the TUI's adoption: a turn that fails
+  // after streaming a fragment must not rewind the session to the
+  // question. The fragment is printed (it is still the best answer
+  // there is) and saved, marked failed so a resume reads it as a
+  // cut-short attempt rather than an answer.
+  scratch();
+  const failing: ModelClient = {
+    async *stream() {
+      yield { type: "token" as const, delta: "half an answer" };
+      // Non-retriable on purpose: a retriable failure would spend
+      // the retry budget (and real backoff) before failing the same
+      // way, and the point here is the shape of the failure, not the
+      // retry policy.
+      throw new ModelTransportError("connection reset", false);
+    },
+  };
+  const { code, out } = await capture((out) =>
+    runPrintTurn({
+      prompt: "long question",
+      cwd: scratch(),
+      config,
+      messages: [],
+      session: { id: "2026-09-29T00-00-02-000Z", createdAt: "2026-09-29T00:00:02.000Z" },
+      client: failing,
+      out,
+    }),
+  );
+  assert.equal(code, 1, "a failed turn is a failure for the caller");
+  assert.equal(out, "half an answer\n");
+
+  const restored = loadSession("2026-09-29T00-00-02-000Z");
+  assert.ok(restored, "the session file must exist");
+  assert.deepEqual(
+    restored.messages.filter((m) => m.role !== "system"),
+    [
+      { role: "user", content: "long question" },
+      { role: "assistant", content: `half an answer\n\n${FAILED_MARKER}` },
+    ],
+  );
 });
 
 test("an interrupt prints what streamed before it and still persists the exchange", async () => {
