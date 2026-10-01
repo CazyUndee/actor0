@@ -333,6 +333,22 @@ about a directory nowhere in the reply, so the output depended on the
 tree rather than on the question. **An answer's shape must be a function
 of the question.**
 
+## A replacement is data, not a pattern
+
+`String.prototype.replace` reads `$$`, `$&`, `$'` and `` $` `` in a
+plain string *replacement* as its own syntax, even when the search is
+a plain string: `$$` collapses to one `$`, `$&` becomes the text that
+matched, `$'` the text after it. An `edit` built on it writes a shell
+script's `echo $$` as `echo $` and a regex's `$&` as whatever happened
+to match — silently, no error anywhere, and the model cannot see the
+difference between what it asked for and what landed. Claude Code's
+edit wraps its replacement in `() => replace` for exactly this reason
+(`applyEditToFile` in `FileEditTool/utils.ts`); the plain form in its
+validation path only simulates content, it never writes a file. `edit`
+now goes through `split(before).join(after)`, which is literal by
+construction and, with exactly one occurrence, the same replacement.
+The tests write `$$`, `$&` and `$'` into a file and read it back.
+
 ## Behaviour worth knowing before changing it
 
 - A shell command has **no** default timeout, deliberately: a 120s default

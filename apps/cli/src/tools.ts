@@ -501,7 +501,16 @@ const editTool: CliTool = {
         `old_string appears ${occurrences} times in ${target}. Include more surrounding context to make it unique, or pass replace_all.`,
       );
     }
-    const updated = replaceAll ? content.split(before).join(after) : content.replace(before, after);
+    // The replacement is data, not a replacement pattern. `replace`
+    // with a plain string reads $$, $&, $' and $` in the new text as
+    // its own syntax and rewrites them — a shell script's `echo $$`
+    // would land as `echo $`, a regex's `$&` as the text that was
+    // matched, and the file would be wrong with no error anywhere.
+    // Splitting on the needle and joining on the new text inserts it
+    // verbatim, and in this branch there is exactly one occurrence, so
+    // the two are the same replacement. Claude Code's edit wraps its
+    // replacement in `() => replace` for the same reason.
+    const updated = content.split(before).join(after);
     const written = joinTextFile(bom, updated, crlf);
     await writeFile(target, written, "utf8");
     const changed = occurrences === 1 ? "1 occurrence" : `${occurrences} occurrences`;

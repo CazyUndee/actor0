@@ -431,6 +431,54 @@ test("replace_all is the way to say you meant all of them", async () => {
   assert.equal(readFileSync(join(dir, "a.ts"), "utf8"), "y();\ny();\n");
 });
 
+test("a $$ in the replacement lands as two dollars, not one", async () => {
+  // `String.replace` reads a plain string replacement as its own
+  // mini-language: $$ means "a literal dollar", so a model writing a
+  // shell script's `echo $$` would have the file land as `echo $`
+  // with no error anywhere. The replacement is data. Claude Code's
+  // edit wraps its replacement in `() => replace` for the same
+  // reason (applyEditToFile in FileEditTool/utils.ts).
+  const dir = scratch();
+  writeFileSync(join(dir, "s.sh"), "echo one\n");
+  await host(dir).execute(
+    call("edit", { path: "s.sh", old_string: "one", new_string: "$$" }),
+    signal,
+  );
+  assert.equal(readFileSync(join(dir, "s.sh"), "utf8"), "echo $$\n");
+});
+
+test("$& in the replacement is not the matched text", async () => {
+  const dir = scratch();
+  writeFileSync(join(dir, "re.ts"), "const a = 1;\nconst b = 2;\n");
+  await host(dir).execute(
+    call("edit", { path: "re.ts", old_string: "const b = 2;", new_string: "const b = $&;" }),
+    signal,
+  );
+  assert.equal(readFileSync(join(dir, "re.ts"), "utf8"), "const a = 1;\nconst b = $&;\n");
+});
+
+test("$' in the replacement is not the text after the match", async () => {
+  const dir = scratch();
+  writeFileSync(join(dir, "f.txt"), "a b c\n");
+  await host(dir).execute(
+    call("edit", { path: "f.txt", old_string: "b", new_string: "$'" }),
+    signal,
+  );
+  assert.equal(readFileSync(join(dir, "f.txt"), "utf8"), "a $' c\n");
+});
+
+test("replace_all keeps a literal $$ too", async () => {
+  // The split/join path was always literal; pinned so the two paths
+  // cannot drift apart again.
+  const dir = scratch();
+  writeFileSync(join(dir, "s.sh"), "echo one one\n");
+  await host(dir).execute(
+    call("edit", { path: "s.sh", old_string: "one", new_string: "$$", replace_all: true }),
+    signal,
+  );
+  assert.equal(readFileSync(join(dir, "s.sh"), "utf8"), "echo $$ $$\n");
+});
+
 // --- shell ------------------------------------------------------------------
 
 /**
