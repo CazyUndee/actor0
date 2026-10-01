@@ -793,7 +793,7 @@ const shellTool: CliTool = {
     },
   },
   label: (args) => String(args.command ?? "").replace(/\s+/g, " ").trim(),
-  hint: "everything else — git, listing, test runners, package managers",
+  hint: "everything else — git, test runners, package managers",
   async run(args, ctx) {
     const command = requireString(args, "command");
     const shell = resolveShell();
@@ -940,12 +940,19 @@ type GrepMode = "files_with_matches" | "content" | "count";
  * glob with its stars left in place, because the dot in `*.ts` has to stay a
  * dot.
  *
- * `wholePath` decides whether the result is anchored. A glob with no slash in
- * it is matched against the file name as well as the path, which is what
- * ripgrep and gitignore both do, and it is the only reading under which the
- * `*.ts` that everybody actually writes reaches `apps/cli/ui/parts.tsx`.
+ * The result is always anchored, because both callers hand it a whole name or
+ * a whole path and ask whether that is the thing. It was not, and the
+ * unanchored form quietly matched inside longer names: `*.ts` included
+ * `parts.tsx`, and a test pinned that as correct, so a model asking for the
+ * TypeScript was handed the JSX too.
+ *
+ * Whether a slashless glob is matched against the file name as well as the
+ * path is the caller's business, and it is why the caller's second pattern
+ * exists at all. That is the reading ripgrep and gitignore both use, and the
+ * only one under which the `*.ts` that everybody actually writes reaches
+ * `apps/cli/ui/parts.tsx`.
  */
-function globToRegExp(glob: string, wholePath: boolean): RegExp {
+function globToRegExp(glob: string): RegExp {
   let out = "";
   for (let i = 0; i < glob.length; i += 1) {
     const char = glob[i]!;
@@ -969,7 +976,7 @@ function globToRegExp(glob: string, wholePath: boolean): RegExp {
     }
     out += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
-  return new RegExp(wholePath ? `^${out}$` : out);
+  return new RegExp(`^${out}$`);
 }
 
 /** One file to search, and the path to show the model for it. */
@@ -1087,9 +1094,9 @@ const grepTool: CliTool = {
     }
 
     const glob = optionalText(args, "include");
-    const wholePath = glob === undefined ? undefined : globToRegExp(glob, true);
+    const wholePath = glob === undefined ? undefined : globToRegExp(glob);
     const fileNameOnly =
-      glob !== undefined && !glob.includes("/") ? globToRegExp(glob, false) : undefined;
+      glob !== undefined && !glob.includes("/") ? globToRegExp(glob) : undefined;
     const inScope = (rel: string): boolean => {
       if (!wholePath) return true;
       if (wholePath.test(rel)) return true;
@@ -1244,7 +1251,234 @@ const grepTool: CliTool = {
   },
 };
 
-const TOOLS: CliTool[] = [readTool, writeTool, editTool, grepTool, shellTool];
+// --- glob -------------------------------------------------------------------
+
+/** Results before the answer is cut, unless the caller asked for more. */
+const DEFAULT_GLOB_LIMIT = 100;
+
+/** One thing a walk found. `rel` is bare; the slash is added when printing. */
+type Entry = { abs: string; rel: string; dir: boolean };
+
+/**
+ * The directory a pattern can only match inside.
+ *
+ * `apps/cli/*.ts` has an answer only under `apps/cli`, so the walk starts
+ * there and the rest of the tree is never touched — on a repository with a
+ * build output in it that is the difference between a few hundred directories
+ * and a hundred thousand. This is the one part of Claude Code's implementation
+ * worth carrying over, and it carries over whole because it is pure string
+ * work: it reads the pattern, not the filesystem.
+ *
+ * It narrows the walk and nothing else. The pattern is still matched whole,
+ * against the path the model is shown, because matching the shortened form
+ * would turn `apps/cli/*.ts` into a match for `cli/*.ts` anywhere in the tree.
+ */
+function staticBase(pattern: string): string {
+  const special = pattern.search(/[*?[{]/);
+  const head = special === -1 ? pattern : pattern.slice(0, special);
+  const cut = Math.max(head.lastIndexOf("/"), head.lastIndexOf("\\"));
+  if (cut === -1) return ".";
+  return pattern.slice(0, cut) || "/";
+}
+
+/**
+ * Listing order: by path, case-insensitively, with the exact path as a
+ * tie-break.
+ *
+ * Not by modification time, which is what Claude Code does, and the reason is
+ * that a listing is a set the model then reasons over and narrows. Sorted by
+ * time, the same call returns a different order on the next run — two files
+ * swapped places because something touched them — and there is no way for the
+ * model to tell a reordering from a different answer. Case-insensitive first
+ * because a plain code-unit sort puts `README.md` above `apps/` and `bin/`
+ * above `Commands/`, which is not how anyone reads a directory.
+ */
+function byPath(a: string, b: string): number {
+  const folded = a.toLowerCase().localeCompare(b.toLowerCase());
+  return folded !== 0 ? folded : a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * What a listing owes the model when it did not look at everything.
+ *
+ * The same rule as a search, and for the same reason: a capped list handed
+ * over as if it were complete is how a model concludes a file does not exist
+ * when it was below the cut. So the total is stated whenever the list is short
+ * of it, and the number walked is stated when nothing matched at all — those
+ * are different sentences and the model acts on them differently.
+ */
+function globScope(walked: number, matched: number, limited: boolean): string {
+  if (matched === 0) {
+    const seen = `${walked.toLocaleString("en-US")} entr${walked === 1 ? "y" : "ies"}`;
+    return `[walked ${seen} under the search root, none matched]`;
+  }
+  const bits = [`${matched.toLocaleString("en-US")} path${matched === 1 ? "" : "s"} matched`];
+  if (limited) bits.push(`stopped at the ${MAX_SEARCH_FILES.toLocaleString("en-US")}-entry walk limit`);
+  return `[${bits.join(", ")}]`;
+}
+
+const globTool: CliTool = {
+  definition: {
+    type: "function",
+    function: {
+      name: "glob",
+      description:
+        "List files and directories by name pattern, without reading any of them. Prefer this to ls, dir, fd or find in the shell: it is the same listing on every platform, it needs no quoting, and it starts the walk at the fixed part of the pattern instead of at the whole tree. Directories come back with a trailing slash, so a bare name lists what is in a directory. A doubled star crosses directories and a single star does not; a pattern with no slash in it also matches the file name, so *.ts reaches apps/cli/ui/parts.tsx. Results are sorted by path, and the number matched is always reported, so a capped list cannot read as a complete one. Skips .git and node_modules.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: {
+            type: "string",
+            description: "Glob to match paths against, e.g. \"*.ts\", \"**/*.test.ts\" or \"apps/cli/src\".",
+          },
+          path: { type: "string", description: "A directory to search. Defaults to the whole working directory." },
+          head_limit: { type: "number", description: `Stop after this many paths. Defaults to ${DEFAULT_GLOB_LIMIT}.` },
+        },
+        required: ["pattern"],
+      },
+    },
+  },
+  hint: "listing files by name",
+  label: (args) => `glob ${String(args.pattern ?? "")}`,
+  async run(args, ctx) {
+    const pattern = requireString(args, "pattern");
+    const scope = optionalText(args, "path") || ".";
+    const root = await within(ctx.cwd, scope);
+
+    const asked = Math.floor(Number(args.head_limit ?? DEFAULT_GLOB_LIMIT));
+    const limit = Number.isFinite(asked) && asked > 0 ? asked : DEFAULT_GLOB_LIMIT;
+
+    // Real paths, for the same reason `grep` resolves them: `within` resolves
+    // and `ctx.cwd` does not, so a display path built from the raw cwd is a
+    // chain of `../..` on any tree whose root is a link.
+    const base = await realpath(ctx.cwd).catch(() => ctx.cwd);
+    const searchRoot = staticBase(pattern);
+    const start = await within(root, searchRoot);
+    const startIsDirectory = await stat(start)
+      .then((info) => info.isDirectory())
+      .catch(() => {
+        throw new Error(
+          `${pattern} names a directory that does not exist: ${searchRoot}`,
+        );
+      });
+    if (!startIsDirectory) {
+      throw new Error(
+        `${searchRoot} is a file, not a directory, so ${pattern} has nothing to list. `
+        + `Use read for a file.`,
+      );
+    }
+
+    // Directories are matched on their bare path and printed with a slash. The
+    // slash is a display convention and nothing else: `apps/cli` asked for as
+    // a path is the directory, and an anchored match against `apps/cli/`
+    // misses every directory in the tree.
+    const bare = pattern.replace(/\/+$/, "");
+    const wholePath = globToRegExp(bare);
+    const fileNameOnly = bare.includes("/") ? undefined : globToRegExp(bare);
+    const inScope = (rel: string): boolean => {
+      if (wholePath.test(rel)) return true;
+      if (!fileNameOnly) return false;
+      const slash = rel.lastIndexOf("/");
+      return fileNameOnly.test(slash === -1 ? rel : rel.slice(slash + 1));
+    };
+
+    const found: string[] = [];
+    let walked = 0;
+    let matched = 0;
+    let limited = false;
+    /** Directories the walk listed but did not look inside. */
+    const skipped = new Set<string>();
+
+    // The walk starts inside the pattern's own directory, so that directory is
+    // never yielded to itself and `glob("apps/cli")` finds nothing — which is
+    // the most natural listing there is, and the one a model reaches for first
+    // when it has just been told where a file is. It is tested here instead.
+    const selfRel = relative(base, start).split(sep).join("/");
+    if (selfRel !== "" && inScope(selfRel)) {
+      matched += 1;
+      found.push(`${selfRel}/`);
+      if (start !== base && SKIP_DIRECTORIES.has(selfRel.split("/").pop() ?? "")) {
+        skipped.add(`${selfRel}/`);
+      }
+    }
+
+    const walk = async function* (dir: string): AsyncGenerator<Entry> {
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          // Listed, and then not descended into. A search can hide a directory
+          // with nothing lost: the answer is a match list, and a dependency
+          // tree in it is noise. A listing cannot hide one, because the listing
+          // is the answer — and one that omits `node_modules/` tells the model
+          // the tree has no such thing. So the skip stops the descent, not the
+          // existence, and the note below is what stops `node_modules/` from
+          // reading as an empty folder.
+          if (SKIP_DIRECTORIES.has(entry.name)) skipped.add(`${entry.name}/`);
+          else yield* walk(full);
+          // A directory is a result in its own right: a bare name listing is
+          // how a model asks what is in a directory, and a listing with no
+          // directories in it cannot answer that.
+          yield { abs: full, rel: relative(base, full).split(sep).join("/"), dir: true };
+          continue;
+        }
+        // A symlink can point at its own ancestor, so following one turns a
+        // listing into an infinite walk, and it can also step outside the
+        // directory the search was confined to.
+        if (!entry.isFile()) continue;
+        yield { abs: full, rel: relative(base, full).split(sep).join("/"), dir: false };
+      }
+    };
+
+    for await (const entry of walk(start)) {
+      walked += 1;
+      if (walked > MAX_SEARCH_FILES) {
+        limited = true;
+        break;
+      }
+      if (!inScope(entry.rel)) continue;
+      matched += 1;
+      found.push(entry.dir ? `${entry.rel}/` : entry.rel);
+    }
+
+    if (matched === 0) {
+      if (walked === 0) {
+        return (
+          `[walked 0 entries] there is nothing under ${scope}, so nothing can match ` +
+          `${pattern}. Check that path names a real directory.`
+        );
+      }
+      return `No path matches ${pattern}. ${globScope(walked, matched, limited)}.`;
+    }
+
+    found.sort(byPath);
+    const shown = found.slice(0, limit);
+    const notes: string[] = [];
+    if (matched > shown.length) {
+      notes.push(
+        `[showing ${shown.length} of ${matched.toLocaleString("en-US")} matches; narrow the ` +
+          `pattern, or set path to the subtree you meant]`,
+      );
+    }
+    // Only the ones that are actually in the answer. A note about a
+    // directory this result does not contain makes the output depend on the
+    // rest of the tree rather than on the question, so `glob("README.md")`
+    // would come back with a footnote about node_modules.
+    const listed = [...skipped].filter((path) => shown.includes(path)).sort(byPath);
+    if (listed.length > 0) {
+      notes.push(
+        `[listed but not searched: ${listed.join(", ")}; `
+          + `set path to one of them to look inside]`,
+      );
+    }
+    if (limited) notes.push(globScope(walked, matched, true));
+
+    const body = shown.join("\n");
+    return notes.length > 0 ? withNotice(body, notes.join("\n")) : body;
+  },
+};
+
+const TOOLS: CliTool[] = [readTool, writeTool, editTool, grepTool, globTool, shellTool];
 
 /**
  * How many tools the CLI offers, for the prompt to count out loud.

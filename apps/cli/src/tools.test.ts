@@ -55,11 +55,11 @@ test("an approval callback, if one is passed anyway, is never consulted", async 
   assert.equal(readFileSync(join(dir, "out.txt"), "utf8"), "data");
 });
 
-test("the five tools are advertised, and nothing else", () => {
+test("the six tools are advertised, and nothing else", () => {
   const names = createToolHost({ cwd: scratch() })
     .definitions()
     .map((d) => d.function.name);
-  assert.deepEqual(names.sort(), ["edit", "grep", "read", "shell", "write"]);
+  assert.deepEqual(names.sort(), ["edit", "glob", "grep", "read", "shell", "write"]);
   for (const definition of createToolHost({ cwd: scratch() }).definitions()) {
     assert.equal(definition.type, "function");
     assert.ok(definition.function.description.length > 10, `${definition.function.name} needs a real description`);
@@ -69,7 +69,7 @@ test("the five tools are advertised, and nothing else", () => {
 
 test("every tool verb in the prompt is a real tool", () => {
   // A tool named in the system prompt but absent from the host is a prompt lie.
-  for (const name of ["read", "write", "edit", "grep", "shell"]) {
+  for (const name of ["read", "write", "edit", "grep", "glob", "shell"]) {
     assert.ok(host(scratch()).definitions().some((d) => d.function.name === name), `missing ${name}`);
   }
 });
@@ -883,7 +883,7 @@ test("paths inside the working directory are fine, however they are spelled", as
 
 test("an unknown tool throws and lists what is available", async () => {
   await assert.rejects(() => host(scratch()).execute(call("rm_rf", {}), signal), /unknown tool "rm_rf"/);
-  await assert.rejects(() => host(scratch()).execute(call("rm_rf", {}), signal), /read, write, edit, grep, shell/);
+  await assert.rejects(() => host(scratch()).execute(call("rm_rf", {}), signal), /read, write, edit, grep, glob, shell/);
 });
 
 test("malformed arguments throw rather than being silently ignored", async () => {
@@ -1120,7 +1120,16 @@ test("an include glob with no slash matches the file name, so *.ts works", async
   // nothing at all, and the search then reports "nothing was searched".
   assert.equal(
     await grep(fixture(), { pattern: "fitTail", include: "*.ts" }),
-    ["apps/cli/ui/parts.test.ts", "apps/cli/ui/parts.tsx"].join("\n"),
+    "apps/cli/ui/parts.test.ts",
+  );
+  // And it stops at the end of the name. Unanchored, *.ts also matched
+  // parts.tsx, and this test pinned that as correct — so a model that asked
+  // for the TypeScript was handed the JSX too, with no way to tell which
+  // of the two it had been given.
+  assert.match(
+    await grep(fixture(), { pattern: "fitTail", include: "*.tsx" }),
+    /parts\.tsx/,
+    "a glob that spells the extension out still reaches the file",
   );
 });
 
@@ -1198,4 +1207,178 @@ test("grep will not leave the working directory", async () => {
 
 test("grep is a real tool the prompt can name", () => {
   assert.ok(host(scratch()).definitions().some((d) => d.function.name === "grep"));
+});
+// --- glob -------------------------------------------------------------------
+
+const glob = (dir: string, args: Record<string, unknown>): Promise<string> =>
+  host(dir).execute(call("glob", args), signal);
+
+test("glob lists a directory rather than reporting nothing", async () => {
+  // The first version of this returned `No path matches apps/cli` for a
+  // directory that was right there, and it did so for two independent reasons:
+  // the trailing slash is a display convention that had leaked into matching,
+  // and the walk starts inside the pattern's own directory, so that directory
+  // is never yielded to itself. The bare name is the query a model reaches for
+  // first after being told where something is, so it has to work.
+  assert.equal(await glob(fixture(), { pattern: "apps/cli/ui" }), "apps/cli/ui/");
+  assert.equal(await glob(fixture(), { pattern: "README.md" }), "README.md");
+});
+
+test("a directory carries a trailing slash, so one level is distinguishable from a tree", async () => {
+  assert.deepEqual((await glob(fixture(), { pattern: "apps/*" })).split("\n"), ["apps/cli/"]);
+  // A file at the same level is bare, so `apps/*` cannot be mistaken for a
+  // list of files that happens to live in a directory.
+  assert.deepEqual((await glob(fixture(), { pattern: "*.md" })).split("\n"), ["README.md"]);
+});
+
+test("a pattern with no slash in it matches the file name, at any depth", async () => {
+  // The `*.ts` that everybody writes has to reach apps/cli/ui/parts.tsx, or the
+  // tool is worse than the shell round trip it exists to remove.
+  assert.deepEqual((await glob(fixture(), { pattern: "*.ts" })).split("\n"), [
+    "apps/cli/ui/parts.test.ts",
+  ]);
+  assert.deepEqual((await glob(fixture(), { pattern: "*.tsx" })).split("\n"), [
+    "apps/cli/ui/parts.tsx",
+  ]);
+});
+
+test("a single star stays in one directory and a double star crosses", async () => {
+  // The two stars are not interchangeable, and the difference is the only way
+  // to ask for a shallow listing — which is what "what is in this directory"
+  // means.
+  assert.match(
+    await glob(fixture(), { pattern: "apps/cli/*.ts" }),
+    /^No path matches/,
+    "a single star reached down into ui/, where no .ts file sits directly above it",
+  );
+  assert.deepEqual((await glob(fixture(), { pattern: "apps/cli/ui/*.ts" })).split("\n"), [
+    "apps/cli/ui/parts.test.ts",
+  ]);
+  assert.deepEqual((await glob(fixture(), { pattern: "apps/**/*.ts" })).split("\n"), [
+    "apps/cli/ui/parts.test.ts",
+  ]);
+});
+
+test("the walk starts at the pattern's fixed part instead of at the root", async () => {
+  // `apps/cli/src/*.ts` can only be answered under apps/cli/src, so the rest of
+  // the tree is never read. A missing fixed part is therefore an error naming
+  // it, not a walk that finds nothing — which is the difference between "there
+  // is no such directory" and "no file matched", and the model acts on them
+  // differently.
+  await assert.rejects(
+    () => glob(fixture(), { pattern: "nope/*.ts" }),
+    /directory that does not exist: nope/,
+  );
+  // Scoped by `path`, the fixed part is relative to that path, not the root.
+  await assert.rejects(
+    () => glob(fixture(), { pattern: "nope/*.ts", path: "apps/cli" }),
+    /directory that does not exist: nope/,
+  );
+});
+
+test("a skipped directory is listed, not hidden, and the note says why", async () => {
+  const out = await glob(fixture(), { pattern: "*" });
+  // Listed, because the directory is there and a listing that omits it tells
+  // the model the tree has no such thing. Not descended, because that is the
+  // point of the skip — and the note is what separates the two, so that
+  // `node_modules/` does not read as an empty folder.
+  assert.match(out, /^node_modules\/$/m, "node_modules was hidden from the listing");
+  assert.match(out, /^\.git\/$/m, ".git was hidden from the listing");
+  assert.match(out, /listed but not searched: [^[]*node_modules\//);
+  assert.ok(!out.includes("left-pad"), "the walk went inside a directory it said it skipped");
+  // Asked for by path it is searched, exactly as grep does it: the skip is
+  // about not descending uninvited, not about refusing.
+  assert.equal(
+    await glob(fixture(), { pattern: "*.js", path: "node_modules/left-pad" }),
+    "node_modules/left-pad/index.js",
+  );
+});
+
+test("the skip note only appears for a directory this answer contains", async () => {
+  // Otherwise the output depends on the rest of the tree rather than on the
+  // question: asking for one file came back with a footnote about a directory
+  // that was nowhere in the result.
+  assert.equal(
+    await glob(fixture(), { pattern: "README.md" }),
+    "README.md",
+    "an unrelated skipped directory leaked into the answer",
+  );
+});
+
+test("a symlinked directory is neither listed nor followed", async () => {
+  // A link to an ancestor turns a listing into an infinite walk, and one that
+  // points outward steps outside the directory the search was confined to.
+  const dir = fixture();
+  symlinkSync(join(dir, "apps"), join(dir, "loop"), "dir");
+  const out = await glob(dir, { pattern: "*" });
+  assert.ok(!out.includes("loop"), "the link was listed as a directory");
+  assert.ok(out.includes("apps/cli/"), "but the real tree is still there");
+});
+
+test("glob scoped to a subdirectory still reports paths the model can read", async () => {
+  // The paths have to come out relative to the working directory even when the
+  // walk was rooted somewhere else, or `read` cannot open them. This is the
+  // same trap `grep` has: `within` resolves paths and `ctx.cwd` does not, so a
+  // display path built from the raw cwd is a chain of `../..` on a temp dir.
+  const out = await glob(fixture(), { pattern: "*.ts", path: "apps/cli/ui" });
+  assert.deepEqual(out.split("\n"), ["apps/cli/ui/parts.test.ts"]);
+  assert.ok(!out.includes(".."), `the path is not readable from the working directory: ${out}`);
+});
+
+test("a capped listing says how many matched, so it cannot read as complete", async () => {
+  // A short list handed over as if it were the whole tree is how a model
+  // concludes a file does not exist when it was below the cut. The count is
+  // the difference between "those are the files" and "those are the first
+  // files", and it is the only channel the model has.
+  const out = await glob(fixture(), { pattern: "*", head_limit: 2 });
+  assert.equal(out.split("\n").filter((line) => line !== "" && !line.startsWith("[")).length, 2);
+  assert.match(out, /showing 2 of \d+ matches/);
+});
+
+test("an empty listing says how much was walked", async () => {
+  // "Nothing matches" and "I looked and found nothing to look at" are
+  // different facts, and the second one is what a model needs when the tree is
+  // not what it assumed.
+  assert.match(await glob(fixture(), { pattern: "*.nomatch" }), /walked \d+ entries/);
+  await assert.rejects(
+    () => glob(fixture(), { pattern: "*", path: "node_modules/left-pad/deeper" }),
+    /directory that does not exist/,
+  );
+});
+
+test("the listing is sorted by path, case-insensitively, not by modification time", async () => {
+  // Sorted by time — which is what Claude Code does — the same call returns a
+  // different order on the next run, and the model cannot tell a reordering
+  // from a different answer. A plain code-unit sort would put README.md above
+  // apps/, which is not how anyone reads a directory.
+  const dir = fixture();
+  writeFileSync(join(dir, "zebra.ts"), "z");
+  writeFileSync(join(dir, "Alpha.ts"), "a");
+  writeFileSync(join(dir, "beta.ts"), "b");
+  assert.deepEqual((await glob(dir, { pattern: "*.ts" })).split("\n"), [
+    "Alpha.ts",
+    "apps/cli/ui/parts.test.ts",
+    "beta.ts",
+    "zebra.ts",
+  ]);
+});
+
+test("glob will not leave the working directory", async () => {
+  await assert.rejects(
+    () => glob(fixture(), { pattern: "../*" }),
+    /outside|within|working directory/i,
+  );
+});
+
+test("a path that is a file is told which tool to use instead", async () => {
+  // Listing a file is not a question `glob` can answer, and an empty result
+  // would read as "no such file" — so it names the tool that can.
+  await assert.rejects(
+    () => glob(fixture(), { pattern: "main.ts", path: "README.md" }),
+    /Use read for a file/,
+  );
+});
+
+test("glob is a real tool the prompt can name", async () => {
+  assert.ok(host(scratch()).definitions().some((d) => d.function.name === "glob"));
 });

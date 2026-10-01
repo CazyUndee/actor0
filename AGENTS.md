@@ -219,13 +219,16 @@ sized to its content, so it is checked against `columns` because what it
 must not exceed is the terminal. Both are right, and mixing them up is
 the bug.
 
-## Adding a tool touches four places, and two of them are tripwires
+## Adding a tool touches five places, and three of them are tripwires
 
 `grep` was the fifth tool. Registering it was one line in the `TOOLS` array;
 everything else was found by a test failing and is easy to miss:
 
 1. **`TOOLS`** in `tools.ts`. The array order *is* the order the
-   unknown-tool error lists, so a test asserts that whole string.
+   unknown-tool error lists, so `tools.test.ts` asserts that whole string
+   verbatim. `glob` was the sixth tool and this was the place AGENTS.md
+   had not counted, which is how a green suite still shipped a tool the
+   error message did not offer.
 2. **"the five tools are advertised, and nothing else"** — the count is in
    the test's own name, so it fails when the tool set changes, which is
    the point. Keep the name honest.
@@ -238,7 +241,7 @@ everything else was found by a test failing and is easy to miss:
    shelling out. This is the same trap as the markdown line below, in a
    different place.
 
-Two things that bit while writing it, both worth not rediscovering:
+Three things that bit while writing it, all worth not rediscovering:
 
 - **A relative path needs a resolved base.** `relative(cwd, file)` where
   `cwd` is still unresolved produces a chain of `../..` for every result —
@@ -251,6 +254,29 @@ Two things that bit while writing it, both worth not rediscovering:
   with the obvious example — `**/` crosses directories — ends at the
   `*/` and the rest of the sentence parses as TypeScript. It surfaced as
   four unrelated syntax errors hundreds of lines from the cause.
+- **A test can pin the bug, and then fixing the bug looks like a
+  regression.** `include: "*.ts"` was asserted to return `parts.tsx`,
+  because the basename glob was unanchored and `[^/]*\.ts` matches
+  inside `parts.tsx`. The test was green, the assertion read as a
+  deliberate decision, and the tool was handing a model the JSX every
+  time it asked for the TypeScript. When a fix breaks a test that
+  *states* the old behaviour in its own name, that is the finding, not
+  the obstacle — read what the test claims before you change it.
+
+## A listing cannot hide what a search may hide
+
+`grep` skips `.git` and `node_modules` outright, and that is right:
+the answer is a match list, and a dependency tree in it is noise.
+`glob` was written the same way at first and a test caught it — a
+listing that omits `node_modules/` tells the model the tree has no such
+thing, and the model will say so.
+
+So `glob` lists the directory and does not descend into it, and a note
+names the ones it left alone. The note is scoped to the answer: attached
+to every result, it made `glob("README.md")` come back with a footnote
+about a directory nowhere in the reply, so the output depended on the
+tree rather than on the question. **An answer's shape must be a function
+of the question.**
 
 ## Behaviour worth knowing before changing it
 
