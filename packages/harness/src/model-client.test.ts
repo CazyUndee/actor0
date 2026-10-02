@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ModelTransportError, OpenAiCompatibleModel, isContextOverflow } from "./model-client.js";
+import { ModelTransportError, OpenAiCompatibleModel, contextWindowTokens, isContextOverflow } from "./model-client.js";
 import type { ModelEvent, ToolCall } from "./types.js";
+import { FailedTurnError } from "./harness.js";
 
 test("a streamed tool call is assembled the same at every chunk boundary", async () => {
   // `ToolCallBuffer` coalesces tool-call deltas by index, and the SSE frame
@@ -379,6 +380,61 @@ test("an overflow sent as a bare message is recognised without a code", async ()
   const bare = await streamFailure(errorStream({ error: "Requested token count exceeds the model's maximum context length" }));
   assert.equal(bare.retriable, false);
   assert.match(bare.message, /ended the stream with an error/);
+});
+
+test("the window an endpoint states is read out of the refusal", async () => {
+  // The refusal is the only measurement of the limit the provider will ever
+  // volunteer, and reading it as a boolean throws the number away. That number
+  // is what a recovery has to size itself against: a cut to a guessed 8,000
+  // tokens cannot fit a 4k window no matter how many times it is sent.
+  const refusal = async (message: string) =>
+    await streamFailure(errorStream({ error: { message, type: "invalid_request_error", code: "context_length_exceeded" } }));
+
+  const openai = await refusal(
+    "This model's maximum context length is 8192 tokens. However, your messages resulted in 91234 tokens.",
+  );
+  assert.equal(contextWindowTokens(openai), 8192, "the window is in the first sentence, not the second");
+
+  // Grouped digits are how windows are written when they are large.
+  const big = await refusal("maximum context length is 200,000 tokens");
+  assert.equal(contextWindowTokens(big), 200_000, `got ${contextWindowTokens(big)}`);
+
+  // The other order, from vLLM and the other self-hosted servers.
+  const vllm = await refusal("This request exceeds the 32768 token context window");
+  assert.equal(contextWindowTokens(vllm), 32768, `got ${contextWindowTokens(vllm)}`);
+
+  // A turn that failed mid-flight wraps the refusal that ended it, and the
+  // unwrap is the whole reason the recovery fires at all.
+  const wrapped = contextWindowTokens(new FailedTurnError([], "", openai));
+  assert.equal(wrapped, 8192, "the window was on the cause, and a wrapper is not a reason to miss it");
+});
+
+test("a number that is not the window is never read as one", async () => {
+  // These are the shapes where reading the wrong number is worse than reading
+  // none. A host that believes a 137,500-token window keeps the history whole
+  // and sends it straight back, and the turn that was supposed to be rescued
+  // is the turn that dies. Falling back to the constant is always available;
+  // guessing is not.
+  const stream = async (message: string) =>
+    await streamFailure(errorStream({ error: { message, type: "invalid_request_error" } }));
+
+  // Anthropic: the used count comes first and the window second, with no
+  // phrase naming the window at all.
+  const anthropic = await stream("prompt is too long: 137500 tokens > 135000 maximum");
+  assert.equal(contextWindowTokens(anthropic), undefined, "137,500 is what the request used, not what it may use");
+
+  // A per-message character limit is a different failure — `OVERFLOW_TEXT`
+  // matches it on purpose — and is not a context window.
+  const chars = await stream("Message too large (50k char limit)");
+  assert.equal(contextWindowTokens(chars), undefined, "a character cap is not a token window");
+
+  // A refusal that is not about size names no window, even mid-sentence.
+  const quota = await stream("insufficient_quota: you have used your credits");
+  assert.equal(contextWindowTokens(quota), undefined);
+
+  // And a retriable failure is not a refusal, whatever its text says.
+  const flaky = new ModelTransportError("maximum context length is 8192 tokens", true);
+  assert.equal(contextWindowTokens(flaky), undefined, "a transport that may retry must not talk a host into compacting");
 });
 test("the size error the endpoint actually sends is recognised as an overflow", async () => {
   // This is the body `https://aestral-chat.vercel.app/api/chat` returns, byte

@@ -426,11 +426,48 @@ export function isContextOverflow(message: string): boolean {
  * signature claimed — and its one caller reads it as a gate.
  */
 export function isContextOverflowError(error: unknown): boolean {
-  if (error instanceof ModelTransportError) {
-    return !error.retriable && isContextOverflow(error.message);
-  }
+  const transport = transportError(error);
+  return transport !== undefined && !transport.retriable && isContextOverflow(transport.message);
+}
+
+/**
+ * The context window the endpoint said it has, in tokens, or undefined.
+ *
+ * The overflow message is not only a diagnosis, it is the one measurement of
+ * the limit the provider will ever volunteer, and reading it as a boolean
+ * throws the number away. A host recovering from an overflow has to decide
+ * how much history to keep, and a guess cannot be smaller than the truth: on
+ * a 4k-window model a recovery that targets 8,000 tokens does not fit by
+ * construction, and the one replay it is allowed fails exactly like the
+ * request it was meant to fix.
+ *
+ * Anchored on the number *and* the word "token" on purpose. The messages that
+ * carry a limit also carry the count that broke it — "your messages resulted
+ * in 91234 tokens" — and a looser pattern reads the wrong number, which is
+ * worse than reading none. A per-message char limit is not a window and is
+ * not returned for one; `OVERFLOW_TEXT` matches that shape too, deliberately,
+ * because it is a different failure with its own advice.
+ *
+ * Returned only for a failure that is a real refusal, so a retriable error
+ * carrying a similar string cannot talk a host into compacting a turn that
+ * was never the problem.
+ */
+export function contextWindowTokens(error: unknown): number | undefined {
+  const transport = transportError(error);
+  if (!transport || transport.retriable) return undefined;
+  const found = CONTEXT_WINDOW_TEXT.exec(transport.message);
+  // Two shapes, so two groups; whichever matched is the window.
+  const digits = found?.[1] ?? found?.[2];
+  if (!digits) return undefined;
+  const tokens = Number.parseInt(digits.replace(/[,_]/g, ""), 10);
+  return Number.isFinite(tokens) && tokens > 0 ? tokens : undefined;
+}
+
+/** The transport error a thrown value carries, however deeply it was wrapped. */
+function transportError(error: unknown): ModelTransportError | undefined {
+  if (error instanceof ModelTransportError) return error;
   const wrapped = (error as { cause?: unknown } | null | undefined)?.cause;
-  return wrapped instanceof ModelTransportError && !wrapped.retriable && isContextOverflow(wrapped.message);
+  return wrapped instanceof ModelTransportError ? wrapped : undefined;
 }
 
 /** The in-stream error as a failure a person can act on. */
@@ -503,6 +540,18 @@ const OVERFLOW_TEXT =
 /** Message text for the permanent failures that arrive without a code. */
 const PERMANENT_STREAM_TEXT =
   /\b(?:invalid api key|incorrect api key|api key (?:is )?(?:invalid|missing|expired)|no api key|unauthori[sz]ed|invalid authentication|permission denied|insufficient (?:quota|credit|balance)|quota exceeded|out of credits|payment required|model (?:not found|does not exist|is not available)|account (?:is )?(?:deactivated|suspended)|content policy)\b/i;
+
+/**
+ * The two shapes an endpoint states its window in, both naming tokens.
+ *
+ * "maximum context length is 8192 tokens" is OpenAI's and the most common
+ * form; the reversed "exceeds the 8192-token context window" is vLLM and
+ * friends. Neither clause reaches across a sentence boundary, so the count
+ * that broke the request — which lives in the next sentence, and is larger —
+ * cannot be mistaken for the window.
+ */
+const CONTEXT_WINDOW_TEXT =
+  /\b(?:maximum context (?:length|window)|context (?:length|window|size))\b[^.\d]{0,32}?([\d][\d,_]*)\s*tokens?\b|\b([\d][\d,_]*)\s*tokens?\b[^.\d]{0,24}?context window\b/i;
 
 const OVERFLOW_ADVICE =
   "Retrying will not help — this conversation does not fit the model's context window. Start a new one with /clear, or switch to a model with a larger window.";

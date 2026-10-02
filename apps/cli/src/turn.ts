@@ -4,6 +4,7 @@ import {
   FAILED_MARKER,
   TRUNCATED_MARKER,
   OpenAiCompatibleModel,
+  contextWindowTokens,
   isContextOverflowError,
   runAgentTurn,
   type AbortedTurnError,
@@ -17,7 +18,7 @@ import {
 import type { ResolvedProvider } from "./config.js";
 import { totalUsage } from "./conversation.js";
 import { formatProjectContext, loadProjectContext } from "./context.js";
-import { compactHistory, measureHistory } from "./history.js";
+import { CHARS_PER_TOKEN, compactHistory, measureHistory } from "./history.js";
 import {
   TOOL_COUNT,
   resolveShell,
@@ -299,8 +300,94 @@ export const MAX_TOOL_ROUNDS = 24;
  * room for the new turn and for the answer, and it is a floor, not a target.
  * Compaction clears the oldest clearable payloads first, so what survives is
  * the exchange the model is still reasoning about.
+ *
+ * It is a *ceiling* on the recovery, not the recovery itself. An endpoint
+ * that says how big its window is is believed, and a smaller window gets a
+ * smaller cut — see `recoveryTarget`.
  */
 export const OVERFLOW_RECOVERY_TOKENS = 8_000;
+
+/**
+ * Tokens held back from the history for the answer itself.
+ *
+ * A quarter of the window, never less than 512. Proportional rather than a
+ * flat figure because a flat one is absurd at both ends: 20,000 tokens of
+ * answer room is a fifth of a 200k window and more than an entire 8k one. The
+ * floor matters more than the fraction — a quarter of a 2k window is 500
+ * tokens, which is not enough room for a model to answer in at all.
+ */
+const RECOVERY_ANSWER_RESERVE = (window: number): number => Math.max(512, Math.floor(window / 4));
+
+/**
+ * The budget to cut the history to, from what the endpoint said its window is.
+ *
+ * The arithmetic is the request, not the history: a request is the messages
+ * plus the tool schemas, and the window has to hold both plus an answer. So
+ * the schemas are measured rather than guessed at — they are the CLI's own
+ * registry, and measuring them costs one `JSON.stringify` on a path that has
+ * already decided to fail without a retry if it cannot be made to fit.
+ *
+ * The result only ever moves *down* from `OVERFLOW_RECOVERY_TOKENS`. The
+ * recovery is allowed exactly one replay, so the cost of being wrong is
+ * asymmetric: keeping more history than needed costs the model some context it
+ * no longer has a use for, and keeping too much costs the user the turn. A
+ * generous window is therefore left on the constant, and only a window that
+ * makes the constant too loose gets to tighten it.
+ */
+function recoveryTarget(error: unknown, toolHost: ToolHost): number {
+  const window = contextWindowTokens(error);
+  if (window === undefined) return OVERFLOW_RECOVERY_TOKENS;
+  const schemas = JSON.stringify(toolHost.definitions()).length;
+  const overhead = Math.ceil((schemas + RECOVERY_ANSWER_RESERVE(window)) / CHARS_PER_TOKEN);
+  return Math.max(0, Math.min(OVERFLOW_RECOVERY_TOKENS, window - overhead));
+}
+
+/**
+ * Can this request be made to fit the window the endpoint named?
+ *
+ * The budget is a target, not a promise, and it is not one compaction can
+ * always meet. Everything that is not a clearable tool result stays whatever
+ * it was — the system prompt above all, which carries the project's own
+ * instructions and is routinely the largest single thing in the request. A
+ * window smaller than that floor cannot be served by clearing anything, and
+ * replaying into it is the same request with less in it: one more round trip
+ * to be refused in exactly the same words.
+ *
+ * So the cut is checked against the window rather than trusted, and a cut
+ * that does not fit is not sent. A window the endpoint never stated cannot
+ * answer this question, and there the constant stands as the only bound.
+ */
+function recoveryFits(
+  error: unknown,
+  messages: ChatMessage[],
+  toolHost: ToolHost,
+  model: string,
+): boolean {
+  const window = contextWindowTokens(error);
+  if (window === undefined) return true;
+  return requestChars(messages, toolHost, model) <= window * CHARS_PER_TOKEN;
+}
+
+/**
+ * The size of the request the harness will actually send, in characters.
+ *
+ * `measureHistory` is the right accounting for a *budget* — it is an estimate
+ * and says so, and comparing estimates is how a budget is compared — but it
+ * is the wrong instrument for a gate. It counts decoded strings, and what
+ * goes on the wire is encoded: the system prompt alone arrives with every
+ * quote escaped and every newline doubled, so a history that measures well
+ * under the window serializes well over it. Gating on the estimate therefore
+ * passes a request the endpoint is about to refuse, which is precisely the
+ * outcome this gate exists to prevent.
+ *
+ * So the gate measures the request — the same four fields, serialized the same
+ * way, from the same objects the client serializes. It is exact for this
+ * request rather than close, and it costs one `JSON.stringify` on a path that
+ * has already decided the turn is failing.
+ */
+function requestChars(messages: ChatMessage[], toolHost: ToolHost, model: string): number {
+  return JSON.stringify({ model, stream: true, messages, tools: toolHost.definitions() }).length;
+}
 
 export type TurnOptions = {
   model: ResolvedProvider;
@@ -369,7 +456,7 @@ export async function runTurn(options: TurnOptions): Promise<TurnOutcome> {
   try {
     return { result: await attempt(messages) };
   } catch (error) {
-    const recovery = recoveryHistory(error, messages, produced);
+    const recovery = recoveryHistory(error, messages, produced, options.toolHost, options.model.model);
     if (!recovery) throw error;
     return { result: await attempt(recovery.messages), recovery: recovery.summary };
   }
@@ -394,17 +481,20 @@ function recoveryHistory(
   error: unknown,
   messages: ChatMessage[],
   produced: boolean,
+  toolHost: ToolHost,
+  model: string,
 ): { messages: ChatMessage[]; summary?: Recovery } | undefined {
   if (produced || !isContextOverflowError(error)) return undefined;
   let results = 0;
   let chars = 0;
   const compacted = compactHistory(messages, {
-    maxTokens: OVERFLOW_RECOVERY_TOKENS,
+    maxTokens: recoveryTarget(error, toolHost),
     onClear: (_name, clearedChars) => {
       results += 1;
       chars += clearedChars;
     },
   });
+  if (!recoveryFits(error, compacted, toolHost, model)) return undefined;
   if (measureHistory(compacted) >= measureHistory(messages)) return undefined;
   // Compaction repairs before it shortens — it drops orphan results and calls
   // that never got one — so a retry can be earned by a history that was

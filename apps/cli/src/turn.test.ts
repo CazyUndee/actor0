@@ -22,6 +22,7 @@ import {
 import { AbortedTurnError, FailedTurnError, type ChatMessage } from "@actor0/harness";
 import { createToolHost, resolveShell } from "./tools.js";
 import { applyEvent, initialConversation } from "./conversation.js";
+import { CHARS_PER_TOKEN } from "./history.js";
 
 /**
  * End-to-end through the real harness.
@@ -32,7 +33,7 @@ import { applyEvent, initialConversation } from "./conversation.js";
  * and a `ToolHost` and getting a working agent with no harness changes.
  */
 
-type Script = (turn: number) => unknown[];
+type Script = (turn: number, body: string) => unknown[];
 
 async function startServer(script: Script): Promise<{ server: Server; baseUrl: string; bodies: string[] }> {
   let turn = 0;
@@ -54,7 +55,7 @@ async function startServer(script: Script): Promise<{ server: Server; baseUrl: s
     });
     req.on("end", () => {
       bodies.push(body);
-      const frames = script(turn++);
+      const frames = script(turn++, body);
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
       for (const frame of frames) {
         res.write(`data: ${JSON.stringify(frame)}\n\n`);
@@ -253,7 +254,7 @@ const bulkyHistory = (chars = 60_000): ChatMessage[] => [
  * A history that is malformed rather than large: its last call never got a
  * result, so repairing the history is what makes the request fit.
  */
-const danglingHistory = (chars = 5_000): ChatMessage[] => [
+const danglingHistory = (chars = 500): ChatMessage[] => [
   { role: "user", content: "read readme.md" },
   { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: "{}" } }] },
   { role: "tool", tool_call_id: "call_1", name: "read", content: "x".repeat(chars) },
@@ -262,14 +263,58 @@ const danglingHistory = (chars = 5_000): ChatMessage[] => [
   { role: "assistant", content: "", tool_calls: [{ id: "call_2", type: "function", function: { name: "read", arguments: "{}" } }] },
 ];
 
-/** The frame a provider sends when the request does not fit. */
-const overflowFrame = {
+/**
+ * A history with several clearable results, so the cut lands somewhere the
+ * budget can decide about.
+ *
+ * One enormous result is not enough: clearing it drops the request below any
+ * window worth testing, so the constant and a window-derived budget produce
+ * the same request and the difference between them cannot be seen. Several
+ * moderate ones put the result of clearing in the range where the two disagree.
+ */
+const roomyHistory = (results = 10, chars = 6_000): ChatMessage[] => {
+  const messages: ChatMessage[] = [];
+  for (let i = 0; i < results; i += 1) {
+    messages.push(
+      { role: "user", content: `read file-${i}.md` },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: `call_${i}`, type: "function", function: { name: "read", arguments: "{}" } }],
+      },
+      { role: "tool", tool_call_id: `call_${i}`, name: "read", content: "x".repeat(chars) },
+    );
+  }
+  messages.push({ role: "user", content: "and now, what did it say?" });
+  return messages;
+};
+
+/** The frame a provider sends when the request does not fit, naming its window. */
+const overflow = (window: number) => ({
   error: {
-    message: "This model's maximum context length is 8192 tokens. However, your messages resulted in 91234 tokens.",
+    message: `This model's maximum context length is ${window} tokens. However, your messages resulted in 91234 tokens.`,
     type: "invalid_request_error",
     code: "context_length_exceeded",
   },
-};
+});
+
+/** The frame a provider sends when the request does not fit. */
+const overflowFrame = overflow(8192);
+
+/**
+ * A provider with a real window, rather than one that only ever overflows.
+ *
+ * Counts the whole request the way a provider's limit does — tools included,
+ * not just the messages — using the CLI's own chars-per-token ratio, so the
+ * mock and the code under test agree on what a token is. A model with a
+ * 6,000-token window is a small local model, and it is the case a hardcoded
+ * 8,000-token recovery cannot serve: the cut does not fit the window it was
+ * invented for, so the one replay the design allows comes back refused.
+ */
+const windowed = (window: number) => (_turn: number, body: string): unknown[] =>
+  Math.ceil(body.length / CHARS_PER_TOKEN) > window
+    ? [overflow(window)]
+    : textFrames("Short answer.");
 
 test("a request the model calls too big is asked again with a compacted history", async () => {
   // The turn used to end here: the model refuses the transcript, and the only
@@ -349,6 +394,67 @@ test("a turn that never overflowed reports no recovery", async () => {
   }
 });
 
+test("a window the endpoint named is the one the recovery is sized against", async () => {
+  // The refusal says how big the window is, and the recovery used to throw
+  // that number away and cut to 8,000 tokens regardless — a target chosen to
+  // be far below any window worth talking to, which is exactly wrong on a
+  // small one. On a 6,000-token model the replay could not fit by
+  // construction, so the one attempt this design allows came back refused and
+  // the turn that was supposed to be rescued was the turn that died.
+  //
+  // So the mock here is not a provider that always overflows; it has a real
+  // window and answers whatever fits. The turn has to end with an answer.
+  const { server, baseUrl, bodies } = await startServer(windowed(8_500));
+  try {
+    const outcome = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: roomyHistory(),
+      input: "and now, what did it say?",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(outcome.result.text.trim(), "Short answer.", "the replay has to land inside the window it was given");
+    assert.equal(bodies.length, 2, "one replay is the design, and it is enough");
+    assert.ok(
+      Math.ceil(bodies[1]!.length / CHARS_PER_TOKEN) <= 8_500,
+      `the replay was ${Math.ceil(bodies[1]!.length / CHARS_PER_TOKEN)} tokens against an 8,500-token window`,
+    );
+  } finally {
+    await close(server);
+  }
+});
+
+test("a window no clearing can satisfy is reported instead of replayed", async () => {
+  // A window smaller than the tools plus an answer cannot be made to fit by
+  // clearing anything: the schemas alone are 1,519 tokens and they are not
+  // history. Compacting to the constant and sending it again spends a request
+  // to arrive at the same refusal, and the user waits through both.
+  //
+  // The end state is the same error either way, so what is asserted is that
+  // the refusal arrives without the second attempt — and that it is the
+  // overflow and not a bare "check the URL, the key, and the model name".
+  const { server, baseUrl, bodies } = await startServer(windowed(900));
+  try {
+    await assert.rejects(
+      runTurn({
+        model: { baseUrl, path: "/chat/completions", model: "test-model" },
+        messages: bulkyHistory(),
+        input: "and now, what did it say?",
+        toolHost: createToolHost({ cwd: cwd() }),
+        signal: new AbortController().signal,
+      }),
+      (error: Error) => {
+        assert.match(error.message, /context window/i, `the diagnosis was lost: ${error.message}`);
+        return true;
+      },
+    );
+    assert.equal(bodies.length, 1, "a request that cannot be made to fit must not be sent again");
+  } finally {
+    await close(server);
+  }
+});
+
 test("a retry earned by repair rather than by size reports nothing", async () => {
   // Compaction repairs a malformed history as well as shortening a large one:
   // a call that never got a result is dropped whole, which is what makes the
@@ -356,7 +462,7 @@ test("a retry earned by repair rather than by size reports nothing", async () =>
   // retry is still worth making, and saying so is not: a warning that reports
   // zero results, in front of a user whose conversation lost nothing, is a
   // warning frame that teaches people to read past warnings.
-  const { server, baseUrl } = await startServer((turn) =>
+  const { server, baseUrl, bodies } = await startServer((turn) =>
     turn === 0 ? [overflowFrame] : textFrames("Short answer."),
   );
   try {
@@ -368,6 +474,7 @@ test("a retry earned by repair rather than by size reports nothing", async () =>
       signal: new AbortController().signal,
     });
 
+    assert.equal(bodies.length, 2, "the repair earned a replay, or this test proves nothing");
     assert.equal(outcome.recovery, undefined, "nothing the model could read was taken, so there is nothing to report");
   } finally {
     await close(server);
