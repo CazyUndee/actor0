@@ -7,12 +7,14 @@ import {
   FAILED_MARKER,
   INTERRUPT_MARKER,
   RETRY_JITTER_RATIO,
+  TRUNCATED_MARKER,
   FailedTurnError,
   retryDelay,
   runAgentTurn,
   runModelRound,
   withFailedMarker,
   withInterruptMarker,
+  withTruncationMarker,
 } from "./harness.js";
 import { ModelTransportError } from "./model-client.js";
 import type {
@@ -511,6 +513,70 @@ test("the interrupt marker never fabricates text and never doubles up", () => {
   assert.equal(withInterruptMarker("  "), INTERRUPT_MARKER);
   assert.equal(withInterruptMarker(""), INTERRUPT_MARKER);
   assert.equal(withInterruptMarker("trailing spaces   "), `trailing spaces\n\n${INTERRUPT_MARKER}`);
+});
+
+test("the truncation marker never fabricates text and never doubles up", () => {
+  assert.equal(withTruncationMarker("half an essay"), `half an essay\n\n${TRUNCATED_MARKER}`);
+  assert.equal(withTruncationMarker("  "), TRUNCATED_MARKER);
+  assert.equal(withTruncationMarker(""), TRUNCATED_MARKER);
+  assert.equal(withTruncationMarker("ends mid-word   "), `ends mid-word\n\n${TRUNCATED_MARKER}`);
+});
+
+test("an answer the endpoint cut off is marked in the transcript, not only reported", async () => {
+  // The interrupt and failure markers both live in the transcript for the
+  // same reason, and a truncated answer was the one terminal state still
+  // unmarked: `result.truncated` is a flag the host may render, ignore, or
+  // fail to persist, and what a session file keeps is the harness's own
+  // messages. Saved as they were, the next turn's model opens on a sentence
+  // that stops mid-word and reads it as a finished reply — it stands behind
+  // text it never finished, and a user reopening the session days later has
+  // no way to tell which answers are whole.
+  const model = scriptedModel([
+    await events(
+      { type: "token", delta: "the first half" },
+      { type: "done", truncated: true, reason: "length" },
+    ),
+    await events(
+      { type: "token", delta: "and the rest of it" },
+      { type: "done", truncated: true, reason: "length" },
+    ),
+  ]);
+  const result = await runAgentTurn({
+    model,
+    messages: [],
+    input: "write me an essay",
+    signal: new AbortController().signal,
+    config: fastConfig,
+  });
+
+  assert.equal(result.truncated, true);
+  assert.deepEqual(result.messages.at(-1), {
+    role: "assistant",
+    content: `and the rest of it\n\n${TRUNCATED_MARKER}`,
+  });
+});
+
+test("a completed answer is never marked as cut off", async () => {
+  // The marker is only worth anything if it means something. An answer the
+  // endpoint finished cleanly, in a turn where an *earlier* round was cut off
+  // and continued, must reach the transcript unmarked.
+  const model = scriptedModel([
+    await events(
+      { type: "token", delta: "the first half" },
+      { type: "done", truncated: true, reason: "length" },
+    ),
+    await events({ type: "token", delta: "and the rest of it" }, { type: "done" }),
+  ]);
+  const result = await runAgentTurn({
+    model,
+    messages: [],
+    input: "write me an essay",
+    signal: new AbortController().signal,
+    config: fastConfig,
+  });
+
+  assert.equal(result.truncated, undefined);
+  assert.deepEqual(result.messages.at(-1), { role: "assistant", content: "and the rest of it" });
 });
 
 test("a refused protocol block becomes an error tool result, not answer text", async () => {

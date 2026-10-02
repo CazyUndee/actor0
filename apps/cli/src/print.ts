@@ -2,7 +2,7 @@ import type { ChatMessage, ModelClient } from "@actor0/harness";
 import { applyEvent, initialConversation, type ConversationState } from "./conversation.js";
 import { resolveProvider, type CliConfig } from "./config.js";
 import { createToolHost } from "./tools.js";
-import { cancelledTurnMessages, failedTurnMessages, forStorage, runTurn, usageSummary } from "./turn.js";
+import { cancelledTurnMessages, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "./turn.js";
 import { saveSession } from "./session.js";
 
 /**
@@ -15,7 +15,9 @@ import { saveSession } from "./session.js";
  * would have shown — including a tool call that leaked protocol text.
  *
  * Progress goes to stderr and the answer to stdout, so `actor0 -p … > out.txt`
- * captures the answer and nothing else.
+ * captures the answer and nothing else. A turn that stopped or was cut off
+ * before producing one exits 1 rather than reporting a clean run with an
+ * empty file in it.
  */
 
 export type PrintOptions = {
@@ -114,6 +116,12 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
           if (call) log(`  → ${call.function.name}`);
         }
         if (event.type === "error") log(`  ! ${event.message}`);
+        // A turn that stopped is resumable, not finished, and this is the
+        // only place in headless mode where anybody says so. The TUI raises
+        // a banner; here the event used to be dropped on the floor, so a
+        // `-p` run that ended on its tool budget or on failing tools looked
+        // exactly like a completed one.
+        if (event.type === "needs_user") log(`  ! ${describeStop(event.reason)}`);
       },
     });
 
@@ -128,10 +136,23 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
     const answer = answers[answers.length - 1];
     if (answer) out.write(`${answer.text.trimEnd()}\n`);
 
+    // The answer was cut off at the cap and stops mid-sentence. The text is
+    // real, so it is still what goes to stdout — but the harness's own
+    // doc comment on `RunResult.truncated` puts it on the host to say so, and
+    // nothing did: stdout ended mid-word with no sign it was ever going to
+    // continue. The transcript carries a marker now either way; this is the
+    // half a person needs.
+    if (result.truncated) log(`  ! ${describeTruncation()}`);
+
     const usage = usageSummary(result.usage);
     if (usage) log(`  ${usage}`);
     persist(transcript);
-    return 0;
+    // 0 means "the caller has its answer". A turn that stopped or was cut off
+    // having produced none is not that, and a script that reads `$?` cannot
+    // see the stderr line. Claude Code reports an exhausted budget as an
+    // error result rather than a success, for the same reason: "it returned
+    // and returned nothing" is a failure wearing a clean exit code.
+    return answer || !(result.blocked || result.truncated) ? 0 : 1;
   } catch (error) {
     // A caller's SIGINT aborts the turn, and any other failure ends it
     // the same way (AbortedTurnError / FailedTurnError): the harness

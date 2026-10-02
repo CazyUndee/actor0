@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { OpenAiCompatibleModel, ModelTransportError, FAILED_MARKER, type ModelClient } from "@actor0/harness";
+import { OpenAiCompatibleModel, ModelTransportError, FAILED_MARKER, TRUNCATED_MARKER, type ModelClient } from "@actor0/harness";
 import { runPrintTurn } from "./print.js";
 import { loadSession } from "./session.js";
 import { sessionsDir } from "./paths.js";
@@ -75,6 +75,59 @@ async function capture(run: (out: { write(chunk: string): void }) => Promise<num
   const chunks: string[] = [];
   const code = await run({ write: (chunk: string) => (chunks.push(chunk), true) });
   return { code, out: chunks.join("") };
+}
+
+/** Both sinks at once: a turn that says nothing at all is the bug being
+ * pinned, so the channels it *should* have spoken on have to be readable. */
+async function captureBoth(
+  run: (sinks: { out: { write(chunk: string): void }; err: { write(chunk: string): void } }) => Promise<number>,
+): Promise<{ code: number; out: string; err: string }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const code = await run({
+    out: { write: (chunk: string) => (out.push(chunk), true) },
+    err: { write: (chunk: string) => (err.push(chunk), true) },
+  });
+  return { code, out: out.join(""), err: err.join("") };
+}
+
+/**
+ * A model that never answers: every round is a tool call and a `glob` that
+ * matches nothing, which is what a long sweep looks like from the outside.
+ * The turn then ends on its tool-round budget with no prose at all.
+ */
+function toolOnlyClient(text?: string): ModelClient {
+  let round = 0;
+  return {
+    async *stream() {
+      round += 1;
+      if (text) yield { type: "token" as const, delta: text };
+      yield {
+        type: "tool_call" as const,
+        tool_calls: [
+          {
+            id: `call_${round}`,
+            type: "function" as const,
+            function: { name: "glob", arguments: JSON.stringify({ pattern: "no-such-file-*" }) },
+          },
+        ],
+      };
+    },
+  };
+}
+
+/** A model whose answer never fits, twice: the turn truncates and stops. */
+function truncatedClient(): ModelClient {
+  let round = 0;
+  const halves = ["the first half", "and the rest of it"];
+  return {
+    async *stream() {
+      const text = halves[Math.min(round, halves.length - 1)]!;
+      round += 1;
+      yield { type: "token" as const, delta: text };
+      yield { type: "done" as const, text, complete: false, truncated: true, reason: "length" };
+    },
+  };
 }
 
 test("a stateless one-shot prints the answer to stdout and saves nothing", async () => {
@@ -167,6 +220,86 @@ test("a mid-turn failure prints what streamed and still persists the exchange", 
       { role: "user", content: "long question" },
       { role: "assistant", content: `half an answer\n\n${FAILED_MARKER}` },
     ],
+  );
+});
+
+test("a turn that runs out of tool rounds says so, and fails a run that got no answer", async () => {
+  // Claude Code learned this one from a blank line: `-p` mode used to treat
+  // any turn that did not throw as success, so a turn whose last message was
+  // not an answer — a stop hook's progress row, a budget cut-off — emitted
+  // nothing and exited 0. Here it was quieter still. Twenty-four rounds of
+  // tool calls, no prose anywhere, no `needs_user` line on any channel, exit
+  // 0: a script read an empty file and a clean run for a turn that never
+  // answered. The stop is a real event and now it reaches stderr.
+  scratch();
+  const { code, out, err } = await captureBoth((sinks) =>
+    runPrintTurn({
+      prompt: "sweep the tree",
+      cwd: scratch(),
+      config,
+      messages: [],
+      client: toolOnlyClient(),
+      ...sinks,
+    }),
+  );
+  assert.equal(out, "", "nothing was answered, so nothing belongs on stdout");
+  assert.equal(code, 1, "a turn that stopped without an answer is a failure for the caller");
+  assert.match(err, /tool budget/i, "the reason has to be on the channel a script can read");
+});
+
+test("a turn that stops after answering is not a failure", async () => {
+  // The other half of the same rule. The round budget is a stop, not an
+  // error: the work happened and prose reached the caller, so the exit code
+  // stays 0 — the stop is on stderr either way.
+  scratch();
+  const { code, out, err } = await captureBoth((sinks) =>
+    runPrintTurn({
+      prompt: "sweep the tree",
+      cwd: scratch(),
+      config,
+      messages: [],
+      client: toolOnlyClient("Reading the tree.\n"),
+      ...sinks,
+    }),
+  );
+  assert.match(out, /Reading the tree\./, "the answer the caller got is still the answer");
+  assert.equal(code, 0, "work was done and prose was delivered");
+  assert.match(err, /tool budget/i);
+});
+
+test("an answer the endpoint cut off is printed, flagged, and marked in the session", async () => {
+  // `RunResult.truncated` carries a duty in its own doc comment: the text is
+  // real, "but the host has to say it is unfinished". The TUI says it in a
+  // banner and headless said nothing, so a caller got an essay that stops
+  // mid-sentence with no sign that it was ever going to. The transcript was
+  // unmarked on both surfaces: saved that way, the next turn's model reads a
+  // half sentence as a finished reply and stands behind it.
+  scratch();
+  const { code, out, err } = await captureBoth((sinks) =>
+    runPrintTurn({
+      prompt: "write me an essay",
+      cwd: scratch(),
+      config,
+      messages: [],
+      session: { id: "2026-09-30T00-00-00-000Z", createdAt: "2026-09-30T00:00:00.000Z" },
+      client: truncatedClient(),
+      ...sinks,
+    }),
+  );
+  // One answer, not two: the continuation is asked for inside the same turn,
+  // and the cut-off half was never committed as a separate rendered reply —
+  // it went into the transcript and the next round's tokens continued the
+  // live line. So the caller gets the whole thing with the seam in it.
+  assert.equal(out, "the first halfand the rest of it\n", "the text is real, so it is still the answer");
+  assert.equal(code, 0);
+  assert.match(err, /unfinished/i, "and its being unfinished has to be said somewhere a script reads");
+
+  const restored = loadSession("2026-09-30T00-00-00-000Z");
+  assert.ok(restored, "the session file must exist");
+  assert.equal(
+    restored.messages.at(-1)?.content,
+    `and the rest of it\n\n${TRUNCATED_MARKER}`,
+    "the transcript is what the next turn reads first, so the cut is marked there too",
   );
 });
 

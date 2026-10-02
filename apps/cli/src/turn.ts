@@ -2,6 +2,7 @@ import {
   DEFAULT_HARNESS_CONFIG,
   INTERRUPT_MARKER,
   FAILED_MARKER,
+  TRUNCATED_MARKER,
   OpenAiCompatibleModel,
   isContextOverflowError,
   runAgentTurn,
@@ -379,11 +380,50 @@ export function usageSummary(usage: RunResult["usage"]): string | undefined {
   return `${total.total_tokens.toLocaleString()} tokens`;
 }
 
+/**
+ * What to tell the user when a turn stopped instead of finishing.
+ *
+ * The harness knows the difference and the user must not have to guess:
+ * "your tools are broken" and "this turn did a lot of work and hit its
+ * budget" call for completely different next moves from the reader.
+ *
+ * It lives here rather than in a client because there are two clients and a
+ * turn that says one thing in the TUI and nothing at all in `-p` is exactly
+ * the failure this closes: headless had no banner, no stderr line, and — for
+ * a turn that answered nothing before it stopped — no output and exit 0. The
+ * reason is a closed union on the `needs_user` event, so an unknown reason
+ * means a client forgot to keep up, not a new condition to describe.
+ */
+export function describeStop(reason: string | undefined): string {
+  switch (reason) {
+    case "round_limit":
+      return "stopped: this turn reached its tool budget — ask to continue if you want more";
+    case "tool_errors":
+      return "stopped: tool calls kept failing — check the paths and try again";
+    default:
+      return "stopped: the agent needs your input";
+  }
+}
+
+/**
+ * What to tell the user when the answer stops mid-sentence.
+ *
+ * `RunResult.truncated` says in its own doc comment that the host has to say
+ * it is unfinished. The saved transcript now carries a marker either way; this
+ * is the half a person needs, because the marker is not on their screen.
+ */
+export function describeTruncation(): string {
+  return "The answer was cut off at the model\u2019s output limit and is unfinished. Ask for the rest.";
+}
+
 /** Marker appended to an answer a cancel cut short; see `withInterruptMarker`. */
 export { INTERRUPT_MARKER };
 
 /** Marker appended to an answer a failed turn cut short; see `withFailedMarker`. */
 export { FAILED_MARKER };
+
+/** Marker appended to an answer the endpoint cut off; see `withTruncationMarker`. */
+export { TRUNCATED_MARKER };
 
 /**
  * The transcript to persist when a turn was cancelled.

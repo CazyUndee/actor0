@@ -11,7 +11,7 @@ import {
   withUserInput,
   type ConversationState,
 } from "../conversation.js";
-import { cancelledTurnMessages, failedTurnMessages, forStorage, runTurn, usageSummary } from "../turn.js";
+import { cancelledTurnMessages, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "../turn.js";
 import { newSessionId, saveSession } from "../session.js";
 import { parseSlash, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
@@ -221,7 +221,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           // the fact that the model's reply stopped at the output cap, and
           // that asking again is the way to get the rest of it.
           if (result.truncated) {
-            notice("warn", "The answer was cut off at the model\u2019s output limit and is unfinished. Ask for the rest.");
+            notice("warn", describeTruncation());
           }
           const tokens = usageSummary(result.usage);
           if (tokens) notice("info", tokens);
@@ -417,20 +417,3 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   );
 }
 
-/**
- * Say why a turn stopped, in the user's terms.
- *
- * The harness knows the difference and the UI must not blur it: "your tools
- * are broken" and "this turn did a lot of work and hit its budget" call for
- * completely different next moves from the reader.
- */
-function describeStop(reason: string | undefined): string {
-  switch (reason) {
-    case "round_limit":
-      return "stopped: this turn reached its tool budget — ask to continue if you want more";
-    case "tool_errors":
-      return "stopped: tool calls kept failing — check the paths and try again";
-    default:
-      return "stopped: the agent needs your input";
-  }
-}

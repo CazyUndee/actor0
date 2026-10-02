@@ -83,6 +83,26 @@ export function withFailedMarker(text: string): string {
   return trimmedEnd ? `${trimmedEnd}\n\n${FAILED_MARKER}` : FAILED_MARKER;
 }
 
+/** Marker appended to an answer the endpoint cut off at its output cap. */
+export const TRUNCATED_MARKER = "[cut off at the output limit]";
+
+/**
+ * `text` with the truncation marker appended, or the marker alone when
+ * the answer never started.
+ *
+ * The third of the three markers a terminal state leaves in the
+ * transcript, and the only one whose host flag was optional: a cancel and a
+ * failure each had to hand the transcript back with the marker on it, while
+ * a cut-off answer was saved as the plain words the model had written so
+ * far. It is not a completed reply and the transcript is what the next turn
+ * reads first, so the marker goes here rather than in whichever host
+ * remembered to render `RunResult.truncated`.
+ */
+export function withTruncationMarker(text: string): string {
+  const trimmedEnd = text.trimEnd();
+  return trimmedEnd ? `${trimmedEnd}\n\n${TRUNCATED_MARKER}` : TRUNCATED_MARKER;
+}
+
 /**
  * What a tool call that a cancel cut short is answered with.
  *
@@ -578,7 +598,13 @@ export async function runAgentTurn(options: {
       complete: result.complete,
       ...(result.truncated ? { truncated: true, reason: result.truncationReason } : {}),
     });
-    messages.push({ role: "assistant", content: result.text });
+    // What is stored is what the next turn's model reads, so the mark that
+    // this answer was cut off lives here and not only on the flag above. The
+    // host still says it to the user — a transcript is not on screen.
+    messages.push({
+      role: "assistant",
+      content: result.truncated ? withTruncationMarker(result.text) : result.text,
+    });
     return {
       messages,
       text: result.text,
