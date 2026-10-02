@@ -210,3 +210,46 @@ test("loadSession repairs a broken history instead of resuming it broken", () =>
   });
   assert.deepEqual(loadSession("clean")?.messages, clean);
 });
+
+test("a save keeps the results the model is still reasoning about", () => {
+  // This is where the promise in `DEFAULT_TOKEN_BUDGET` is kept or broken. A
+  // save is not a failure path: nothing is broken, the file is simply larger
+  // than the budget wants, and compaction's answer is to clear payloads. It
+  // used to reach all the way to the newest result once the stale ones ran
+  // out, and the next turn then opened by re-reading a file it had just read
+  // — with a save that looked completely clean, because a cleared payload is
+  // a successful save by every measure the code makes.
+  process.env.ACTOR0_DATA_DIR = scratch();
+
+  // Four rounds of a 40,000-char read: over the 16k-token budget, with the
+  // last two rounds being the ones a turn is actually reasoning about.
+  const messages: ChatMessage[] = [];
+  for (let round = 0; round < 4; round += 1) {
+    messages.push({ role: "user", content: `question ${round}` });
+    messages.push({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: `c${round}`, type: "function", function: { name: "read", arguments: "{}" } }],
+    });
+    messages.push({ role: "tool", tool_call_id: `c${round}`, name: "read", content: "x".repeat(40_000) });
+  }
+
+  saveSession({
+    id: "working-set",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    model: "m",
+    messages,
+  });
+  const loaded = loadSession("working-set");
+  const results = loaded!.messages.filter((m) => m.role === "tool");
+
+  assert.equal(results.length, 4, "a save may not drop a result, only clear it");
+  for (const recent of results.slice(-2)) {
+    assert.ok(
+      !recent.content.startsWith("[result cleared"),
+      `the model lost ${recent.tool_call_id}, which it was mid-answer on`,
+    );
+  }
+  assert.ok(results[0]!.content.startsWith("[result cleared"), "the oldest payload should still have gone");
+});

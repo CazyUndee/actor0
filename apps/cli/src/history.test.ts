@@ -92,6 +92,63 @@ function conversation(rounds: number, tools: string[], payload = 40): ChatMessag
   return messages;
 }
 
+test("the results the model is still reasoning about survive a budget that wants them", () => {
+  // `DEFAULT_TOKEN_BUDGET` says compaction "clears the payloads behind
+  // results the model has already moved past, while the results it is still
+  // reasoning about stay intact". Ordering the clears oldest-first is not
+  // that: the order says which go first, not which are allowed to go last. So
+  // a budget that had to reach past the recent results took the one the model
+  // was mid-answer on, and the next turn opened by re-reading a file it had
+  // just read — on a save, where nothing was failing and the file was merely
+  // bigger than the budget wanted.
+  const source = conversation(4, ["read"], 400);
+  const compacted = compactHistory(source, { maxTokens: 1, keepRecent: 2 });
+  const results = compacted.filter((m) => m.role === "tool");
+  const cleared = results.filter((m) => isCleared(m.content));
+
+  assert.equal(cleared.length, 2, `expected the two oldest to go, got ${cleared.length}`);
+  for (const recent of results.slice(-2)) {
+    assert.ok(!isCleared(recent.content), "the working set was cleared, and the model has to re-read to answer");
+  }
+  // The two it kept are the last two in the history, in order.
+  assert.deepEqual(
+    results.slice(-2).map((m) => m.tool_call_id),
+    ["c2-0", "c3-0"],
+    "the floor protected the wrong results",
+  );
+});
+
+test("there is no floor by default, because the recovery would rather re-read than fail", () => {
+  // The overflow recovery gets one replay and then the turn is over. Clearing
+  // the newest result there costs a tool round and the marker tells the model
+  // exactly what to re-run; keeping it costs the turn. So the default is no
+  // floor, and the save path is the caller that asks for one — see
+  // SESSION_KEEP_RECENT.
+  const source = conversation(4, ["read"], 400);
+  const compacted = compactHistory(source, { maxTokens: 1 });
+  const results = compacted.filter((m) => m.role === "tool");
+  assert.equal(
+    results.filter((m) => !isCleared(m.content)).length,
+    0,
+    "the default must not protect anything, or the recovery stops being able to save a turn",
+  );
+});
+
+test("the floor is history-wide, so the per-message pass cannot clear the newest round", () => {
+  // The per-message pass bounds one turn's burst, and the burst it is looking
+  // at is usually the newest round — so a floor counted per message would
+  // protect the wrong results entirely and the newest result would be the
+  // first thing cleared, at 50,000 chars, by a cap meant for a stale round.
+  const huge = conversation(1, ["read"], 9_000);
+  const compacted = compactHistoryPerMessage(huge, { keepRecent: 1 });
+  const only = compacted.find((m) => m.role === "tool")!;
+  assert.ok(!isCleared(only.content), "the newest result is the working set, not a stale round");
+
+  // And with no floor asked for, the burst is still bounded.
+  const bounded = compactHistoryPerMessage(conversation(1, ["read"], 9_000));
+  assert.ok(isCleared(bounded.find((m) => m.role === "tool")!.content));
+});
+
 // --- the invariant ----------------------------------------------------------
 
 test("compaction never orphans a call or a result", () => {

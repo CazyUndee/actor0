@@ -1,7 +1,7 @@
 import type { ChatMessage } from "@actor0/harness";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compactHistory, compactHistoryPerMessage, repairHistory } from "./history.js";
+import { compactHistory, compactHistoryPerMessage, repairHistory, SESSION_KEEP_RECENT } from "./history.js";
 import { sessionsDir } from "./paths.js";
 
 /**
@@ -63,8 +63,22 @@ export function saveSession(session: StoredSession): void {
   // The per-message pass runs first: it bounds a single turn's tool-result
   // burst whatever the age of the results, and the global pass then clears
   // remaining stale results oldest-first. Both are clear-only — see history.ts.
-  const messages = compactHistoryPerMessage(session.messages);
-  const payload: StoredSession = { ...session, messages: compactHistory(messages) };
+  //
+  // Both also carry the floor that keeps the newest results, because this is
+  // the path where the promise is made. `DEFAULT_TOKEN_BUDGET` says it "clears
+  // the payloads behind results the model has already moved past, while the
+  // results it is still reasoning about stay intact", and ordering the clears
+  // oldest-first is not that promise — the order says which go first, not which
+  // are allowed to go last. Ordering alone is why a save that had to reach past
+  // the recent results took the one the model was mid-answer on, and the next
+  // turn opened by re-reading a file it had just read.
+  const messages = compactHistoryPerMessage(session.messages, {
+    keepRecent: SESSION_KEEP_RECENT,
+  });
+  const payload: StoredSession = {
+    ...session,
+    messages: compactHistory(messages, { keepRecent: SESSION_KEEP_RECENT }),
+  };
   const target = sessionFile(session.id);
 
   // Write to a sibling, then rename. Rename is atomic on Windows and POSIX, so

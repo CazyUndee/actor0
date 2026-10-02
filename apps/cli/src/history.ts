@@ -121,7 +121,62 @@ export type CompactionOptions = {
    * arithmetic saving: what was lost is what the model could once read.
    */
   onClear?: (toolName: string, clearedChars: number) => void;
+  /**
+   * How many of the newest clearable results are kept whatever the budget says.
+   *
+   * Zero by default, and the default is not a shrug: the overflow recovery is
+   * the last attempt a turn gets, and a result the model is told to re-read is
+   * a better outcome than a turn that never starts. Everything else passes a
+   * number — see `SESSION_KEEP_RECENT`.
+   *
+   * A save is the other story. Nothing is failing there, the budget merely
+   * wants the file smaller, and the newest results are the ones the model is
+   * reasoning about *right now*. Clearing them to save bytes buys a smaller
+   * session file with a re-read on the next turn, and ordering the clears
+   * oldest-first does not prevent it: the order only says which go first, not
+   * which are allowed to go last. A budget large enough for a few ordinary
+   * rounds stops at the recent results exactly when the recent results are
+   * the only ones left to take, which is the case the floor exists for.
+   */
+  keepRecent?: number;
 };
+
+/**
+ * Results a save must not clear, however over budget the file is.
+ *
+ * Two, not one: the last result is the answer to the question in flight, and
+ * the one before it is usually the file that result is about. A round that
+ * read three files keeps the last two and loses the first, which the marker
+ * names and the model can re-read — the recoverable kind of loss. A round that
+ * kept none of them leaves the model reasoning about a result it cannot see,
+ * which is the kind that produces a confident wrong answer.
+ */
+export const SESSION_KEEP_RECENT = 2;
+
+/**
+ * The indices of the newest `keepRecent` clearable results in `messages`.
+ *
+ * Already-cleared results do not count: they hold a marker instead of a
+ * payload, so one of them is not working context and protecting it would spend
+ * the floor on nothing. An empty or negative count protects nothing, which is
+ * what the recovery path asks for.
+ */
+function protectedResults(
+  messages: ChatMessage[],
+  clearable: ReadonlySet<string>,
+  keepRecent: number,
+): ReadonlySet<number> {
+  const protectedIndexes = new Set<number>();
+  if (keepRecent <= 0) return protectedIndexes;
+  const names = toolNamesByCallId(messages);
+  for (let i = messages.length - 1; i >= 0 && protectedIndexes.size < keepRecent; i -= 1) {
+    const message = messages[i]!;
+    if (message.role !== "tool" || isCleared(message.content)) continue;
+    const name = names.get(message.tool_call_id ?? "") ?? message.name;
+    if (name && clearable.has(name)) protectedIndexes.add(i);
+  }
+  return protectedIndexes;
+}
 
 export const defaultMarker = (toolName: string, clearedChars: number): string =>
   `${CLEARED_PREFIX}: ${toolName} returned ${clearedChars.toLocaleString("en-US")} chars — re-run ${toolName} if needed]`;
@@ -246,16 +301,23 @@ export function compactHistory(
   const clearable = options.clearable ?? CLEARABLE_TOOLS;
   const marker = options.marker ?? defaultMarker;
   const onClear = options.onClear;
+  const keepRecent = options.keepRecent ?? 0;
 
   // Repair first, always — see `keepValidUnits`. Not budget-driven: a history
   // can be unanswerable and small at the same time.
   const source = keepValidUnits(messages).flat();
   const names = toolNamesByCallId(source);
   const result: ChatMessage[] = source.slice();
+  // Computed against the repaired history, not the caller's: repair can drop
+  // messages, so an index into the caller's array is not an index into this
+  // one, and the floor would protect whichever result happened to sit at that
+  // position after the shift.
+  const floor = protectedResults(source, clearable, keepRecent);
   let total = measureHistory(source);
   if (total <= budget) return result;
 
   for (let i = 0; i < result.length && total > budget; i += 1) {
+    if (floor.has(i)) continue;
     const message = result[i]!;
     if (message.role !== "tool") continue;
     if (isCleared(message.content)) continue;
@@ -300,6 +362,10 @@ export function compactHistoryPerMessage(
   const onClear = options.onClear;
   const names = toolNamesByCallId(messages);
   const result: ChatMessage[] = messages.slice();
+  // The floor is history-wide, not per-message: this pass bounds one round's
+  // burst, and the burst it is looking at is usually the newest round, so a
+  // per-round floor would protect the wrong results entirely.
+  const floor = protectedResults(messages, clearable, options.keepRecent ?? 0);
 
   for (let i = 0; i < result.length; i += 1) {
     const message = result[i]!;
@@ -327,6 +393,7 @@ export function compactHistoryPerMessage(
     // results around one huge one would touch history for no gain.
     const clearableIndexes = group
       .filter((index) => {
+        if (floor.has(index)) return false;
         const target = result[index]!;
         if (isCleared(target.content)) return false;
         const name = names.get(target.tool_call_id ?? "") ?? target.name;

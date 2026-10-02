@@ -268,7 +268,14 @@ export type TurnOutcome = {
  * host says it, in the client's own words via `describeRecovery`.
  */
 export type Recovery = {
-  /** How many earlier tool results were replaced by markers. */
+  /**
+   * How many tool results were replaced by markers.
+   *
+   * Not "earlier" ones: the recovery has no floor (see `CompactionOptions`), so
+   * the newest result is the first thing to go when the history is still over
+   * budget, and a count described as earlier ones would be a claim about which
+   * results survived that the recovery never made.
+   */
   results: number;
   /** How much payload they held. */
   chars: number;
@@ -516,7 +523,7 @@ function recoveryHistory(
  * longer readable" is a fact.
  */
 export function describeRecovery(recovery: Recovery): string {
-  const results = `${recovery.results} earlier tool result${recovery.results === 1 ? "" : "s"}`;
+  const results = `${recovery.results} tool result${recovery.results === 1 ? "" : "s"}`;
   return (
     `this request did not fit the context window, so ${results} ` +
     `(${recovery.chars.toLocaleString("en-US")} chars) were replaced by markers before it was ` +
