@@ -3,7 +3,15 @@ import { test } from "node:test";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describeProvider, loadConfig, readConfigFile, resolveProvider, saveConfig, withModel } from "./config.js";
+import {
+  describeProvider,
+  endpointUrl,
+  loadConfig,
+  readConfigFile,
+  resolveProvider,
+  saveConfig,
+  withModel,
+} from "./config.js";
 import { RESPITE } from "./providers.js";
 
 /**
@@ -169,7 +177,11 @@ test("ACTOR0_BASE_URL points a run at an endpoint with no config file at all", (
     try {
       const provider = resolveProvider({ model: "m", models: [] });
       assert.equal(provider.baseUrl, "https://gateway.test/v1");
-      assert.equal(provider.path, "/chat/completions", "the OpenAI default, appended to the base");
+      assert.equal(
+        endpointUrl(provider),
+        "https://gateway.test/v1/chat/completions",
+        "the OpenAI default, appended to whatever prefix the base URL carries",
+      );
       assert.equal(provider.custom, true);
     } finally {
       if (previous === undefined) delete process.env.ACTOR0_BASE_URL;
@@ -263,4 +275,51 @@ test("the saved config holds no endpoint, because there is nothing to configure"
     assert.ok(!raw.includes("baseUrl"), `the config still carries a host: ${raw}`);
     assert.ok(!raw.includes("apiKey"), `the config still carries a key field: ${raw}`);
   });
+});
+
+test("a gateway served from a path prefix keeps its prefix", () => {
+  // Found by pointing this at the first real gateway it was given:
+  // `https://api.kilo.ai/api/gateway/v1` produced a request to
+  // `https://api.kilo.ai/chat/completions` — the prefix silently gone. The
+  // cause was a default of `/chat/completions`, which the transport treats as
+  // a *replacement* for the whole pathname rather than something to append.
+  //
+  // It is worth a test because most gateways sit at a root (`/v1`), so this
+  // looks fine everywhere it is tried, and LiteLLM, vLLM behind a proxy and
+  // anything under a tenant path are exactly the ones that break.
+  withConfigDir(() => {
+    const previous = process.env.ACTOR0_BASE_URL;
+    process.env.ACTOR0_BASE_URL = "https://api.kilo.ai/api/gateway/v1";
+    try {
+      const provider = resolveProvider({ model: "m", models: [] });
+      assert.equal(provider.path, undefined, "no path may be invented for a custom endpoint");
+      assert.equal(
+        endpointUrl(provider),
+        "https://api.kilo.ai/api/gateway/v1/chat/completions",
+        "the prefix must survive",
+      );
+
+      // A trailing slash must not produce a double slash.
+      process.env.ACTOR0_BASE_URL = "https://api.example.com/v1/";
+      const trailing = resolveProvider({ model: "m", models: [] });
+      assert.equal(endpointUrl(trailing), "https://api.example.com/v1/chat/completions");
+
+      // An explicit path still wins, and still replaces — that is the
+      // documented override and the only reason to set it.
+      process.env.ACTOR0_PATH = "/v9/custom";
+      const explicit = resolveProvider({ model: "m", models: [] });
+      assert.equal(endpointUrl(explicit), "https://api.example.com/v9/custom");
+    } finally {
+      delete process.env.ACTOR0_PATH;
+      if (previous === undefined) delete process.env.ACTOR0_BASE_URL;
+      else process.env.ACTOR0_BASE_URL = previous;
+    }
+  });
+});
+
+test("the built-in endpoint still reports the path it actually uses", () => {
+  const provider = resolveProvider({ model: "m", models: [] });
+  assert.equal(provider.custom, undefined);
+  assert.equal(provider.path, "/api/chat");
+  assert.equal(endpointUrl(provider), "https://aestral-chat.vercel.app/api/chat");
 });

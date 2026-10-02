@@ -28,7 +28,13 @@ export default tseslint.config(
     // `.gitignore`, so without naming it here a half-finished fragment — which is
     // what scratch is, most of the time — fails `npm run lint` for whoever
     // happens to be running it.
-    ignores: ['**/dist/**', '**/node_modules/**', '**/target/**', '.freebuff/**'],
+    //
+    // `.tbench-venv/` is the Terminal-Bench harness, installed into the repo so
+    // a benchmark run cannot disturb the global environment. It is gitignored
+    // and it is 85,000 lines of minified vendored Python and JavaScript, so
+    // the same rule applies with a great deal more force: leaving it out
+    // turned `npm run lint` into 85,745 errors in about four minutes.
+    ignores: ['**/dist/**', '**/node_modules/**', '**/target/**', '.freebuff/**', '.tbench-venv/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

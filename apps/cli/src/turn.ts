@@ -215,7 +215,10 @@ export function promptClearsProviderFloor(prompt: string): boolean {
 export function createModel(provider: ResolvedProvider): OpenAiCompatibleModel {
   return new OpenAiCompatibleModel({
     baseUrl: provider.baseUrl,
-    path: provider.path,
+    // Omitted when the endpoint named no path, so the transport appends
+    // `/chat/completions` to the base URL's own prefix rather than replacing
+    // it. A gateway served from `/api/gateway/v1` needs that distinction.
+    ...(provider.path ? { path: provider.path } : {}),
     model: provider.model,
     // Omitted rather than passed as undefined so the transport's own "no
     // credential" branch is the one that runs, which is what a local

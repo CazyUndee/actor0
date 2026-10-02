@@ -82,7 +82,17 @@ export type CliConfig = {
  */
 export type ResolvedProvider = {
   baseUrl: string;
-  path: string;
+  /**
+   * An *explicit* request path, which replaces the whole pathname.
+   *
+   * Absent for a custom endpoint that did not name one, and that absence is
+   * load-bearing: the transport appends `/chat/completions` to the base URL's
+   * own path, which is the only behaviour that survives a gateway served from
+   * a prefix. Inventing a default here destroyed that prefix — the first real
+   * gateway this was pointed at is `https://api.kilo.ai/api/gateway/v1`, and
+   * every request went to `https://api.kilo.ai/chat/completions`.
+   */
+  path?: string;
   model: string;
   apiKey?: string;
   headers?: Record<string, string>;
@@ -226,12 +236,16 @@ export function resolveProvider(config: CliConfig): ResolvedProvider {
     throw new ConfigError(`The base URL must use http or https, not ${url.protocol.replace(":", "")}.`);
   }
 
-  // A custom endpoint gets the OpenAI convention, not the built-in one.
+  // A custom endpoint gets the OpenAI convention, not the built-in one, and
+  // gets it by *appending* rather than by being told the absolute path.
   // `/api/chat` is the single path in this program that is not part of the
   // OpenAI shape, and carrying it to somebody else's gateway is a 404 on the
-  // very first request — a failure that looks like a bad key, because the
-  // credential is the thing people go and check first.
-  const path = process.env.ACTOR0_PATH?.trim() || stored?.path || (custom ? "/chat/completions" : RESPITE.path);
+  // first request; naming `/chat/completions` absolutely is nearly as bad,
+  // because it silently replaces whatever prefix the gateway is served from.
+  // Leaving it unset lets the transport compose the URL correctly, and
+  // `endpointUrl` shows the user the composed result either way.
+  const explicitPath = process.env.ACTOR0_PATH?.trim() || stored?.path;
+  const path = explicitPath || (custom ? undefined : RESPITE.path);
   const model = (custom ? stored?.model : config.model) || config.model || RESPITE.model;
   if (!model.trim()) {
     throw new ConfigError("No model is set. Run /model <name>, or set ACTOR0_MODEL.");
@@ -246,7 +260,7 @@ export function resolveProvider(config: CliConfig): ResolvedProvider {
 
   return {
     baseUrl,
-    path,
+    ...(path ? { path } : {}),
     model: model.trim(),
     ...(apiKey ? { apiKey, apiKeySource: process.env.ACTOR0_API_KEY ? "ACTOR0_API_KEY" : "config.json" } : {}),
     ...(Object.keys(headers).length ? { headers } : {}),
@@ -265,10 +279,25 @@ export function maskSecret(secret: string | undefined): string {
   return `${secret.slice(0, 6)}…${secret.slice(-2)} (${secret.length} chars)`;
 }
 
+/**
+ * The URL the request will actually go to.
+ *
+ * Mirrors the transport's composition rather than guessing at it: an explicit
+ * path replaces the whole pathname, and otherwise `/chat/completions` is
+ * appended to whatever the base URL already carries. Showing the base URL on
+ * its own would send the user looking for an endpoint that is not the one
+ * being called, which is the confusion the composed form exists to remove.
+ */
+export function endpointUrl(provider: ResolvedProvider): string {
+  if (provider.path) return new URL(provider.path, provider.baseUrl).toString();
+  const base = provider.baseUrl.replace(/\/+$/, "");
+  return base.endsWith("/chat/completions") ? base : `${base}/chat/completions`;
+}
+
 /** `/provider`, as lines. Everything here is safe to screenshot. */
 export function describeProvider(provider: ResolvedProvider): string[] {
   return [
-    `endpoint   ${provider.baseUrl}${provider.path}`,
+    `endpoint   ${endpointUrl(provider)}`,
     `model      ${provider.model}`,
     `credential ${provider.apiKey ? `set — ${maskSecret(provider.apiKey)}` : "not set"}`,
     ...(provider.apiKeySource ? [`from       ${provider.apiKeySource}`] : []),
