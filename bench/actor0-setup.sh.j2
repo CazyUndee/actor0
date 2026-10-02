@@ -1,0 +1,58 @@
+#!/bin/bash
+# Install actor0 inside a Terminal-Bench task container.
+#
+# Modelled on the shipped opencode setup, which is the only Node CLI in the
+# set and therefore the only prior art for this problem: nvm for Node, npm for
+# the agent itself. The difference is that actor0 is not on npm, so it is
+# cloned and built from source.
+#
+# Every step is verified. The failure mode this file exists to prevent is an
+# agent that cannot run at all being scored as an agent that cannot solve the
+# task — those look identical in a results table, and the second one sends you
+# to improve the wrong thing.
+set -euo pipefail
+
+echo "=== actor0 setup: prerequisites ==="
+apt-get update
+apt-get install -y curl git ca-certificates
+
+echo "=== actor0 setup: node ==="
+# Node 22 is what the project's own toolchain targets. nvm rather than a
+# tarball because the shipped opencode adapter proves nvm works in these
+# images, and matching a proven path is worth more than a marginally faster one.
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+export PATH="$NVM_DIR/bin:$PATH"
+. "$NVM_DIR/nvm.sh"
+nvm install 22
+nvm use 22
+node --version
+npm --version
+
+echo "=== actor0 setup: source at {{ ref }} ==="
+rm -rf {{ install_dir }}
+git clone https://github.com/CazyUndee/actor0.git {{ install_dir }}
+cd {{ install_dir }}
+# A benchmark has to measure one commit, not whatever the branch points at now.
+git checkout --quiet {{ ref }}
+git rev-parse HEAD
+
+echo "=== actor0 setup: dependencies ==="
+# `npm ci` rather than `npm install`: it installs the lockfile exactly and
+# fails loudly when the lockfile and the manifests disagree, which is a setup
+# failure worth stopping for rather than a version drift worth tolerating.
+npm ci --no-audit --no-fund
+
+echo "=== actor0 setup: build ==="
+# The build is the harness then the CLI. The CLI resolves the harness through
+# its built `dist/`, so building the CLI alone produces a package that imports
+# symbols that are not there — and it fails at run time, inside the container,
+# on the first turn, which reads as a model problem.
+npm run build
+
+echo "=== actor0 setup: verify ==="
+# The single most important line in this file. Prove the CLI starts and can
+# reach its own argument parser *here*, in this image, before the task runs.
+node {{ install_dir }}/apps/cli/dist/index.js --version
+node {{ install_dir }}/apps/cli/dist/index.js --help > /dev/null
+echo "=== actor0 setup: done ==="

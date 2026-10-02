@@ -22,3 +22,6 @@
 # never touches the global environment. Rebuilt with:
 #   uv venv .tbench-venv && uv pip install --python .tbench-venv/Scripts/python.exe terminal-bench
 /.tbench-venv/
+
+# Rendered setup-script scratch from adapter verification.
+/.tbench-setup-test.sh
