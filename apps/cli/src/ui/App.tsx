@@ -1,7 +1,7 @@
 import { Box, Text, useApp, useInput } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage, ModelClient } from "@actor0/harness";
-import { resolveProvider, saveConfig, withModel, type CliConfig } from "../config.js";
+import { describeProvider, resolveProvider, saveConfig, withModel, type CliConfig } from "../config.js";
 import {
   applyEvent,
   emptyLive,
@@ -17,7 +17,6 @@ import { parseSlash, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { createToolHost } from "../tools.js";
 import { Banner, LiveView, StatusBar, Transcript, bannerActivity, useTerminalSize } from "./parts.js";
-import { RESPITE_HOST } from "../providers.js";
 import { Composer } from "./prompts.js";
 
 /**
@@ -76,6 +75,27 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   const toolHost = useMemo(() => createToolHost({ cwd }), [cwd]);
 
+  // The endpoint the next turn will actually use, and the display name for it.
+  //
+  // Resolved here rather than at submit so the status bar can show where
+  // requests go — the whole point of a configurable endpoint is that it is
+  // never a surprise, and a constant host in the footer is a lie the moment
+  // the endpoint is anything but the built-in one.
+  //
+  // Resolution never throws, because a config that cannot resolve is a fact
+  // about this session rather than a reason to fail to draw it: the user has
+  // to be able to *see* the broken endpoint in order to fix it. The message is
+  // carried alongside and shown when a turn is submitted.
+  const resolved = useMemo(() => {
+    try {
+      return { provider: resolveProvider(config), error: undefined } as const;
+    } catch (error) {
+      return { provider: null, error: (error as Error).message } as const;
+    }
+  }, [config]);
+  const provider = resolved.provider;
+  const endpoint = provider ? new URL(provider.baseUrl).host : "not configured";
+
 
   /** Push a notice without depending on the current state. */
   const notice = useCallback((tone: "info" | "warn" | "error", text: string) => {
@@ -128,6 +148,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           notice("info", listing.join("\n"));
           return;
         }
+        case "provider": {
+          if (!provider) {
+            notice("error", `the endpoint is not configured — ${resolved.error}`);
+            return;
+          }
+          notice("info", describeProvider(provider).join("\n"));
+          return;
+        }
         case "quit":
           exit();
           return;
@@ -135,7 +163,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           notice("warn", `unknown command ${command.input} — try /help`);
       }
     },
-    [config, exit, notice],
+    [config, exit, notice, provider, resolved.error],
   );
 
   const submit = useCallback(
@@ -170,9 +198,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       setConversation((state) => withUserInput(state, input));
       setBusy(true);
 
-      // The endpoint is fixed, so this is not a validation step — it is simply
-      // where the chosen model gets attached to it.
-      const provider = resolveProvider(config);
+      // Resolved at submit so a configuration that only just became invalid is
+      // reported here, in front of the user, instead of failing the first
+      // request with a transport error about a URL they cannot see.
+      if (!provider) {
+        notice("error", `the endpoint is not configured — ${resolved.error}`);
+        return;
+      }
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -310,7 +342,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         }
       })();
     },
-    [busy, config, notice, resumed?.updatedAt, runCommand, toolHost, updateLive],
+    [busy, config, notice, provider, resolved.error, resumed?.updatedAt, runCommand, toolHost, updateLive],
   );
 
   // Global keys. Deliberately narrow: the composer owns text entry and the
@@ -368,8 +400,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           <Banner
             title="actor0"
             version={version}
-            model={config.model}
-            endpoint={RESPITE_HOST}
+            model={provider?.model ?? config.model}
+            endpoint={endpoint}
             directory={cwd}
             activity={bannerActivity(conversation.live)}
             hint="/model to change"
@@ -419,7 +451,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         busy={busy}
       />
 
-      <StatusBar cwd={cwd} endpoint={RESPITE_HOST} hint={footerHint} />
+      <StatusBar cwd={cwd} endpoint={endpoint} hint={footerHint} />
     </Box>
   );
 }

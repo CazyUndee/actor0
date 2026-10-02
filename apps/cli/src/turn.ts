@@ -210,6 +210,11 @@ export function createModel(provider: ResolvedProvider): OpenAiCompatibleModel {
     baseUrl: provider.baseUrl,
     path: provider.path,
     model: provider.model,
+    // Omitted rather than passed as undefined so the transport's own "no
+    // credential" branch is the one that runs, which is what a local
+    // endpoint with no key needs.
+    ...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
+    ...(provider.headers ? { headers: provider.headers } : {}),
   });
 }
 

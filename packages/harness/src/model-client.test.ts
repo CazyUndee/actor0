@@ -665,3 +665,55 @@ test("a key passed in the query string never reaches an error message", async ()
     assert.ok(!(error as Error).message.includes("sk-super-secret"), "the key leaked into the message");
   }
 });
+
+test("a 401 says the credential is the thing to check, not the model", async () => {
+  // The endpoint is chosen by the user now, so the two failures a
+  // misconfiguration produces every time are common ones. Both arrive wrapped
+  // in a tidy provider sentence about the *server's* opinion — "Invalid API
+  // key", "Not Found" — and neither says that the thing to look at is the
+  // configuration rather than the model. The status always does; the body
+  // never does.
+  const refused = async (status: number, body: string) =>
+    await streamFailure(
+      new Response(body, { status, headers: { "content-type": "application/json" } }),
+    );
+
+  const unauthenticated = await refused(401, JSON.stringify({ error: { message: "Invalid API key" } }));
+  assert.match(unauthenticated.message, /credential/i, "a 401 must point at the credential");
+  assert.ok(
+    !/check the model/i.test(unauthenticated.message),
+    "it must not send the user off to the model when the key is what failed",
+  );
+
+  const missing = await refused(404, JSON.stringify({ error: { message: "Not Found" } }));
+  assert.match(missing.message, /base URL/i, "a 404 must point at the URL and path");
+  assert.match(missing.message, /chat\/completions/, "and name the path that was expected");
+
+  // 400 is ambiguous on purpose — it is also a genuine bad request — so the
+  // advice is hedged rather than stated.
+  const rejected = await refused(400, JSON.stringify({ error: { message: "unknown parameter" } }));
+  assert.match(rejected.message, /rejected the request/i);
+
+  // And a plain server fault is left alone: advice about your own settings is
+  // worse than none when the server is the thing that is broken.
+  const broken = await refused(503, "upstream unavailable");
+  assert.ok(!/credential|base URL/i.test(broken.message), `a 5xx is not a misconfiguration: ${broken.message}`);
+});
+
+test("a specific cause replaces the generic checklist rather than preceding it", async () => {
+  // The first version of the 401 advice was appended to the fallback, and the
+  // result contradicted itself one sentence later: check the key, then check
+  // the URL, the key *and the model*. It sends the user past the one thing
+  // that was wrong, in a message they read once.
+  const error = await streamFailure(
+    new Response(JSON.stringify({ error: { message: "Invalid API key" } }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+  assert.match(error.message, /rejected the credential/);
+  assert.ok(
+    !/check the URL, the key, and the model name/.test(error.message),
+    `the generic checklist must be replaced, not appended: ${error.message}`,
+  );
+});

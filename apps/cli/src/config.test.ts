@@ -3,11 +3,16 @@ import { test } from "node:test";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, readConfigFile, resolveProvider, saveConfig, withModel } from "./config.js";
+import { describeProvider, loadConfig, readConfigFile, resolveProvider, saveConfig, withModel } from "./config.js";
 import { RESPITE } from "./providers.js";
 
 /**
- * Configuration, now that there is only one endpoint.
+ * Configuration.
+ *
+ * The endpoint is configurable again, and these tests pin what replaced the
+ * four-level precedence this file used to describe — namely, that the
+ * environment beats the file, that a stored endpoint is honoured rather than
+ * ignored, and that both of those are visible when asked about.
  *
  * This file used to pin a four-level precedence between environment, command
  * line, the stored file and presets. All of that decided *which host to talk
@@ -48,10 +53,12 @@ test("the endpoint is fixed and cannot be pointed elsewhere", () => {
   });
 });
 
-test("a stored baseUrl is ignored, not honoured", () => {
-  // The exact file that caused the reported failure. It is still valid JSON
-  // and still has a model in it, so it keeps working — but its baseUrl, its
-  // request path and its absent key can no longer send traffic anywhere.
+test("a stored baseUrl is honoured, and reported as custom", () => {
+  // The file that used to be ignored. It is honoured now, because refusing to
+  // let a user point the CLI at their own endpoint is not a safety property,
+  // it is a limitation — and the failure it was introduced to prevent (traffic
+  // going to a host we have no credential for while everything on screen said
+  // otherwise) is prevented by reporting the endpoint, not by forbidding it.
   withConfigDir((dir) => {
     writeFileSync(
       join(dir, "config.json"),
@@ -63,8 +70,125 @@ test("a stored baseUrl is ignored, not honoured", () => {
     const config = loadConfig();
     assert.equal(config.model, "swiss-ai/apertus-v1.5-70b", "the model is still honoured");
     const provider = resolveProvider(config);
-    assert.equal(provider.baseUrl, RESPITE.baseUrl, "the host is not configurable");
-    assert.notEqual(provider.baseUrl, "https://publicai.co/v1");
+    assert.equal(provider.baseUrl, "https://publicai.co/v1", "the host is configurable again");
+    assert.equal(provider.model, "swiss-ai/apertus-v1.5-70b");
+    assert.equal(provider.custom, true, "and it is marked as not the built-in one");
+  });
+});
+
+test("an endpoint with no credential says so, instead of looking configured", () => {
+  // This is the failure the single-endpoint design was built to prevent: a
+  // request goes to a host that wants a key we do not have, and every visible
+  // signal says the setup is fine. `describeProvider` is the one place that
+  // states the credential's actual presence, so it is pinned — including that
+  // it never prints the credential, which is what makes it safe to screenshot.
+  const described = describeProvider({
+    baseUrl: "https://api.example.com/v1",
+    path: "/chat/completions",
+    model: "some-model",
+    custom: true,
+  });
+  assert.ok(
+    described.some((line) => /credential not set/.test(line)),
+    `a missing key must be visible, got: ${described.join(" | ")}`,
+  );
+  assert.ok(
+    described.some((line) => /api\.example\.com/.test(line)),
+    "the host in play must be visible",
+  );
+
+  const withKey = describeProvider({
+    baseUrl: "https://api.example.com/v1",
+    path: "/chat/completions",
+    model: "some-model",
+    apiKey: "sk-live-abcdefghijklmnop",
+    apiKeySource: "config.json",
+    custom: true,
+  });
+  const line = withKey.find((entry) => entry.startsWith("credential"))!;
+  assert.ok(!line.includes("abcdefghijklmnop"), "the key itself must never be printed");
+  assert.ok(line.includes("sk-liv"), "but enough of it to tell two keys apart");
+  assert.ok(withKey.some((entry) => entry.includes("config.json")), "and where it came from");
+});
+
+test("a model cannot be carried across from another endpoint", () => {
+  // The silent-drift bug the flat `model` field would have had: a name that
+  // exists on one gateway and not another, displayed as though it were fine.
+  // `/model` writes to whichever field the active endpoint reads, so there is
+  // only ever one place the model in play lives.
+  withConfigDir(() => {
+    const custom = withModel({ model: "", models: [], provider: { baseUrl: "https://api.example.com/v1" } }, "m-1");
+    assert.equal(custom.provider?.model, "m-1", "a custom endpoint records the model on itself");
+    assert.equal(custom.model, "", "and does not pretend the built-in one changed");
+
+    const builtIn = withModel({ model: "", models: [] }, "m-2");
+    assert.equal(builtIn.model, "m-2", "the built-in endpoint keeps the flat field");
+  });
+});
+
+test("a key given as ${NAME} is read from the environment, and a missing one is named", () => {
+  withConfigDir(() => {
+    const previous = process.env.ACTOR0_TEST_KEY;
+    process.env.ACTOR0_TEST_KEY = "sk-from-env";
+    try {
+      const provider = resolveProvider({
+        model: "m",
+        models: [],
+        provider: { baseUrl: "https://api.example.com/v1", apiKey: "${ACTOR0_TEST_KEY}" },
+      });
+      assert.equal(provider.apiKey, "sk-from-env", "the placeholder must be substituted");
+      assert.equal(provider.apiKeySource, "config.json", "and the source is the file, not the shell");
+
+      // An unset variable must not become an empty credential: `Bearer ` is
+      // authenticated as nobody and comes back as a 401 that reads like a
+      // model problem.
+      assert.throws(
+        () =>
+          resolveProvider({
+            model: "m",
+            models: [],
+            provider: { baseUrl: "https://api.example.com/v1", apiKey: "${ACTOR0_DEFINITELY_UNSET}" },
+          }),
+        /ACTOR0_DEFINITELY_UNSET/,
+        "the error has to name the variable that is not set",
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ACTOR0_TEST_KEY;
+      else process.env.ACTOR0_TEST_KEY = previous;
+    }
+  });
+});
+
+test("ACTOR0_BASE_URL points a run at an endpoint with no config file at all", () => {
+  // How a CI job or a benchmark run reaches a gateway: the environment, not a
+  // file that may not exist and cannot be edited. A shell that cannot win is a
+  // shell that cannot recover from a stale config.
+  withConfigDir(() => {
+    const previous = process.env.ACTOR0_BASE_URL;
+    process.env.ACTOR0_BASE_URL = "https://gateway.test/v1";
+    try {
+      const provider = resolveProvider({ model: "m", models: [] });
+      assert.equal(provider.baseUrl, "https://gateway.test/v1");
+      assert.equal(provider.path, "/chat/completions", "the OpenAI default, appended to the base");
+      assert.equal(provider.custom, true);
+    } finally {
+      if (previous === undefined) delete process.env.ACTOR0_BASE_URL;
+      else process.env.ACTOR0_BASE_URL = previous;
+    }
+  });
+});
+
+test("a base URL that is not a URL is rejected before the first request", () => {
+  withConfigDir(() => {
+    assert.throws(
+      () => resolveProvider({ model: "m", models: [], provider: { baseUrl: "not a url" } }),
+      /not a URL/,
+      "a typo must be a message, not a request to somewhere unexpected",
+    );
+    assert.throws(
+      () => resolveProvider({ model: "m", models: [], provider: { baseUrl: "ftp://host/v1" } }),
+      /http or https/,
+    );
   });
 });
 

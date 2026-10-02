@@ -596,7 +596,8 @@ export function describeHttpFailure(
   // to read -- got no statement of what happens next at all. That is the thing
   // this function exists to say.
   const detail = parseErrorMessage(body);
-  if (detail) return `${head}: ${detail.replace(/[.\s]+$/, "")}. ${closeLine(retriable, retryAfterMs)}`;
+  const misconfigured = misconfigurationAdvice(response.status);
+  if (detail) return `${head}: ${detail.replace(/[.\s]+$/, "")}. ${closeLine(retriable, retryAfterMs, misconfigured)}`;
 
   // Nothing usable in the body. Say what shape arrived instead of quoting it.
   const html = looksLikeHtml(response.headers.get("content-type"), body);
@@ -608,7 +609,41 @@ export function describeHttpFailure(
     : body.trim()
       ? `it answered with a body that is not a usable error (${contentType}, ${body.length} bytes)`
       : `it answered with an empty body (${contentType})`;
-  return `${head}: ${shape}. ${closeLine(retriable, retryAfterMs)}`;
+  return `${head}: ${shape}. ${closeLine(retriable, retryAfterMs, misconfigured)}`;
+}
+
+/**
+ * What a status means when the endpoint is one the user chose.
+ *
+ * The two failures a misconfigured endpoint produces every single time are a
+ * rejected credential and a URL that is not there, and both arrive wrapped in
+ * a tidy provider sentence describing the *server's* opinion: "Invalid API
+ * key", "Not Found". That is accurate and useless, because the user needs to
+ * know that the thing to check is the configuration they just wrote rather
+ * than the model they asked for — a distinction the body never makes and the
+ * status always does.
+ *
+ * A complete closing line, not a prefix, because it *replaces* the generic
+ * one rather than preceding it. Appended to the fallback it contradicted
+ * itself: the message said to check the key and, in the next sentence, to
+ * check the URL, the key *and the model* — sending the user past the one thing
+ * that was actually wrong.
+ *
+ * Said without naming a mechanism to fix it, so the transport stays a
+ * transport. Which knob to turn is the host's business.
+ */
+function misconfigurationAdvice(status: number): string | undefined {
+  switch (status) {
+    case 401:
+    case 403:
+      return "The endpoint rejected the credential — the API key for this endpoint is missing, wrong, or expired. Retrying will not help.";
+    case 404:
+      return "There is no OpenAI-compatible chat endpoint at that URL and path — check the base URL, and whether the path is /chat/completions. Retrying will not help.";
+    case 400:
+      return "The endpoint rejected the request itself — if this is not an OpenAI-compatible API, it may need a different path. Retrying will not help.";
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -619,8 +654,8 @@ export function describeHttpFailure(
  * Saying "the harness will retry with backoff" about a window that resets in
  * forty minutes is advice the reader will act on and find false.
  */
-function closeLine(retriable: boolean, wait?: number): string {
-  if (wait === undefined) return retryAdvice(retriable);
+function closeLine(retriable: boolean, wait?: number, permanentAdvice?: string): string {
+  if (wait === undefined) return retryAdvice(retriable, permanentAdvice);
   const seconds = Math.ceil(wait / 1_000);
   return retriable
     ? `Rate limited: the harness will wait ${seconds}s and try again.`
