@@ -107,6 +107,20 @@ export type CompactionOptions = {
   clearable?: ReadonlySet<string>;
   /** Emitted instead of a cleared payload. */
   marker?: (toolName: string, clearedChars: number) => string;
+  /**
+   * Called for every payload a pass replaces with a marker.
+   *
+   * Compaction is the only thing this CLI does to a conversation that nobody
+   * asked for, and it is invisible from the outside: the transcript on
+   * screen keeps showing what each tool returned, because that is what
+   * happened and nobody is going to un-see it. So a caller that wants to
+   * answer "what can the model no longer read?" has no way to — the array
+   * that comes back is the same conversation with different text, and
+   * diffing it afterwards is guesswork once a payload was already cleared by
+   * an earlier pass. The size reported is the original payload, not the
+   * arithmetic saving: what was lost is what the model could once read.
+   */
+  onClear?: (toolName: string, clearedChars: number) => void;
 };
 
 export const defaultMarker = (toolName: string, clearedChars: number): string =>
@@ -231,6 +245,7 @@ export function compactHistory(
   const budget = (options.maxTokens ?? DEFAULT_TOKEN_BUDGET) * CHARS_PER_TOKEN;
   const clearable = options.clearable ?? CLEARABLE_TOOLS;
   const marker = options.marker ?? defaultMarker;
+  const onClear = options.onClear;
 
   // Repair first, always — see `keepValidUnits`. Not budget-driven: a history
   // can be unanswerable and small at the same time.
@@ -250,6 +265,7 @@ export function compactHistory(
     const replacement = marker(name, message.content.length);
     result[i] = { ...message, content: replacement };
     total -= message.content.length - replacement.length;
+    onClear?.(name, message.content.length);
   }
 
   // Over budget with nothing left to clear. Returning the history intact is
@@ -281,6 +297,7 @@ export function compactHistoryPerMessage(
 ): ChatMessage[] {
   const clearable = options.clearable ?? CLEARABLE_TOOLS;
   const marker = options.marker ?? defaultMarker;
+  const onClear = options.onClear;
   const names = toolNamesByCallId(messages);
   const result: ChatMessage[] = messages.slice();
 
@@ -324,6 +341,7 @@ export function compactHistoryPerMessage(
       const replacement = marker(name, target.content.length);
       result[index] = { ...target, content: replacement };
       used -= target.content.length - replacement.length;
+      onClear?.(name, target.content.length);
     }
   }
 

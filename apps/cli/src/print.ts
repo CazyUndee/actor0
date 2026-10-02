@@ -2,7 +2,7 @@ import type { ChatMessage, ModelClient } from "@actor0/harness";
 import { applyEvent, initialConversation, type ConversationState } from "./conversation.js";
 import { resolveProvider, type CliConfig } from "./config.js";
 import { createToolHost } from "./tools.js";
-import { cancelledTurnMessages, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "./turn.js";
+import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "./turn.js";
 import { saveSession } from "./session.js";
 
 /**
@@ -97,7 +97,7 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
   };
 
   try {
-    const { result } = await runTurn({
+    const { result, recovery } = await runTurn({
       model: resolveProvider(options.config),
       ...(options.client ? { client: options.client } : {}),
       messages: options.messages,
@@ -143,6 +143,12 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
     // continue. The transcript carries a marker now either way; this is the
     // half a person needs.
     if (result.truncated) log(`  ! ${describeTruncation()}`);
+
+    // The request did not fit and was asked again without the payloads it
+    // could not carry. Nothing else says so — the answer arrives either way —
+    // and the transcript a script may have kept from an earlier run still
+    // shows what those results returned.
+    if (recovery) log(`  ! ${describeRecovery(recovery)}`);
 
     const usage = usageSummary(result.usage);
     if (usage) log(`  ${usage}`);

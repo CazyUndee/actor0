@@ -11,6 +11,7 @@ import {
   seedSystemPrompt,
   forStorage,
   cancelledTurnMessages,
+  describeRecovery,
   failedTurnMessages,
   defaultSystemPrompt,
   INTERRUPT_MARKER,
@@ -248,6 +249,19 @@ const bulkyHistory = (chars = 60_000): ChatMessage[] => [
   { role: "user", content: "and now, what did it say?" },
 ];
 
+/**
+ * A history that is malformed rather than large: its last call never got a
+ * result, so repairing the history is what makes the request fit.
+ */
+const danglingHistory = (chars = 5_000): ChatMessage[] => [
+  { role: "user", content: "read readme.md" },
+  { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: "{}" } }] },
+  { role: "tool", tool_call_id: "call_1", name: "read", content: "x".repeat(chars) },
+  { role: "assistant", content: "It says hello." },
+  { role: "user", content: "and now, what did it say?" },
+  { role: "assistant", content: "", tool_calls: [{ id: "call_2", type: "function", function: { name: "read", arguments: "{}" } }] },
+];
+
 /** The frame a provider sends when the request does not fit. */
 const overflowFrame = {
   error: {
@@ -287,6 +301,74 @@ test("a request the model calls too big is asked again with a compacted history"
     assert.ok(toolMessage, "the cleared result must stay in the transcript");
     assert.match(toolMessage!.content, /result cleared/);
     assert.equal(result.messages.length, bulkyHistory().length + 3, "nothing may be dropped but the new exchange");
+  } finally {
+    await close(server);
+  }
+});
+
+test("a recovery reports what the model can no longer see", async () => {
+  // The recovery replaces real tool payloads with markers and the user's
+  // transcript is unchanged: the rows still show what the file said, because
+  // that is what happened and it is not going to be un-seen. So after this
+  // turn the screen and the context disagree, and the disagreement is the
+  // model answering from a file it can no longer read. Nothing said so. The
+  // turn has to hand the host what it took out, because the host is the only
+  // surface the user is looking at.
+  const { server, baseUrl } = await startServer((turn) =>
+    turn === 0 ? [overflowFrame] : textFrames("You were looking at a file that says hello."),
+  );
+  try {
+    const outcome = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: bulkyHistory(),
+      input: "and now, what did it say?",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+    });
+
+    assert.deepEqual(outcome.recovery, { results: 1, chars: 60_000 });
+    assert.match(describeRecovery(outcome.recovery!), /no longer/i, "and the sentence has to name the consequence");
+  } finally {
+    await close(server);
+  }
+});
+
+test("a turn that never overflowed reports no recovery", async () => {
+  const { server, baseUrl } = await startServer(() => textFrames("Short answer."));
+  try {
+    const outcome = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: bulkyHistory(),
+      input: "and now, what did it say?",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+    });
+    assert.equal(outcome.recovery, undefined, "a turn that fit must not claim it rewrote anything");
+  } finally {
+    await close(server);
+  }
+});
+
+test("a retry earned by repair rather than by size reports nothing", async () => {
+  // Compaction repairs a malformed history as well as shortening a large one:
+  // a call that never got a result is dropped whole, which is what makes the
+  // request fit here, and which takes no payload the model could read. The
+  // retry is still worth making, and saying so is not: a warning that reports
+  // zero results, in front of a user whose conversation lost nothing, is a
+  // warning frame that teaches people to read past warnings.
+  const { server, baseUrl } = await startServer((turn) =>
+    turn === 0 ? [overflowFrame] : textFrames("Short answer."),
+  );
+  try {
+    const outcome = await runTurn({
+      model: { baseUrl, path: "/chat/completions", model: "test-model" },
+      messages: danglingHistory(),
+      input: "ask again",
+      toolHost: createToolHost({ cwd: cwd() }),
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(outcome.recovery, undefined, "nothing the model could read was taken, so there is nothing to report");
   } finally {
     await close(server);
   }

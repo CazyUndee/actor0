@@ -246,6 +246,31 @@ export type TurnOutcome = {
   result: RunResult;
   /** Thrown values the harness classified as non-retriable still reach here. */
   error?: undefined;
+  /**
+   * Set when the request did not fit and was asked again on a compacted
+   * history — see `Recovery`. Absent when the second attempt happened for a
+   * reason that cost the model nothing, so there is nothing to say.
+   */
+  recovery?: Recovery;
+};
+
+/**
+ * What a context-overflow recovery took out of the conversation.
+ *
+ * The recovery is the one rewrite this CLI performs that the user never
+ * asked for, and it is the one that matters: the answer still arrives, so
+ * nothing looks wrong, while the model can no longer read the file contents
+ * it read ten turns ago. The transcript on screen is unchanged — those rows
+ * still show what the tool returned — so the screen and the context quietly
+ * disagree, and a user watching the agent re-read or misremember a file has
+ * no way to know that is what happened. So the turn hands this back and the
+ * host says it, in the client's own words via `describeRecovery`.
+ */
+export type Recovery = {
+  /** How many earlier tool results were replaced by markers. */
+  results: number;
+  /** How much payload they held. */
+  chars: number;
 };
 
 /**
@@ -344,9 +369,9 @@ export async function runTurn(options: TurnOptions): Promise<TurnOutcome> {
   try {
     return { result: await attempt(messages) };
   } catch (error) {
-    const compacted = recoveryHistory(error, messages, produced);
-    if (!compacted) throw error;
-    return { result: await attempt(compacted) };
+    const recovery = recoveryHistory(error, messages, produced);
+    if (!recovery) throw error;
+    return { result: await attempt(recovery.messages), recovery: recovery.summary };
   }
 }
 
@@ -365,11 +390,48 @@ export async function runTurn(options: TurnOptions): Promise<TurnOutcome> {
  * supposed to end. And it happens once: the retry is not a loop, so a second
  * overflow is a second failure and is reported as one.
  */
-function recoveryHistory(error: unknown, messages: ChatMessage[], produced: boolean): ChatMessage[] | undefined {
+function recoveryHistory(
+  error: unknown,
+  messages: ChatMessage[],
+  produced: boolean,
+): { messages: ChatMessage[]; summary?: Recovery } | undefined {
   if (produced || !isContextOverflowError(error)) return undefined;
-  const compacted = compactHistory(messages, { maxTokens: OVERFLOW_RECOVERY_TOKENS });
+  let results = 0;
+  let chars = 0;
+  const compacted = compactHistory(messages, {
+    maxTokens: OVERFLOW_RECOVERY_TOKENS,
+    onClear: (_name, clearedChars) => {
+      results += 1;
+      chars += clearedChars;
+    },
+  });
   if (measureHistory(compacted) >= measureHistory(messages)) return undefined;
-  return compacted;
+  // Compaction repairs before it shortens — it drops orphan results and calls
+  // that never got one — so a retry can be earned by a history that was
+  // malformed rather than by one that was too big, and then take no payload at
+  // all. That retry is still worth making. Reporting it is not: the sentence
+  // would name a count of zero, in front of a user whose conversation lost
+  // nothing, in a warning frame that trains people to ignore warnings.
+  return results === 0 ? { messages: compacted } : { messages: compacted, summary: { results, chars } };
+}
+
+/**
+ * What to tell the user when their conversation was rewritten to fit.
+ *
+ * Shared by both clients for the same reason as `describeStop`: the TUI can
+ * afford a banner and `-p` can afford a line on stderr, and a rewrite that
+ * one of them mentions and the other does not is the rewrite that half the
+ * users never hear about. The size is in it because "your context was
+ * compacted" is a reassurance and "12,400 characters of tool output are no
+ * longer readable" is a fact.
+ */
+export function describeRecovery(recovery: Recovery): string {
+  const results = `${recovery.results} earlier tool result${recovery.results === 1 ? "" : "s"}`;
+  return (
+    `this request did not fit the context window, so ${results} ` +
+    `(${recovery.chars.toLocaleString("en-US")} chars) were replaced by markers before it was ` +
+    `sent again — the transcript still shows what they returned, but the model can no longer read it.`
+  );
 }
 
 /** One-line token summary for the status bar. */

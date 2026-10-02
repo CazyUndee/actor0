@@ -310,6 +310,51 @@ test("compaction is idempotent", () => {
   assert.deepEqual(twice, once);
 });
 
+test("both passes report what they took out, with the size they took", () => {
+  // Compaction is the one thing this CLI does to a conversation without being
+  // asked, and it is invisible from the outside: the rows on screen keep
+  // showing what the tool returned, because that did happen. So the pass
+  // itself has to say what it removed — a caller that cannot answer "what
+  // can the model no longer see?" cannot tell the user. Sizes are the
+  // original payloads, not the arithmetic saving: what was lost is what the
+  // model could once read.
+  const source = conversation(4, ["read", "shell"], 500);
+  const payloads = new Map(
+    source.filter((m) => m.role === "tool").map((m) => [m.name ?? "", m.content.length]),
+  );
+  const cleared: Array<[string, number]> = [];
+  compactHistory(source, {
+    maxTokens: 10,
+    onClear: (name, chars) => cleared.push([name, chars]),
+  });
+  assert.ok(cleared.length >= 2, `expected several clears, got ${cleared.length}`);
+  for (const [name, chars] of cleared) {
+    assert.ok(CLEARABLE_TOOLS.has(name), `${name} is not a clearable tool`);
+    assert.equal(chars, payloads.get(name), `${name} reported a size other than the payload that was there`);
+  }
+
+  const round = conversation(1, ["read", "read", "read"], 9_000);
+  const burst: Array<[string, number]> = [];
+  compactHistoryPerMessage(round, { onClear: (name, chars) => burst.push([name, chars]) });
+  assert.equal(burst.length, 3, `the per-message pass must report too, got ${burst.length}`);
+  assert.equal(burst[0]?.[1], round.find((m) => m.role === "tool")!.content.length);
+});
+
+test("a pass that clears nothing says nothing", () => {
+  // The callback is a report, not a log line: a host that announces "your
+  // context was rewritten" on every save is the same silence in the other
+  // direction, so nothing fired means nothing was called.
+  let called = 0;
+  compactHistory(conversation(4, ["read"], 50), {
+    maxTokens: 1_000_000,
+    onClear: () => { called += 1; },
+  });
+  compactHistoryPerMessage(conversation(4, ["read"], 50), {
+    onClear: () => { called += 1; },
+  });
+  assert.equal(called, 0);
+});
+
 // --- the unreachable budget -------------------------------------------------
 
 // The invariant, stated as the user asked for it: compaction can reduce

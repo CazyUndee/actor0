@@ -223,6 +223,56 @@ test("a mid-turn failure prints what streamed and still persists the exchange", 
   );
 });
 
+test("a request that did not fit says what it cleared to fit", async () => {
+  // The recovery is the one thing the CLI does to a conversation nobody
+  // asked for: earlier tool payloads become markers, and the answer comes
+  // back as if nothing happened. In the TUI the rows still show what the
+  // file said, so the screen and the context quietly disagree — and a user
+  // watching the agent answer from a file it can no longer read has no way
+  // to know that is what happened.
+  scratch();
+  let turn = 0;
+  const overflowing: ModelClient = {
+    async *stream() {
+      turn += 1;
+      if (turn === 1) {
+        // The real shape: the transport throws what the provider said, and
+        // the harness's classifier decides from the text whether it is a
+        // conversation that does not fit or a request that never could.
+        throw new ModelTransportError(
+          "This model's maximum context length is 8192 tokens. However, your messages resulted in 91234 tokens.",
+          false,
+        );
+      }
+      yield { type: "token" as const, delta: "here is what it said" };
+      yield { type: "done" as const };
+    },
+  };
+  const { code, out, err } = await captureBoth((sinks) =>
+    runPrintTurn({
+      prompt: "what did it say?",
+      cwd: scratch(),
+      config,
+      messages: [
+        { role: "user", content: "read readme.md" },
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: "{}" } }],
+        },
+        { role: "tool", tool_call_id: "call_1", name: "read", content: "x".repeat(60_000) },
+        { role: "assistant", content: "It says hello." },
+      ],
+      client: overflowing,
+      ...sinks,
+    }),
+  );
+  assert.equal(out, "here is what it said\n");
+  assert.equal(code, 0);
+  assert.match(err, /no longer/i, "what left the model's view has to be said where a script reads it");
+  assert.match(err, /60,000/, "and with a size, so it is a fact and not a reassurance");
+});
+
 test("a turn that runs out of tool rounds says so, and fails a run that got no answer", async () => {
   // Claude Code learned this one from a blank line: `-p` mode used to treat
   // any turn that did not throw as success, so a turn whose last message was

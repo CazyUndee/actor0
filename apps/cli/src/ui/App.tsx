@@ -11,7 +11,7 @@ import {
   withUserInput,
   type ConversationState,
 } from "../conversation.js";
-import { cancelledTurnMessages, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "../turn.js";
+import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "../turn.js";
 import { newSessionId, saveSession } from "../session.js";
 import { parseSlash, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
@@ -178,7 +178,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
       void (async () => {
         try {
-          const { result } = await runTurn({
+          const { result, recovery } = await runTurn({
             model: provider,
             ...(transport ? { client: transport } : {}),
             messages: messagesRef.current,
@@ -222,6 +222,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           // that asking again is the way to get the rest of it.
           if (result.truncated) {
             notice("warn", describeTruncation());
+          }
+          // The overflow recovery rewrote what the model can read, and the
+          // rows above still show the real contents it can no longer see.
+          // That divergence is the whole reason this exists: the turn looks
+          // like it succeeded, so nothing else would ever mention it.
+          if (recovery) {
+            notice("warn", describeRecovery(recovery));
           }
           const tokens = usageSummary(result.usage);
           if (tokens) notice("info", tokens);
