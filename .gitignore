@@ -17,3 +17,8 @@
 # Agent scratch: patch scripts, probe outputs, capture logs. Not part of the
 # product, and the one thing in a working tree that a stray `git add -A` would
 # happily publish.
+
+# Terminal-Bench harness venv: installed into the repo so a benchmark run
+# never touches the global environment. Rebuilt with:
+#   uv venv .tbench-venv && uv pip install --python .tbench-venv/Scripts/python.exe terminal-bench
+/.tbench-venv/
