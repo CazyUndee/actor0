@@ -25,3 +25,7 @@
 
 # Rendered setup-script scratch from adapter verification.
 /.tbench-setup-test.sh
+
+# Python bytecode from the Terminal-Bench adapter, imported on the host.
+__pycache__/
+*.pyc
