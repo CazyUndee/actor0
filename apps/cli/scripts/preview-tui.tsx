@@ -23,7 +23,7 @@ import { createElement } from "react";
 import { render } from "ink";
 import { App } from "../src/ui/App.js";
 import { ModelTransportError, type ModelEvent, type ModelClient } from "@actor0/harness";
-import { withModel } from "../src/config.js";
+import { addProvider, withModel } from "../src/config.js";
 
 /**
  * Minimal VT100 screen: cursor movement, erase, newline, and scrolling. SGR is
@@ -529,7 +529,16 @@ async function main(): Promise<void> {
   const screen = new Screen(SCREEN_ROWS);
   stdout.on("data", (chunk: Buffer) => screen.write(chunk.toString("utf8")));
 
-  const config = withModel({ model: "demo-model", models: ["demo-model"] }, "demo-model");
+  // Two registered providers so the `/provider` menu (frame 25) has rows. The
+  // last-added is active, so the run is "configured" and onboarding does not
+  // open; the mock transport rides in regardless of which endpoint is active.
+  const config = addProvider(
+    addProvider(
+      withModel({ model: "demo-model", models: ["demo-model"] }, "demo-model"),
+      { baseUrl: "https://api.example.com/v1", model: "example-model" },
+    ),
+    { baseUrl: "http://localhost:11434/v1", model: "llama3" },
+  );
 
   // The endpoint is fixed, so the mock rides in on the harness's ModelClient
   // port rather than on a base URL the user could have set.
@@ -949,6 +958,32 @@ const ask = async (question: string): Promise<void> => {
     app.unmount();
     process.exit(1);
   }
+
+  // The provider menu. `/provider` opens it in place of the composer: it lists
+  // the registered endpoints with the active one marked, plus the built-in row
+  // and the add action. Enter on the first row switches to it, and the status
+  // bar follows. Kept last so switching the active endpoint cannot disturb any
+  // earlier frame or the checks above.
+  stdin.write("/provider");
+  await wait(120);
+  stdin.write("\r");
+  await wait(250);
+  await show("25 · /provider opens the menu");
+
+  stdin.write("\r");
+  await wait(250);
+  await show("26 · selecting one switches the endpoint");
+
+  // The add-provider flow, first phase: `/provider → n` opens the kind picker —
+  // the transport × auth choice the whole BYOK onboarding starts from. Sign-in
+  // and model-fetch follow a selection; this frame is the choice itself.
+  stdin.write("/provider");
+  await wait(120);
+  stdin.write("\r");
+  await wait(200);
+  stdin.write("n");
+  await wait(200);
+  await show("27 · add a provider — pick a kind");
 
   app.unmount();
   process.exit(0);

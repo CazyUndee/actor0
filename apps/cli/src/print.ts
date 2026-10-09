@@ -1,6 +1,6 @@
 import type { ChatMessage, ModelClient } from "@actor0/harness";
 import { applyEvent, initialConversation, type ConversationState } from "./conversation.js";
-import { resolveProvider, type CliConfig } from "./config.js";
+import { resolveProvider, type CliConfig, type ResolvedProvider } from "./config.js";
 import { createToolHost } from "./tools.js";
 import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "./turn.js";
 import { saveSession } from "./session.js";
@@ -81,6 +81,18 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
   const err = options.err ?? process.stderr;
   const log = (line: string) => err.write(`${line}\n`);
 
+  // The provider to ask of, for the model name and the session record. When a
+  // client is injected the endpoint is bypassed, so an unconfigured provider is
+  // not fatal — the client *is* the endpoint, and only the model name is still
+  // wanted. Without a client, a missing provider is a real BYOK error and stands.
+  let model: ResolvedProvider;
+  try {
+    model = resolveProvider(options.config);
+  } catch (error) {
+    if (!options.client) throw error;
+    model = { baseUrl: "http://localhost", model: options.config.model || "model", transport: "openai", auth: "api-key" };
+  }
+
   const persist = (messages: ChatMessage[]): void => {
     if (!options.session) return;
     try {
@@ -88,7 +100,7 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
         id: options.session.id,
         createdAt: options.session.createdAt,
         updatedAt: new Date().toISOString(),
-        model: resolveProvider(options.config).model,
+        model: model.model,
         messages,
       });
     } catch (error) {
@@ -98,7 +110,7 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
 
   try {
     const { result, recovery } = await runTurn({
-      model: resolveProvider(options.config),
+      model,
       ...(options.client ? { client: options.client } : {}),
       messages: options.messages,
       input: options.prompt,

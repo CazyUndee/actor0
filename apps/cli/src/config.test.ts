@@ -4,114 +4,163 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  activeNamedProvider,
+  addProvider,
   describeProvider,
   endpointUrl,
   loadConfig,
+  namedProviders,
+  providerName,
   readConfigFile,
+  removeProvider,
   resolveProvider,
   saveConfig,
+  setActiveProvider,
   withModel,
+  type CliConfig,
 } from "./config.js";
-import { RESPITE } from "./providers.js";
 
 /**
- * Configuration.
+ * Configuration, BYOK.
  *
- * The endpoint is configurable again, and these tests pin what replaced the
- * four-level precedence this file used to describe — namely, that the
- * environment beats the file, that a stored endpoint is honoured rather than
- * ignored, and that both of those are visible when asked about.
- *
- * This file used to pin a four-level precedence between environment, command
- * line, the stored file and presets. All of that decided *which host to talk
- * to*, and it went wrong in the worst possible way: a stored `baseUrl` for a
- * host that needs a credential outlived the reason it was written, a request
- * went there anyway, and every visible signal still named the right provider.
- *
- * So the precedence is gone rather than fixed. What is left to get right is
- * narrower, and these tests hold exactly that.
+ * There is no built-in endpoint: a provider must be configured, and
+ * `resolveProvider` says so rather than quietly talking to a host nobody chose.
+ * What these tests pin is that the environment beats the file, that a stored
+ * provider is honoured and visible, that migration never re-routes a request,
+ * and that a half-configured or absent provider fails by name rather than at
+ * the first request.
  */
 
 function withConfigDir<T>(body: (dir: string) => T): T {
   const dir = mkdtempSync(join(tmpdir(), "actor0-config-"));
   const previous = process.env.ACTOR0_CONFIG_DIR;
+  // Isolate the endpoint env vars too: a developer shell that exports
+  // ACTOR0_BASE_URL (any BYOK user's) would otherwise decide the host for these
+  // tests and skip the cases they assert.
+  const envKeys = ["ACTOR0_BASE_URL", "ACTOR0_MODEL", "ACTOR0_API_KEY", "ACTOR0_PATH"];
+  const savedEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+  for (const key of envKeys) delete process.env[key];
   process.env.ACTOR0_CONFIG_DIR = dir;
   try {
     return body(dir);
   } finally {
     if (previous === undefined) delete process.env.ACTOR0_CONFIG_DIR;
     else process.env.ACTOR0_CONFIG_DIR = previous;
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-test("there is no config file and the CLI still works", () => {
+const MODEL = "demo-model";
+
+test("with nothing configured, resolveProvider says so instead of falling back", () => {
   withConfigDir(() => {
-    const config = loadConfig();
-    assert.equal(config.model, RESPITE.model, "falls back to the built-in model");
+    assert.throws(() => resolveProvider(loadConfig()), /No provider is configured/, "BYOK: no silent host");
   });
 });
 
-test("the endpoint is fixed and cannot be pointed elsewhere", () => {
-  withConfigDir(() => {
-    const provider = resolveProvider(loadConfig());
-    assert.equal(provider.baseUrl, RESPITE.baseUrl);
-    assert.equal(provider.path, RESPITE.path);
-    assert.equal(provider.model, RESPITE.model);
-  });
-});
-
-test("a stored baseUrl is honoured, and reported as custom", () => {
-  // The file that used to be ignored. It is honoured now, because refusing to
-  // let a user point the CLI at their own endpoint is not a safety property,
-  // it is a limitation — and the failure it was introduced to prevent (traffic
-  // going to a host we have no credential for while everything on screen said
-  // otherwise) is prevented by reporting the endpoint, not by forbidding it.
+test("a stored provider is honoured, and its transport is carried", () => {
   withConfigDir((dir) => {
     writeFileSync(
       join(dir, "config.json"),
       JSON.stringify({
-        provider: { baseUrl: "https://publicai.co/v1", model: "swiss-ai/apertus-v1.5-70b" },
+        providers: [{ name: "publicai.co", baseUrl: "https://publicai.co/v1", model: "swiss-ai/apertus-v1.5-70b" }],
+        activeProvider: "publicai.co",
         models: [],
       }),
     );
-    const config = loadConfig();
-    assert.equal(config.model, "swiss-ai/apertus-v1.5-70b", "the model is still honoured");
-    const provider = resolveProvider(config);
-    assert.equal(provider.baseUrl, "https://publicai.co/v1", "the host is configurable again");
+    const provider = resolveProvider(readConfigFile());
+    assert.equal(provider.baseUrl, "https://publicai.co/v1", "the host is honoured");
     assert.equal(provider.model, "swiss-ai/apertus-v1.5-70b");
-    assert.equal(provider.custom, true, "and it is marked as not the built-in one");
+    assert.equal(provider.transport, "openai", "a config that named no transport is OpenAI-compatible");
+    assert.equal(provider.auth, "api-key");
+  });
+});
+
+test("an anthropic provider composes the Messages URL from its base", () => {
+  const provider = resolveProvider({
+    model: "",
+    models: [],
+    providers: [{ name: "claude", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "api-key", apiKey: "k", model: "claude-x" }],
+    activeProvider: "claude",
+  });
+  assert.equal(provider.transport, "anthropic");
+  assert.equal(provider.path, undefined, "no absolute path is invented");
+  assert.equal(endpointUrl(provider), "https://api.anthropic.com/v1/messages", "the Messages path is appended to the base");
+});
+
+test("a chatgpt provider keeps its /backend-api/codex prefix in the composed URL", () => {
+  // The bug this pins: a default path of `/responses` replaces the whole
+  // pathname and drops the backend prefix, sending every request to
+  // chatgpt.com/responses. The path must append, not replace.
+  const provider = resolveProvider({
+    model: "gpt-5",
+    models: [],
+    providers: [{ name: "chatgpt", baseUrl: "https://chatgpt.com/backend-api/codex", transport: "chatgpt", auth: "oauth", model: "gpt-5", oauth: { accessToken: "AT", accountId: "acct" } }],
+    activeProvider: "chatgpt",
+  });
+  assert.equal(endpointUrl(provider), "https://chatgpt.com/backend-api/codex/responses");
+  assert.equal(provider.oauth?.accountId, "acct");
+});
+
+test("an oauth provider with no token is refused by name, not degraded to an empty key", () => {
+  assert.throws(
+    () =>
+      resolveProvider({
+        model: "m",
+        models: [],
+        providers: [{ name: "c", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "oauth", model: "m" }],
+        activeProvider: "c",
+      }),
+    /signs in with OAuth but has no token/,
+  );
+});
+
+test("an empty ACTOR0_API_KEY does not delete the stored key", () => {
+  withConfigDir(() => {
+    process.env.ACTOR0_API_KEY = "";
+    try {
+      const provider = resolveProvider({
+        model: "m",
+        models: [],
+        providers: [{ name: "p", baseUrl: "https://api.example.com/v1", apiKey: "sk-stored", model: "m" }],
+        activeProvider: "p",
+      });
+      assert.equal(provider.apiKey, "sk-stored", "an exported-but-empty key is treated as unset");
+    } finally {
+      delete process.env.ACTOR0_API_KEY;
+    }
   });
 });
 
 test("an endpoint with no credential says so, instead of looking configured", () => {
-  // This is the failure the single-endpoint design was built to prevent: a
-  // request goes to a host that wants a key we do not have, and every visible
-  // signal says the setup is fine. `describeProvider` is the one place that
-  // states the credential's actual presence, so it is pinned — including that
-  // it never prints the credential, which is what makes it safe to screenshot.
+  // `describeProvider` is the one place that states the credential's actual
+  // presence, so it is pinned — including that it never prints the credential,
+  // which is what makes it safe to screenshot.
   const described = describeProvider({
     baseUrl: "https://api.example.com/v1",
     path: "/chat/completions",
     model: "some-model",
-    custom: true,
+    transport: "openai",
+    auth: "api-key",
   });
   assert.ok(
     described.some((line) => /credential not set/.test(line)),
     `a missing key must be visible, got: ${described.join(" | ")}`,
   );
-  assert.ok(
-    described.some((line) => /api\.example\.com/.test(line)),
-    "the host in play must be visible",
-  );
+  assert.ok(described.some((line) => /api\.example\.com/.test(line)), "the host in play must be visible");
 
   const withKey = describeProvider({
     baseUrl: "https://api.example.com/v1",
     path: "/chat/completions",
     model: "some-model",
+    transport: "openai",
+    auth: "api-key",
     apiKey: "sk-live-abcdefghijklmnop",
     apiKeySource: "config.json",
-    custom: true,
   });
   const line = withKey.find((entry) => entry.startsWith("credential"))!;
   assert.ok(!line.includes("abcdefghijklmnop"), "the key itself must never be printed");
@@ -124,14 +173,12 @@ test("a model cannot be carried across from another endpoint", () => {
   // exists on one gateway and not another, displayed as though it were fine.
   // `/model` writes to whichever field the active endpoint reads, so there is
   // only ever one place the model in play lives.
-  withConfigDir(() => {
-    const custom = withModel({ model: "", models: [], provider: { baseUrl: "https://api.example.com/v1" } }, "m-1");
-    assert.equal(custom.provider?.model, "m-1", "a custom endpoint records the model on itself");
-    assert.equal(custom.model, "", "and does not pretend the built-in one changed");
+  const custom = withModel({ model: "", models: [], provider: { baseUrl: "https://api.example.com/v1" } }, "m-1");
+  assert.equal(custom.provider?.model, "m-1", "a custom endpoint records the model on itself");
+  assert.equal(custom.model, "", "and does not pretend another endpoint changed");
 
-    const builtIn = withModel({ model: "", models: [] }, "m-2");
-    assert.equal(builtIn.model, "m-2", "the built-in endpoint keeps the flat field");
-  });
+  const builtIn = withModel({ model: "", models: [] }, "m-2");
+  assert.equal(builtIn.model, "m-2", "with no provider active the model is kept flat");
 });
 
 test("a key given as ${NAME} is read from the environment, and a missing one is named", () => {
@@ -182,7 +229,6 @@ test("ACTOR0_BASE_URL points a run at an endpoint with no config file at all", (
         "https://gateway.test/v1/chat/completions",
         "the OpenAI default, appended to whatever prefix the base URL carries",
       );
-      assert.equal(provider.custom, true);
     } finally {
       if (previous === undefined) delete process.env.ACTOR0_BASE_URL;
       else process.env.ACTOR0_BASE_URL = previous;
@@ -249,7 +295,7 @@ test("saving keeps the file to the owner", { skip: process.platform === "win32" 
 
 test("a saved config round-trips", () => {
   withConfigDir((dir) => {
-    saveConfig(withModel({ model: RESPITE.model, models: [] }, "some/other-model"));
+    saveConfig(withModel({ model: MODEL, models: [] }, "some/other-model"));
     const stored = JSON.parse(readFileSync(join(dir, "config.json"), "utf8")) as { model: string; models: string[] };
     assert.equal(stored.model, "some/other-model");
     assert.deepEqual(stored.models, ["some/other-model"]);
@@ -268,44 +314,24 @@ test("setting the same model twice does not duplicate it", () => {
   assert.deepEqual(withModel(once, "b").models, ["b"]);
 });
 
-test("the saved config holds no endpoint, because there is nothing to configure", () => {
-  withConfigDir((dir) => {
-    saveConfig({ model: "m", models: [] });
-    const raw = readFileSync(join(dir, "config.json"), "utf8");
-    assert.ok(!raw.includes("baseUrl"), `the config still carries a host: ${raw}`);
-    assert.ok(!raw.includes("apiKey"), `the config still carries a key field: ${raw}`);
-  });
-});
-
 test("a gateway served from a path prefix keeps its prefix", () => {
   // Found by pointing this at the first real gateway it was given:
   // `https://api.kilo.ai/api/gateway/v1` produced a request to
   // `https://api.kilo.ai/chat/completions` — the prefix silently gone. The
   // cause was a default of `/chat/completions`, which the transport treats as
   // a *replacement* for the whole pathname rather than something to append.
-  //
-  // It is worth a test because most gateways sit at a root (`/v1`), so this
-  // looks fine everywhere it is tried, and LiteLLM, vLLM behind a proxy and
-  // anything under a tenant path are exactly the ones that break.
   withConfigDir(() => {
     const previous = process.env.ACTOR0_BASE_URL;
     process.env.ACTOR0_BASE_URL = "https://api.kilo.ai/api/gateway/v1";
     try {
       const provider = resolveProvider({ model: "m", models: [] });
-      assert.equal(provider.path, undefined, "no path may be invented for a custom endpoint");
-      assert.equal(
-        endpointUrl(provider),
-        "https://api.kilo.ai/api/gateway/v1/chat/completions",
-        "the prefix must survive",
-      );
+      assert.equal(provider.path, undefined, "no path may be invented for an OpenAI-compatible endpoint");
+      assert.equal(endpointUrl(provider), "https://api.kilo.ai/api/gateway/v1/chat/completions", "the prefix must survive");
 
-      // A trailing slash must not produce a double slash.
       process.env.ACTOR0_BASE_URL = "https://api.example.com/v1/";
       const trailing = resolveProvider({ model: "m", models: [] });
       assert.equal(endpointUrl(trailing), "https://api.example.com/v1/chat/completions");
 
-      // An explicit path still wins, and still replaces — that is the
-      // documented override and the only reason to set it.
       process.env.ACTOR0_PATH = "/v9/custom";
       const explicit = resolveProvider({ model: "m", models: [] });
       assert.equal(endpointUrl(explicit), "https://api.example.com/v9/custom");
@@ -317,9 +343,215 @@ test("a gateway served from a path prefix keeps its prefix", () => {
   });
 });
 
-test("the built-in endpoint still reports the path it actually uses", () => {
-  const provider = resolveProvider({ model: "m", models: [] });
-  assert.equal(provider.custom, undefined);
-  assert.equal(provider.path, "/api/chat");
-  assert.equal(endpointUrl(provider), "https://aestral-chat.vercel.app/api/chat");
+// --- The provider registry `/provider` manages ---------------------------------
+//
+// A named list plus an active pointer. The properties these pin are the ones
+// that would be silent drift if they broke: migration must not re-route an
+// existing request, and a stale pointer must resolve to nothing configured
+// rather than quietly to some other endpoint.
+
+test("a name is derived from the host, not the whole URL", () => {
+  assert.equal(providerName("https://api.example.com/v1"), "api.example.com");
+  assert.equal(providerName("https://www.example.com"), "example.com", "www. is dropped");
+  assert.equal(providerName("http://localhost:11434"), "localhost:11434", "the port is part of the name");
+});
+
+test("a legacy single provider migrates to a one-element list, in memory only", () => {
+  // Reading must not rewrite the file — a config whose owner never opens the
+  // menu has to keep behaving exactly as before. The list is a projection; the
+  // file is only rewritten on the next save.
+  withConfigDir((dir) => {
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ provider: { baseUrl: "https://publicai.co/v1", model: "m-1" }, models: [] }),
+    );
+    const before = readFileSync(join(dir, "config.json"), "utf8");
+    const config = readConfigFile();
+    assert.deepEqual(namedProviders(config).map((p) => p.name), ["publicai.co"]);
+    assert.equal(config.activeProvider, "publicai.co");
+    assert.equal(config.provider, undefined, "the legacy field is projected away, not carried alongside");
+    assert.equal(readFileSync(join(dir, "config.json"), "utf8"), before, "reading must not touch the file");
+  });
+});
+
+test("a migrated provider still resolves to the same endpoint", () => {
+  // The whole point of migration: the request does not move. Same host, same
+  // model, same transport.
+  withConfigDir((dir) => {
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ provider: { baseUrl: "https://publicai.co/v1", model: "m-1" }, models: [] }),
+    );
+    const provider = resolveProvider(readConfigFile());
+    assert.equal(provider.baseUrl, "https://publicai.co/v1");
+    assert.equal(provider.model, "m-1");
+    assert.equal(provider.transport, "openai");
+  });
+});
+
+test("adding a provider registers it, makes it active, and de-duplicates the name", () => {
+  let config: CliConfig = { model: MODEL, models: [] };
+  config = addProvider(config, { baseUrl: "https://a.example.com/v1", model: "m-a" });
+  assert.deepEqual(namedProviders(config).map((p) => p.name), ["a.example.com"]);
+  assert.equal(config.activeProvider, "a.example.com");
+  assert.equal(activeNamedProvider(config)?.model, "m-a");
+
+  // Same host, different key: the name collides, so the second is suffixed
+  // rather than silently replacing the first.
+  config = addProvider(config, { baseUrl: "https://a.example.com/v1", apiKey: "sk-2" });
+  assert.deepEqual(namedProviders(config).map((p) => p.name), ["a.example.com", "a.example.com-2"]);
+});
+
+test("switching providers moves the active pointer and changes what resolves", () => {
+  let config = addProvider({ model: MODEL, models: [] }, { baseUrl: "https://a.example.com/v1", model: "m-a" });
+  config = addProvider(config, { baseUrl: "https://b.example.com/v1", model: "m-b" });
+  assert.equal(activeNamedProvider(config)?.model, "m-b", "the newest add is active");
+
+  config = setActiveProvider(config, "a.example.com");
+  assert.equal(config.activeProvider, "a.example.com");
+  assert.equal(resolveProvider(config).baseUrl, "https://a.example.com/v1");
+
+  // An unknown name is a no-op, not a switch to nothing.
+  const unchanged = setActiveProvider(config, "nope.example.com");
+  assert.equal(unchanged.activeProvider, "a.example.com");
+});
+
+test("removing the active provider re-points to a survivor, and the last leaves nothing configured", () => {
+  let config = addProvider({ model: MODEL, models: [] }, { baseUrl: "https://a.example.com/v1", model: "m-a" });
+  config = addProvider(config, { baseUrl: "https://b.example.com/v1", model: "m-b" });
+  // b is active; remove it and a stands in.
+  config = removeProvider(config, "b.example.com");
+  assert.deepEqual(namedProviders(config).map((p) => p.name), ["a.example.com"]);
+  assert.equal(config.activeProvider, "a.example.com", "a survivor takes over");
+
+  // Remove the last one and there is nothing configured — BYOK, so no built-in.
+  config = removeProvider(config, "a.example.com");
+  assert.deepEqual(namedProviders(config), []);
+  assert.throws(() => resolveProvider(config), /No provider is configured/);
+});
+
+test("a model set while a named provider is active is recorded on that provider", () => {
+  // The drift guard: the model must live on the endpoint it was chosen for, so
+  // switching endpoints cannot carry a name across that the new one lacks.
+  let config = addProvider({ model: MODEL, models: [] }, { baseUrl: "https://a.example.com/v1" });
+  config = withModel(config, "chosen-for-a");
+  assert.equal(activeNamedProvider(config)?.model, "chosen-for-a");
+  assert.equal(resolveProvider(config).model, "chosen-for-a");
+});
+
+test("a stale active pointer resolves to nothing, not to some other endpoint", () => {
+  // A pointer naming a provider no longer in the list is only reachable by
+  // hand-editing (`removeProvider` re-points). It must not silently route to a
+  // different registered endpoint — guessing is the misroute this module exists
+  // to prevent — so it resolves to nothing configured.
+  const config: CliConfig = {
+    model: "m",
+    models: [],
+    providers: [{ name: "only.example.com", baseUrl: "https://only.example.com/v1", model: "m-1" }],
+    activeProvider: "deleted.example.com",
+  };
+  assert.equal(activeNamedProvider(config), undefined);
+  assert.throws(() => resolveProvider(config), /No provider is configured/);
+});
+
+test("a registered list round-trips through disk and stays the only shape", () => {
+  // Saving must never write both a legacy `provider` and a `providers` list —
+  // two sources for one endpoint is the drift this module exists to prevent.
+  withConfigDir((dir) => {
+    let config = addProvider({ model: MODEL, models: [] }, { baseUrl: "https://a.example.com/v1", model: "m-a" });
+    config = addProvider(config, { baseUrl: "https://b.example.com/v1", model: "m-b" });
+    saveConfig(config);
+    const raw = readFileSync(join(dir, "config.json"), "utf8");
+    assert.ok(!raw.includes('"provider"'), `the legacy field must not be written alongside the list: ${raw}`);
+
+    const reloaded = readConfigFile();
+    assert.deepEqual(namedProviders(reloaded).map((p) => p.name), ["a.example.com", "b.example.com"]);
+    assert.equal(reloaded.activeProvider, "b.example.com");
+    assert.equal(resolveProvider(reloaded).baseUrl, "https://b.example.com/v1");
+  });
+});
+
+test("oauth tokens round-trip on a provider", () => {
+  withConfigDir(() => {
+    const config = addProvider(
+      { model: MODEL, models: [] },
+      {
+        name: "claude",
+        baseUrl: "https://api.anthropic.com",
+        transport: "anthropic",
+        auth: "oauth",
+        model: "claude-x",
+        oauth: { accessToken: "AT", refreshToken: "RT", expiresAt: 123, accountId: "acct" },
+      },
+    );
+    saveConfig(config);
+    const reloaded = readConfigFile();
+    const oauth = activeNamedProvider(reloaded)?.oauth;
+    assert.equal(oauth?.accessToken, "AT", "the access token survives a save/load");
+    assert.equal(oauth?.refreshToken, "RT");
+    assert.equal(oauth?.accountId, "acct");
+    assert.equal(resolveProvider(reloaded).transport, "anthropic");
+    assert.equal(resolveProvider(reloaded).auth, "oauth");
+  });
+});
+
+test("a stale activeProvider in the file resolves to nothing, not another endpoint", () => {
+  // The reader must not guess `providers[0]` when the pointer names nothing —
+  // that would silently re-route the session to a different host/credential.
+  withConfigDir((dir) => {
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({
+        model: "m",
+        models: [],
+        providers: [
+          { name: "work", baseUrl: "https://work.example.com/v1", model: "mw" },
+          { name: "personal", baseUrl: "https://personal.example.com/v1", model: "mp" },
+        ],
+        activeProvider: "deleted",
+      }),
+    );
+    const config = readConfigFile();
+    assert.equal(config.activeProvider, undefined, "a stale pointer is not guessed to another provider");
+    assert.throws(() => resolveProvider(config), /No provider is configured/);
+  });
+});
+
+test("duplicate provider names are de-duplicated on load", () => {
+  // Two entries named the same collide on write, and withModel/withActiveOAuth
+  // would map over both — copying one provider's model or tokens onto another.
+  withConfigDir((dir) => {
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({
+        model: "m",
+        models: [],
+        providers: [{ baseUrl: "https://x.example.com/v1" }, { baseUrl: "https://x.example.com/v1" }],
+        activeProvider: "x.example.com",
+      }),
+    );
+    assert.deepEqual(namedProviders(readConfigFile()).map((p) => p.name), ["x.example.com", "x.example.com-2"]);
+  });
+});
+
+test("junk provider entries are dropped, not carried into the menu", () => {
+  withConfigDir((dir) => {
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({
+        model: "m",
+        models: [],
+        providers: [
+          { baseUrl: "https://good.example.com/v1" },
+          { name: "no-url" },
+          "not an object",
+          null,
+          { baseUrl: "", name: "empty-url" },
+        ],
+        activeProvider: "good.example.com",
+      }),
+    );
+    const config = readConfigFile();
+    assert.deepEqual(namedProviders(config).map((p) => p.name), ["good.example.com"]);
+  });
 });

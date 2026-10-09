@@ -1,7 +1,16 @@
 import { Box, Text, useApp, useInput } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage, ModelClient } from "@actor0/harness";
-import { describeProvider, resolveProvider, saveConfig, withModel, type CliConfig } from "../config.js";
+import {
+  addProvider,
+  namedProviders,
+  removeProvider,
+  resolveProvider,
+  saveConfig,
+  setActiveProvider,
+  withModel,
+  type CliConfig,
+} from "../config.js";
 import {
   applyEvent,
   emptyLive,
@@ -13,11 +22,14 @@ import {
 } from "../conversation.js";
 import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "../turn.js";
 import { newSessionId, saveSession } from "../session.js";
+import { refreshProvider } from "../sign-in.js";
 import { parseSlash, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { createToolHost } from "../tools.js";
 import { Banner, LiveView, StatusBar, Transcript, bannerActivity, useTerminalSize } from "./parts.js";
 import { Composer } from "./prompts.js";
+import { AddProvider } from "./AddProvider.js";
+import { ProviderMenu } from "./ProviderMenu.js";
 
 /**
  * The root component, and the only place the CLI holds state.
@@ -55,6 +67,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
+  // Which interactive region owns the keyboard. "chat" is the composer; the
+  // other two are the provider menu and its add form, which replace the
+  // composer while open — one region at a time, so no two `useInput`s fight
+  // over the same key. A menu never opens mid-turn (see `runCommand`).
+  const [mode, setMode] = useState<"chat" | "menu" | "add">("chat");
 
   // Session state lives in refs: it changes on every turn but must never
   // trigger a re-render, because nothing on screen depends on it.
@@ -95,6 +112,19 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   }, [config]);
   const provider = resolved.provider;
   const endpoint = provider ? new URL(provider.baseUrl).host : "not configured";
+
+  // Onboarding. BYOK means there is nothing to talk to until a provider is
+  // configured, so on launch — rather than presenting a composer that cannot
+  // send anything — open the menu that adds one. Once only: the user may dismiss
+  // it, and a config that merely becomes invalid later is not a reason to reopen.
+  const openedOnboarding = useRef(false);
+  useEffect(() => {
+    if (openedOnboarding.current) return;
+    if (!provider && /No provider is configured/.test(resolved.error ?? "")) {
+      openedOnboarding.current = true;
+      setMode("menu");
+    }
+  }, [provider, resolved.error]);
 
 
   /** Push a notice without depending on the current state. */
@@ -149,11 +179,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           return;
         }
         case "provider": {
-          if (!provider) {
-            notice("error", `the endpoint is not configured — ${resolved.error}`);
-            return;
-          }
-          notice("info", describeProvider(provider).join("\n"));
+          // Open the interactive menu. `/provider` used to print the endpoint as
+          // text; the menu is the same information, plus the ability to act on
+          // it — switch, add, remove — which a printed block cannot do.
+          setMode("menu");
           return;
         }
         case "quit":
@@ -210,8 +239,22 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
       void (async () => {
         try {
+          // Refresh an expired OAuth token before the turn and persist the new
+          // one, so a long session does not 401 the moment the access token
+          // ages out. A failed refresh is ignored here — the turn proceeds with
+          // the stale token and the endpoint's 401 tells the user to sign in
+          // again, which is clearer than a silent retry.
+          let activeProvider = provider;
+          if (provider.auth === "oauth") {
+            const refreshed = await refreshProvider(provider, config).catch(() => undefined);
+            if (refreshed) {
+              activeProvider = refreshed.provider;
+              setConfig(refreshed.config);
+              saveConfig(refreshed.config);
+            }
+          }
           const { result, recovery } = await runTurn({
-            model: provider,
+            model: activeProvider,
             ...(transport ? { client: transport } : {}),
             messages: messagesRef.current,
             input,
@@ -383,7 +426,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // the kind of small lie that costs a wrong overwrite.
   const footerHint = busy
     ? "Esc cancels a running turn · Ctrl+D quits"
-    : "/help for commands · Ctrl+D quits";
+    : mode !== "chat"
+      ? "esc closes · Ctrl+D quits"
+      : "/help for commands · Ctrl+D quits";
 
   return (
     // The top margin is the gap between the scrollback and the part of the UI
@@ -442,14 +487,54 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         ) : null}
       </Box>
 
-      <Composer
-        value={draft}
-        onChange={setDraft}
-        onSubmit={submit}
-        history={history}
-        isActive
-        busy={busy}
-      />
+      {mode === "menu" ? (
+        <ProviderMenu
+          providers={namedProviders(config)}
+          activeName={config.activeProvider}
+          onActivate={(name) => {
+            const next = setActiveProvider(config, name);
+            setConfig(next);
+            saveConfig(next);
+            setMode("chat");
+            notice("info", `switched to ${name}`);
+          }}
+          onAdd={() => setMode("add")}
+          onRemove={(name) => {
+            // Stays in the menu so the list can be pruned more than once; the
+            // menu resets its selection when the row count changes.
+            const next = removeProvider(config, name);
+            setConfig(next);
+            saveConfig(next);
+            notice("info", `removed ${name}`);
+          }}
+          onCancel={() => setMode("chat")}
+        />
+      ) : mode === "add" ? (
+        <AddProvider
+          onDone={(provider, models) => {
+            // Register the one provider, then remember the chosen models the way
+            // `/model` does — the active one first, capped, de-duplicated.
+            let next = addProvider(config, provider);
+            const remembered = [...new Set([provider.model, ...models].filter((m): m is string => Boolean(m)))];
+            const rest = next.models.filter((m) => !remembered.includes(m));
+            next = { ...next, models: [...remembered, ...rest].slice(0, 20) };
+            setConfig(next);
+            saveConfig(next);
+            setMode("chat");
+            notice("info", `added ${next.activeProvider}${remembered.length ? ` · ${remembered.length} model${remembered.length === 1 ? "" : "s"}` : ""}`);
+          }}
+          onCancel={() => setMode("menu")}
+        />
+      ) : (
+        <Composer
+          value={draft}
+          onChange={setDraft}
+          onSubmit={submit}
+          history={history}
+          isActive
+          busy={busy}
+        />
+      )}
 
       <StatusBar cwd={cwd} endpoint={endpoint} hint={footerHint} />
     </Box>

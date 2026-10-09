@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseSlash, COMMANDS } from "./slash.js";
 import { cronix } from "./theme.generated.js";
-import { PROVIDER_SUMMARY } from "./providers.js";
+import { PROVIDER_KINDS } from "./providers.js";
 
 test("ordinary text is not a command", () => {
   assert.equal(parseSlash("hello"), undefined);
@@ -65,8 +65,13 @@ test("paths are overridable for tests", () => {
   delete process.env.ACTOR0_CONFIG_DIR;
 });
 
-test("there is one endpoint, and it says it needs no key", () => {
-  assert.match(PROVIDER_SUMMARY, /aestral-chat\.vercel\.app\/api\/chat/);
-  assert.match(PROVIDER_SUMMARY, /no API key needed/);
+test("the provider catalog offers OAuth sign-ins and an API-key fallback", () => {
+  // BYOK: no built-in endpoint. What the menu offers is a catalog — Claude and
+  // ChatGPT sign in with OAuth, and OpenAI-compatible / Anthropic take a key.
+  const byId = new Map(PROVIDER_KINDS.map((kind) => [kind.id, kind]));
+  assert.ok(byId.get("claude")?.oauth, "Claude signs in with OAuth");
+  assert.ok(byId.get("claude")?.auth.includes("api-key"), "and also accepts an API key");
+  assert.ok(byId.get("chatgpt")?.oauth, "ChatGPT signs in with OAuth");
+  assert.deepEqual(byId.get("openai-compatible")?.auth, ["api-key"], "a generic endpoint is key-only");
 });
 

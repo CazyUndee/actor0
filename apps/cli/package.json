@@ -15,7 +15,7 @@
     "typecheck": "npm --workspace @actor0/harness run build && tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts",
     "gen:theme": "node scripts/generate-theme.mjs",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "preview": "tsx scripts/preview-tui.tsx",
     "check:tui": "tsx scripts/preview-tui.tsx"
   },

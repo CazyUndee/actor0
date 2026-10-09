@@ -15,6 +15,8 @@ import {
   type RunResult,
   type ToolHost,
 } from "@actor0/harness";
+import { AnthropicModel } from "./anthropic-client.js";
+import { ChatGptModel } from "./chatgpt-client.js";
 import type { ResolvedProvider } from "./config.js";
 import { totalUsage } from "./conversation.js";
 import { formatProjectContext, loadProjectContext } from "./context.js";
@@ -211,8 +213,47 @@ export function promptClearsProviderFloor(prompt: string): boolean {
   return prompt.trim().length >= PROVIDER_PROMPT_FLOOR_CHARS;
 }
 
-/** Build the model client for the one endpoint there is. */
-export function createModel(provider: ResolvedProvider): OpenAiCompatibleModel {
+/**
+ * Build the model client for the resolved provider.
+ *
+ * Dispatches on the provider's transport: the OpenAI-compatible client the
+ * harness ships, or the CLI's Anthropic Messages client. Both implement the
+ * same `ModelClient` port, so the turn loop is identical either way. A
+ * transport that is configured but not yet wired (ChatGPT Responses) fails here
+ * by name rather than silently speaking the wrong protocol.
+ */
+export function createModel(provider: ResolvedProvider): ModelClient {
+  const transport = provider.transport ?? "openai";
+  const auth = provider.auth ?? "api-key";
+
+  if (transport === "anthropic") {
+    const oauth = auth === "oauth" ? provider.oauth : undefined;
+    return new AnthropicModel({
+      baseUrl: provider.baseUrl,
+      ...(provider.path ? { path: provider.path } : {}),
+      model: provider.model,
+      ...(provider.headers ? { headers: provider.headers } : {}),
+      auth: oauth
+        ? { kind: "oauth", accessToken: oauth.accessToken }
+        : { kind: "api-key", apiKey: provider.apiKey ?? "" },
+    });
+  }
+
+  if (transport === "chatgpt") {
+    const oauth = provider.oauth;
+    if (!oauth) {
+      throw new Error("The ChatGPT provider needs a sign-in — add it with /provider and authorize in the browser.");
+    }
+    return new ChatGptModel({
+      baseUrl: provider.baseUrl,
+      ...(provider.path ? { path: provider.path } : {}),
+      model: provider.model,
+      accessToken: oauth.accessToken,
+      ...(oauth.accountId ? { accountId: oauth.accountId } : {}),
+      ...(provider.headers ? { headers: provider.headers } : {}),
+    });
+  }
+
   return new OpenAiCompatibleModel({
     baseUrl: provider.baseUrl,
     // Omitted when the endpoint named no path, so the transport appends
