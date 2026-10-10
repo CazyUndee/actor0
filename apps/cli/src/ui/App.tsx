@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage, ModelClient } from "@actor0/harness";
 import {
   addProvider,
+  activeNamedProvider,
   namedProviders,
   removeProvider,
   resolveProvider,
@@ -111,7 +112,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
   }, [config]);
   const provider = resolved.provider;
-  const endpoint = provider ? new URL(provider.baseUrl).host : "not configured";
+  // The status bar keeps just the host (it is tight for space); the banner has a
+  // dedicated endpoint row, so it shows the provider's friendly name too — with
+  // several providers registered, "claude · api.anthropic.com" says more than
+  // the host alone. The name is dropped when it would just repeat the host.
+  const host = provider ? new URL(provider.baseUrl).host : "not configured";
+  const activeName = activeNamedProvider(config)?.name;
+  const endpointLabel = provider && activeName && activeName !== host ? `${activeName} · ${host}` : host;
 
   // Onboarding. BYOK means there is nothing to talk to until a provider is
   // configured, so on launch — rather than presenting a composer that cannot
@@ -446,10 +453,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
             title="actor0"
             version={version}
             model={provider?.model ?? config.model}
-            endpoint={endpoint}
+            endpoint={endpointLabel}
             directory={cwd}
             activity={bannerActivity(conversation.live)}
-            hint="/model to change"
+            hint="/provider to switch"
             columns={columns}
           />
         }
@@ -536,7 +543,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         />
       )}
 
-      <StatusBar cwd={cwd} endpoint={endpoint} hint={footerHint} />
+      <StatusBar cwd={cwd} endpoint={host} hint={footerHint} />
     </Box>
   );
 }

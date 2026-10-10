@@ -23,9 +23,9 @@ export const COMMANDS = ["help", "clear", "model", "provider", "quit"] as const;
 export const HELP_TEXT: [string, string][] = [
   ["/help", "show this list"],
   ["/clear", "start a new conversation"],
+  ["/provider", "manage providers — switch, sign in, add, remove"],
   ["/model", "list the models you have used"],
   ["/model <name>", "switch to a model by name"],
-  ["/provider", "show the endpoint, model and credential in use"],
   ["/quit", "exit (Ctrl+D does the same)"],
 ];
 

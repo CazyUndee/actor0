@@ -71,6 +71,15 @@ test("the provider menu draws its rows, the active marker and the hint", () => {
   assert.doesNotMatch(frame, /built-in endpoint/, "BYOK: no built-in row");
 });
 
+test("an empty provider menu says there is nothing yet, and how to fix it", () => {
+  const frame = captureFrame(
+    <ProviderMenu providers={[]} activeName={undefined} onActivate={() => {}} onAdd={() => {}} onRemove={() => {}} onCancel={() => {}} />,
+  );
+  assert.match(frame, /none yet/, "first run says there is no provider");
+  assert.match(frame, /add one to start/, "and points at the one action that fixes it");
+  assert.match(frame, /add new provider/, "the add row is still there");
+});
+
 test("the add-provider flow opens on the kind picker", () => {
   const frame = captureFrame(<AddProvider onDone={() => {}} onCancel={() => {}} />);
   assert.match(frame, /add a provider/, "the heading");

@@ -96,6 +96,12 @@ export function ProviderMenu({ providers, activeName, onActivate, onAdd, onRemov
         providers
       </Text>
       <Box flexDirection="column" marginLeft={2}>
+        {providers.length === 0 ? (
+          // First run: BYOK means there is nothing to talk to yet. Say so, and
+          // point at the one action that fixes it, rather than an empty list
+          // the user has to interpret.
+          <Text color={color.dim}>{"none yet — add one to start"}</Text>
+        ) : null}
         {rows.map((row, index) => (
           <MenuRowView key={rowKey(row, index)} row={row} selected={index === selected} />
         ))}
