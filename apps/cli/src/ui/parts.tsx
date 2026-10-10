@@ -688,13 +688,19 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
 
     case "reasoning": {
       const { title, body } = reasonText(entry.text);
+      // `∴ Thinking`, dim and italic — Claude Code's marker for the model's
+      // private reasoning. The model's own step name rides along when it has
+      // one; the body is indented two columns under the marker.
       return (
         <Box marginTop={1} flexDirection="column">
-          {/* No "thinking" label. The model names the step itself, and a
-              generic word above a specific one is a word of noise on every
-              entry in the transcript. */}
-          {title ? <Text color={color.dim}>{title}</Text> : null}
-          {body ? <Lines text={body} color={color.muted} dim columns={columns} /> : null}
+          <Text color={color.dim} italic>
+            {`∴ Thinking${title ? ` · ${title}` : ""}`}
+          </Text>
+          {body ? (
+            <Box paddingLeft={2}>
+              <Lines text={body} color={color.muted} dim columns={columns - 2} />
+            </Box>
+          ) : null}
         </Box>
       );
     }
@@ -906,12 +912,17 @@ export function LiveView({
 
       {live.reasoning.trim() ? (
         <Box flexDirection="column" marginTop={1}>
-          <Lines
-            text={fitTail(live.reasoning.trimEnd(), rows, columns)}
-            color={color.muted}
-            dim
-            columns={columns}
-          />
+          <Text color={color.dim} italic>
+            ∴ Thinking
+          </Text>
+          <Box paddingLeft={2}>
+            <Lines
+              text={fitTail(live.reasoning.trimEnd(), rows, columns)}
+              color={color.muted}
+              dim
+              columns={columns}
+            />
+          </Box>
         </Box>
       ) : null}
 
