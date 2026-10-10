@@ -93,12 +93,13 @@ test("first-run onboarding frames the kind picker as a welcome", () => {
 
 test("the slash popup lists commands with descriptions and a highlight", () => {
   const commands = [
-    { name: "provider", description: "manage providers" },
-    { name: "setup", description: "re-run the setup wizard" },
+    { name: "provider", aliases: ["p"], description: "manage providers" },
+    { name: "setup", aliases: ["s"], description: "re-run the setup wizard" },
   ];
   const frame = captureFrame(<SlashPopup commands={commands} selected={1} />);
   assert.match(frame, /\/provider/, "the command");
   assert.match(frame, /manage providers/, "its description");
+  assert.match(frame, /\/p\b/, "the alias, so it is learned");
   assert.match(frame, /\/setup/, "and the next");
   // The highlight marker sits on the selected row.
   const setupLine = frame.split("\n").find((line) => line.includes("/setup"))!;

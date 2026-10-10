@@ -19,38 +19,53 @@ export type SlashCommand =
   | { name: "quit" }
   | { name: "unknown"; input: string };
 
-export const COMMANDS = ["help", "clear", "model", "provider", "setup", "quit"] as const;
+/** A slash command: its name, the short aliases that reach it, and a one-liner. */
+export type SlashCommandDef = {
+  name: string;
+  /** Short forms — single letters where possible — so a command is fast to type. */
+  aliases: string[];
+  description: string;
+};
 
 /**
- * Commands with one-line descriptions, for the `/` popup.
+ * The command surface, ordered by how often it is reached.
  *
- * Ordered by how often they are reached, so the popup's default highlight lands
- * on the useful one. `/model <name>` and `/quit` are the same commands with an
- * argument or alias, described here in their bare form.
+ * Every command has a one-letter alias, because the thing you reach for twenty
+ * times a session should not cost six keystrokes. The popup and `/help` show
+ * the alias beside the name, so it is learned rather than hidden.
  */
-export const SLASH_COMMANDS: { name: string; description: string }[] = [
-  { name: "provider", description: "manage providers — switch, sign in, add, remove" },
-  { name: "setup", description: "re-run the setup wizard" },
-  { name: "model", description: "switch to a model by name" },
-  { name: "clear", description: "start a new conversation" },
-  { name: "help", description: "show all commands" },
-  { name: "quit", description: "exit" },
+export const SLASH_COMMANDS: SlashCommandDef[] = [
+  { name: "provider", aliases: ["p", "endpoint"], description: "manage providers — switch, sign in, add, remove" },
+  { name: "setup", aliases: ["s"], description: "re-run the setup wizard" },
+  { name: "model", aliases: ["m"], description: "switch to a model by name" },
+  { name: "clear", aliases: ["c"], description: "start a new conversation" },
+  { name: "help", aliases: ["h", "?"], description: "show all commands" },
+  { name: "quit", aliases: ["q", "exit"], description: "exit" },
 ];
 
-export const HELP_TEXT: [string, string][] = [
-  ["/help", "show this list"],
-  ["/clear", "start a new conversation"],
-  ["/provider", "manage providers — switch, sign in, add, remove"],
-  ["/setup", "re-run the setup wizard"],
-  ["/model", "list the models you have used"],
-  ["/model <name>", "switch to a model by name"],
-  ["/quit", "exit (Ctrl+D does the same)"],
-];
+export const COMMANDS = SLASH_COMMANDS.map((command) => command.name);
 
-/** Commands whose name starts with the typed query, in list order. */
-export function matchSlashCommands(query: string): { name: string; description: string }[] {
+/** Alias → canonical name, so `/p`, `/q`, `/exit` all resolve. */
+const ALIASES = new Map<string, string>();
+for (const command of SLASH_COMMANDS) for (const alias of command.aliases) ALIASES.set(alias, command.name);
+
+/** The canonical command name for a typed word, resolving aliases; unknown words pass through. */
+export function resolveCommand(word: string): string {
+  const lower = word.toLowerCase();
+  return ALIASES.get(lower) ?? lower;
+}
+
+export const HELP_TEXT: [string, string][] = SLASH_COMMANDS.map((command) => [
+  `/${command.name}  /${command.aliases[0]}`,
+  command.description,
+]);
+
+/** Commands whose name or alias starts with the typed query, in list order. */
+export function matchSlashCommands(query: string): SlashCommandDef[] {
   const q = query.toLowerCase();
-  return SLASH_COMMANDS.filter((command) => command.name.startsWith(q));
+  return SLASH_COMMANDS.filter(
+    (command) => command.name.startsWith(q) || command.aliases.some((alias) => alias.startsWith(q)),
+  );
 }
 
 /**
@@ -64,7 +79,7 @@ export function parseSlash(input: string): SlashCommand | undefined {
   if (trimmed === "/") return undefined;
 
   const [head, ...rest] = trimmed.slice(1).split(/\s+/);
-  const name = head.toLowerCase();
+  const name = resolveCommand(head);
   const argument = rest.join(" ").trim();
 
   switch (name) {
@@ -73,13 +88,12 @@ export function parseSlash(input: string): SlashCommand | undefined {
     case "clear":
       return { name: "clear" };
     case "quit":
-    case "exit":
       return { name: "quit" };
     case "model":
       return argument ? { name: "model", model: argument } : { name: "model" };    // An argument is accepted and ignored rather than rejected: a user who
     // types `/provider openai` is asking where requests go, and telling them
     // the command takes no argument is less useful than showing it.
-    case "provider": case "endpoint":
+    case "provider":
       return { name: "provider" };
     case "setup":
       return { name: "setup" };

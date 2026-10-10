@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSlash, matchSlashCommands, COMMANDS } from "./slash.js";
+import { parseSlash, matchSlashCommands, resolveCommand, COMMANDS } from "./slash.js";
 import { cronix } from "./theme.generated.js";
 import { PROVIDER_KINDS } from "./providers.js";
 
@@ -32,6 +32,19 @@ test("/model carries an argument", () => {
 
 test("commands are case-insensitive and tolerate surrounding space", () => {
   assert.deepEqual(parseSlash("  /HELP  "), { name: "help" });
+});
+
+test("aliases resolve to their command", () => {
+  // Every command has a one-letter alias, so the thing you reach for constantly
+  // is one keystroke.
+  assert.deepEqual(parseSlash("/p"), { name: "provider" });
+  assert.deepEqual(parseSlash("/s"), { name: "setup" });
+  assert.deepEqual(parseSlash("/c"), { name: "clear" });
+  assert.deepEqual(parseSlash("/h"), { name: "help" });
+  assert.deepEqual(parseSlash("/q"), { name: "quit" });
+  assert.deepEqual(parseSlash("/exit"), { name: "quit" });
+  assert.deepEqual(parseSlash("/m gpt-4o"), { name: "model", model: "gpt-4o" }, "an alias takes an argument too");
+  assert.equal(resolveCommand("endpoint"), "provider");
 });
 
 test("an unknown command is reported rather than guessed at", () => {
