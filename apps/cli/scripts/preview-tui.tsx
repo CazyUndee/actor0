@@ -529,15 +529,23 @@ async function main(): Promise<void> {
   const screen = new Screen(SCREEN_ROWS);
   stdout.on("data", (chunk: Buffer) => screen.write(chunk.toString("utf8")));
 
-  // Two registered providers so the `/provider` menu (frame 25) has rows. The
-  // last-added is active, so the run is "configured" and onboarding does not
-  // open; the mock transport rides in regardless of which endpoint is active.
+  // Two registered providers so the `/provider` menu (frame 25) has rows —
+  // one OpenAI-compatible (label = host) and one Claude OAuth (label =
+  // "Claude Code - Max subscription"), which is active, so the banner and
+  // status bar show the readable label. The mock transport rides in regardless.
   const config = addProvider(
     addProvider(
       withModel({ model: "demo-model", models: ["demo-model"] }, "demo-model"),
       { baseUrl: "https://api.example.com/v1", model: "example-model" },
     ),
-    { baseUrl: "http://localhost:11434/v1", model: "llama3" },
+    {
+      name: "claude",
+      baseUrl: "https://api.anthropic.com",
+      transport: "anthropic",
+      auth: "oauth",
+      model: "claude-opus-4-6",
+      oauth: { accessToken: "demo-token", plan: "max" },
+    },
   );
 
   // The endpoint is fixed, so the mock rides in on the harness's ModelClient

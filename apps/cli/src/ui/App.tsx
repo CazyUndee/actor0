@@ -31,6 +31,7 @@ import { Banner, LiveView, StatusBar, Transcript, bannerActivity, useTerminalSiz
 import { Composer } from "./prompts.js";
 import { AddProvider } from "./AddProvider.js";
 import { ProviderMenu } from "./ProviderMenu.js";
+import { providerLabel } from "../provider-presets.js";
 
 /**
  * The root component, and the only place the CLI holds state.
@@ -112,13 +113,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
   }, [config]);
   const provider = resolved.provider;
-  // The status bar keeps just the host (it is tight for space); the banner has a
-  // dedicated endpoint row, so it shows the provider's friendly name too — with
-  // several providers registered, "claude · api.anthropic.com" says more than
-  // the host alone. The name is dropped when it would just repeat the host.
-  const host = provider ? new URL(provider.baseUrl).host : "not configured";
-  const activeName = activeNamedProvider(config)?.name;
-  const endpointLabel = provider && activeName && activeName !== host ? `${activeName} · ${host}` : host;
+  // The active provider, as a readable label — "Claude Code - Pro subscription",
+  // "Anthropic API - Direct" — not a URL. Shown in the banner's endpoint row and
+  // the status bar, so several providers are recognisable at a glance.
+  const active = activeNamedProvider(config);
+  const endpoint = active ? providerLabel(active) : "not configured";
 
   // Onboarding. BYOK means there is nothing to talk to until a provider is
   // configured, so on launch — rather than presenting a composer that cannot
@@ -453,7 +452,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
             title="actor0"
             version={version}
             model={provider?.model ?? config.model}
-            endpoint={endpointLabel}
+            endpoint={endpoint}
             directory={cwd}
             activity={bannerActivity(conversation.live)}
             hint="/provider to switch"
@@ -543,7 +542,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         />
       )}
 
-      <StatusBar cwd={cwd} endpoint={host} hint={footerHint} />
+      <StatusBar cwd={cwd} endpoint={endpoint} hint={footerHint} />
     </Box>
   );
 }

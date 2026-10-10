@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import { color } from "../theme.js";
 import { TextInput } from "./prompts.js";
 import { PROVIDER_KINDS, type ProviderKind } from "../provider-presets.js";
-import { fetchModels } from "../models.js";
+import { fetchModels, fetchClaudePlan } from "../models.js";
 import { runOAuthSignIn } from "../sign-in.js";
 import { openBrowser } from "../oauth.js";
 import { providerName, type NamedProvider } from "../config.js";
@@ -68,7 +68,15 @@ export function AddProvider({ onDone, onCancel }: AddProviderProps) {
         openBrowser(url);
       },
     })
-      .then((tokens) => listModels(provider, buildBase(provider, { auth: "oauth", oauth: tokens })))
+      .then(async (tokens) => {
+        // Claude's plan is not in the token; fetch it from the profile so the
+        // label reads "Claude Code - Max subscription" rather than a URL.
+        const withPlan =
+          provider.transport === "anthropic" && !tokens.plan
+            ? { ...tokens, plan: await fetchClaudePlan(tokens.accessToken).catch(() => undefined) }
+            : tokens;
+        listModels(provider, buildBase(provider, { auth: "oauth", oauth: withPlan }));
+      })
       .catch((error: Error) => setPhase({ kind: "error", provider, message: error.message }));
   };
 

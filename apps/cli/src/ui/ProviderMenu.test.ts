@@ -36,11 +36,12 @@ test("providers come first, and the active one is marked", () => {
   assert.equal(second!.active, true);
 });
 
-test("a provider row shows its model, or its host when it has no model yet", () => {
+test("a provider row shows a readable label and its model", () => {
   const rows = providerMenuRows([provider("a.example.com", "m-a"), provider("b.example.com")], "a.example.com");
   const providers = rows.filter((row) => row.kind === "provider");
-  assert.equal(providers[0]!.kind === "provider" && providers[0]!.detail, "m-a");
-  assert.equal(providers[1]!.kind === "provider" && providers[1]!.detail, "https://b.example.com/v1");
+  assert.equal(providers[0]!.kind === "provider" && providers[0]!.label, "a.example.com", "the label, not the raw URL");
+  assert.equal(providers[0]!.kind === "provider" && providers[0]!.model, "m-a", "the model rides along");
+  assert.equal(providers[1]!.kind === "provider" && providers[1]!.model, undefined, "no model when none is set");
 });
 
 test("selection wraps at both ends", () => {

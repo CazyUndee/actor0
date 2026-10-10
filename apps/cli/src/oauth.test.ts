@@ -8,6 +8,7 @@ import {
   createState,
   decodeJwtPayload,
   exchangeCode,
+  planFromIdToken,
   refreshTokens,
   startLoopback,
   tokenExpired,
@@ -191,6 +192,15 @@ test("the account id is read from the id token's OpenAI auth claim", () => {
   assert.equal(accountIdFromIdToken(idToken), "acct-abc");
   const claims = decodeJwtPayload(idToken);
   assert.equal(claims?.email, "me@example.com");
+});
+
+test("the plan is read from the id token's chatgpt_plan_type claim", () => {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const withPlan = (plan: string) => `${b64({ alg: "RS256" })}.${b64({ "https://api.openai.com/auth": { chatgpt_plan_type: plan } })}.sig`;
+  assert.equal(planFromIdToken(withPlan("plus")), "plus");
+  assert.equal(planFromIdToken(withPlan("pro")), "pro");
+  assert.equal(planFromIdToken(withPlan("free")), "free");
+  assert.equal(planFromIdToken("garbage"), undefined);
 });
 
 test("a non-JWT decodes to undefined rather than throwing", () => {

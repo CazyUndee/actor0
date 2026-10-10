@@ -13,7 +13,6 @@ import type { ResolvedProvider } from "./config.js";
 
 /** The fields a model listing needs — satisfied by both a stored and a resolved provider. */
 export type ModelSource = Pick<ResolvedProvider, "baseUrl" | "path" | "transport" | "auth" | "apiKey" | "oauth">;
-
 /** The URL that lists a provider's models. */
 export function modelsUrl(provider: ModelSource): string {
   const base = provider.baseUrl.replace(/\/+$/, "");
@@ -69,4 +68,43 @@ export async function fetchModels(provider: ModelSource, fetchImpl: typeof fetch
   // Newest-first is the common convention and the most useful order; the APIs
   // do not guarantee it, so this is a stable sort that keeps duplicates out.
   return [...new Set(ids)];
+}
+
+/**
+ * Claude's subscription plan, for a readable label.
+ *
+ * Fetched from the OAuth profile with the access token; the organisation type
+ * maps to the plan the way Claude Code reads it (`claude_max` → max, etc.).
+ * Best-effort: an unknown or unreachable profile yields undefined, and the
+ * label falls back to "Claude Code - subscription".
+ */
+export async function fetchClaudePlan(accessToken: string, fetchImpl: typeof fetch = fetch): Promise<string | undefined> {
+  let response: Response;
+  try {
+    response = await fetchImpl("https://api.anthropic.com/api/oauth/profile", {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "anthropic-beta": OAUTH_BETA_HEADER,
+        "anthropic-version": ANTHROPIC_VERSION,
+      },
+    });
+  } catch {
+    return undefined;
+  }
+  if (!response.ok) return undefined;
+  const value = (await response.json().catch(() => undefined)) as { organization?: { organization_type?: unknown } } | undefined;
+  const orgType = value?.organization?.organization_type;
+  if (typeof orgType !== "string") return undefined;
+  switch (orgType) {
+    case "claude_max":
+      return "max";
+    case "claude_pro":
+      return "pro";
+    case "claude_team":
+      return "team";
+    case "claude_enterprise":
+      return "enterprise";
+    default:
+      return undefined;
+  }
 }

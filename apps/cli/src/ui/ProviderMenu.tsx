@@ -2,6 +2,7 @@ import { Box, Text, useInput } from "ink";
 import { useEffect, useState } from "react";
 import { color } from "../theme.js";
 import type { NamedProvider } from "../config.js";
+import { providerLabel } from "../provider-presets.js";
 
 /**
  * The provider menu `/provider` opens.
@@ -18,20 +19,22 @@ import type { NamedProvider } from "../config.js";
  */
 
 export type MenuRow =
-  | { kind: "provider"; name: string; detail: string; active: boolean }
+  | { kind: "provider"; name: string; label: string; model?: string; active: boolean }
   | { kind: "add" };
 
 /**
  * The rows the menu shows: the registered providers, then the add action.
  *
- * There is no built-in row — BYOK means every provider is one the user added,
- * and a row for an endpoint that does not exist would be a switch to nothing.
+ * Each provider row carries a readable label ("Claude Code - Pro subscription",
+ * "Anthropic API - Direct") rather than a URL — the whole point of recognising
+ * several providers at a glance. `name` stays as the identity for callbacks.
  */
 export function providerMenuRows(providers: NamedProvider[], activeName: string | undefined): MenuRow[] {
   const rows: MenuRow[] = providers.map((provider) => ({
     kind: "provider",
     name: provider.name,
-    detail: provider.model ? provider.model : provider.baseUrl,
+    label: providerLabel(provider),
+    model: provider.model,
     active: provider.name === activeName,
   }));
   rows.push({ kind: "add" });
@@ -127,8 +130,8 @@ function MenuRowView({ row, selected }: { row: MenuRow; selected: boolean }) {
   const bullet = row.active ? "● " : "○ ";
   return (
     <Box flexDirection="row">
-      <Text color={tone}>{`${marker}${bullet}${row.name}`}</Text>
-      <Text color={color.dim}>{`  ${row.detail}`}</Text>
+      <Text color={tone}>{`${marker}${bullet}${row.label}`}</Text>
+      {row.model ? <Text color={color.dim}>{`  ${row.model}`}</Text> : null}
       {row.active ? <Text color={color.dim}>{"  (in use)"}</Text> : null}
     </Box>
   );

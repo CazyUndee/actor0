@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fetchModels, modelsHeaders, modelsUrl } from "./models.js";
+import { fetchModels, fetchClaudePlan, modelsHeaders, modelsUrl } from "./models.js";
 import type { ResolvedProvider } from "./config.js";
 
 /** Model discovery, tested with a mock fetch. OpenAI and Anthropic share a shape. */
@@ -33,6 +33,25 @@ test("a non-OK listing throws naming the URL", async () => {
 test("an unreadable body is an empty list, not a dead-end", async () => {
   const models = await fetchModels(openai, jsonFetch({ unexpected: true }));
   assert.deepEqual(models, []);
+});
+
+test("Claude's plan is read from the OAuth profile's org type", async () => {
+  const profile = (org?: string) =>
+    (async () => new Response(JSON.stringify(org ? { organization: { organization_type: org } } : {}), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  assert.equal(await fetchClaudePlan("AT", profile("claude_max")), "max");
+  assert.equal(await fetchClaudePlan("AT", profile("claude_pro")), "pro");
+  assert.equal(await fetchClaudePlan("AT", profile("claude_team")), "team");
+  assert.equal(await fetchClaudePlan("AT", profile("something_else")), undefined, "unknown org type is not guessed");
+  assert.equal(await fetchClaudePlan("AT", profile()), undefined, "no org is not a plan");
+});
+
+test("a Claude plan fetch that fails is best-effort, not fatal", async () => {
+  const failing = (async () => new Response("nope", { status: 500 })) as typeof fetch;
+  assert.equal(await fetchClaudePlan("AT", failing), undefined);
+  const thrown = (async () => {
+    throw new Error("offline");
+  }) as typeof fetch;
+  assert.equal(await fetchClaudePlan("AT", thrown), undefined);
 });
 
 test("the models URL appends to the base for each transport", () => {

@@ -47,6 +47,8 @@ export type OAuthTokens = {
   idToken?: string;
   /** ChatGPT's account id, needed as a request header — decoded from the id token. */
   accountId?: string;
+  /** Subscription plan, for a readable label — ChatGPT id-token claim or a Claude profile fetch. */
+  plan?: string;
 };
 
 export type Pkce = { verifier: string; challenge: string; method: "S256" };
@@ -294,6 +296,7 @@ async function tokenRequest(url: string, form: URLSearchParams, fetchImpl: typeo
   if (!accessToken) throw new Error("token endpoint returned no access_token");
   const idToken = typeof value.id_token === "string" ? value.id_token : undefined;
   const expiresIn = typeof value.expires_in === "number" ? value.expires_in : undefined;
+  const plan = idToken ? planFromIdToken(idToken) : undefined;
   return {
     accessToken,
     ...(typeof value.refresh_token === "string" ? { refreshToken: value.refresh_token } : {}),
@@ -302,6 +305,7 @@ async function tokenRequest(url: string, form: URLSearchParams, fetchImpl: typeo
     ...(idToken ? { idToken } : {}),
     // ChatGPT needs the account id as a request header; it rides in the id token.
     ...(idToken ? { accountId: accountIdFromIdToken(idToken) } : {}),
+    ...(plan ? { plan } : {}),
   };
 }
 
@@ -360,6 +364,14 @@ export function accountIdFromIdToken(idToken: string): string | undefined {
   const auth = claims?.["https://api.openai.com/auth"] as Record<string, unknown> | undefined;
   const accountId = auth?.chatgpt_account_id ?? claims?.chatgpt_account_id;
   return typeof accountId === "string" ? accountId : undefined;
+}
+
+/** ChatGPT's plan from an id token (`chatgpt_plan_type`: free/go/plus/pro). */
+export function planFromIdToken(idToken: string): string | undefined {
+  const claims = decodeJwtPayload(idToken);
+  const auth = claims?.["https://api.openai.com/auth"] as Record<string, unknown> | undefined;
+  const plan = auth?.chatgpt_plan_type ?? claims?.chatgpt_plan_type;
+  return typeof plan === "string" && plan ? plan : undefined;
 }
 
 /** Open a URL in the user's default browser, best-effort per platform. */
