@@ -408,6 +408,20 @@ function scriptedTurn(input: string, round: Round): AsyncGenerator<ModelEvent> {
       : (async function* () { yield* answer("Wrote summary.md."); })();
   }
 
+  if (input.includes("edit the notes")) {
+    // An edit renders as a diff, not a one-line summary — the change is the
+    // point. Real old_string from the seeded notes.md.
+    return round === 0
+      ? (async function* () {
+        yield tool("c-edit", "edit", {
+          path: "notes.md",
+          old_string: "The CLI consumes the harness.",
+          new_string: "The CLI consumes the harness, and the harness knows nothing of the CLI.",
+        });
+      })()
+      : (async function* () { yield* answer("Edited notes.md."); })();
+  }
+
   if (input.includes("cancel this")) {
     // Round 1 exists only so a frame that has NOT cancelled is loud: if the
     // abort ever stopped working, the model gets asked a second time and this
@@ -737,6 +751,9 @@ const ask = async (question: string): Promise<void> => {
 
   await ask("write a summary of it");
   await show("7 · a write lands with no confirmation");
+
+  await ask("edit the notes");
+  await show("7b · an edit shows its diff");
 
   await ask("how many lines is it?");
   await show("8 · a failed shell command shows why, not just that it failed");

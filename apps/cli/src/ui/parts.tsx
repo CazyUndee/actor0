@@ -6,6 +6,7 @@ import type { Entry, Live } from "../conversation.js";
 import { HELP_TEXT } from "../slash.js";
 import { color, SPINNER_FRAMES, toolGlyph } from "../theme.js";
 import { exitedNonZero, toolLabel } from "../tools.js";
+import { parseDiffBlock, type DiffLine } from "../diff.js";
 
 /**
  * Presentational components.
@@ -524,8 +525,7 @@ function Lines({
   );
 }
 
-/** How much of a successful call's output to show on its line. */
-const TOOL_OUTPUT_CHARS = 100;
+/** How much of a successful call's output to show on its line. */const TOOL_OUTPUT_CHARS = 100;
 
 /**
  * A line that names a block rather than being one — "stderr:".
@@ -617,6 +617,30 @@ function reasonText(text: string): { title: string; body: string } {
 }
 
 /** One committed transcript entry. */
+/**
+ * A unified diff: a `+`/`-`/space gutter, green adds, red removes, dim context.
+ * Tabs render as four spaces so a code change lines up the way it does in the
+ * file. Modeled on Codex's diff renderer (without syntax highlighting, which is
+ * a much larger dependency).
+ */
+export function DiffBlock({ lines }: { lines: DiffLine[] }) {
+  return (
+    <Box flexDirection="column">
+      {lines.map((line, index) => {
+        const sign = line.kind === "add" ? "+ " : line.kind === "remove" ? "- " : "  ";
+        const tone = line.kind === "add" ? color.success : line.kind === "remove" ? color.error : color.dim;
+        return (
+          // eslint-disable-next-line react/no-array-index-key -- diff lines are positional and fixed; text can repeat
+          <Text key={index} color={tone} wrap="truncate-end">
+            {sign}
+            {line.text.replace(/\t/g, "    ")}
+          </Text>
+        );
+      })}
+    </Box>
+  );
+}
+
 export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: number }) {
   switch (entry.kind) {
     case "user":
@@ -667,6 +691,7 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
     case "tool": {
       const status = toolRowFailed(entry) ? "error" : "ok";
       const tone = status === "ok" ? color.success : color.error;
+      const label = toolLabel(entry.name);
       // Both rows name the tool. They used not to: a failure printed the
       // word “failed” where the success row prints the tool, so the one row a
       // user most wants to act on was the one that never said what went
@@ -674,7 +699,29 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
       // called `wc`, and a shell command and a read of the same path become
       // indistinguishable. The status is already carried three ways: the
       // glyph, the colour, and a detail block that an error always has.
-      const label = toolLabel(entry.name);
+      // An edit shows its diff, not a one-line summary — the change is the whole
+      // point, and a bare "edited file.ts" tells the reader nothing about what
+      // moved. The diff is fenced in the tool output; the parenthetical on the
+      // row is the token-cheap "1 occurrence · 42 chars" header.
+      if (entry.name === "edit" && status === "ok") {
+        const diff = parseDiffBlock(entry.output);
+        const detail = /\(([^)]*)\)/.exec(entry.output.split("```diff")[0] ?? "")?.[1];
+        return (
+          <Box marginTop={1} flexDirection="column">
+            <Box>
+              <Text color={tone}>{toolGlyph[status]} </Text>
+              <Text color={color.muted}>{label}</Text>
+              {entry.target ? <Text color={color.dim}> {entry.target}</Text> : null}
+              {detail ? <Text color={color.dim}> {detail}</Text> : null}
+            </Box>
+            {diff.length > 0 ? (
+              <Box marginLeft={2} flexDirection="column">
+                <DiffBlock lines={diff} />
+              </Box>
+            ) : null}
+          </Box>
+        );
+      }
       const detail = toolDetail(status, entry.output);
       return (
         <Box marginTop={1} flexDirection="column">

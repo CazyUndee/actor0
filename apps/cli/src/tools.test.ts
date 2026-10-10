@@ -359,6 +359,18 @@ test("edit replaces one exact string and leaves the rest alone", async () => {
   assert.equal(readFileSync(join(dir, "a.ts"), "utf8"), "const a = 1;\nconst b = 3;\n");
 });
 
+test("edit returns a diff of the change, not just a summary", async () => {
+  const dir = scratch();
+  writeFileSync(join(dir, "a.ts"), "const a = 1;\nconst b = 2;\n");
+  const out = await host(dir).execute(
+    call("edit", { path: "a.ts", old_string: "const b = 2;", new_string: "const b = 3;" }),
+    signal,
+  );
+  assert.match(out, /```diff/, "the output carries a fenced diff for the transcript to render");
+  assert.match(out, /-const b = 2;/, "the removed line");
+  assert.match(out, /\+const b = 3;/, "the added line");
+});
+
 test("edit fails loudly when the text is not there", async () => {
   const dir = scratch();
   writeFileSync(join(dir, "a.ts"), "const a = 1;\n");

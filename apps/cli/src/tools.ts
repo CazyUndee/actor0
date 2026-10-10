@@ -2,6 +2,7 @@ import type { ToolCall, ToolDefinition, ToolHost } from "@actor0/harness";
 import { readFile, readdir, realpath, stat, writeFile, mkdir, open } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, dirname, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { formatEditDiff } from "./diff.js";
 
 /**
  * The CLI's tools.
@@ -514,7 +515,11 @@ const editTool: CliTool = {
     const written = joinTextFile(bom, updated, crlf);
     await writeFile(target, written, "utf8");
     const changed = occurrences === 1 ? "1 occurrence" : `${occurrences} occurrences`;
-    return `Edited ${target} (${changed} replaced, ${written.length} characters total).`;
+    // The diff is what the user wants to see and what tells the model precisely
+    // what changed; the one-line summary is the token-cheap header above it.
+    const diff = formatEditDiff(content, before, after);
+    const summary = `Edited ${target} (${changed} replaced, ${written.length} characters total).`;
+    return diff ? `${summary}\n\n${diff}` : summary;
   },
 };
 
