@@ -129,7 +129,10 @@ export function Composer({
       <TextInput
         value={value}
         onChange={onChange}
-        onSubmit={onSubmit}
+        // While the `/` popup is open, Enter runs the highlighted command from
+        // the App's handler — submitting here too would fire the half-typed
+        // draft at the model as well.
+        onSubmit={popupOpen ? () => {} : onSubmit}
         isActive={isActive}
         placeholder={busy ? "working — Esc to cancel" : "ask something, or /help"}
       />

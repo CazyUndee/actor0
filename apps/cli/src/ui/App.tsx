@@ -80,14 +80,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [config, setConfig] = useState<CliConfig>(initialConfig);
   const [conversation, setConversation] = useState<ConversationState>(() => initialConversation());
   const [draft, setDraft] = useState("");
-  // The `/` command popup: shown while the draft is a bare slash-command being
-  // typed, dismissable with Esc, and reset once the draft is no longer a command.
+  // The `/` command popup. `slashDismissed` holds the token the user pressed Esc
+  // on — a per-token dismissal, so editing the command reopens the popup
+  // (Codex's behaviour) rather than a sticky global hide. The derived filter is
+  // computed below, once `mode` exists.
   const [slashIndex, setSlashIndex] = useState(0);
-  const [slashDismissed, setSlashDismissed] = useState(false);
-  const updateDraft = (value: string) => {
-    setDraft(value);
-    if (!value.startsWith("/")) setSlashDismissed(false);
-  };
+  const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState(0);
@@ -469,23 +467,41 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // scrollback now, so the wheel and Shift+PageUp reach it without the app
   // intercepting anything — and no key here can swallow a scroll the user is
   // trying to make, which is what the old PageUp handler did.
-  const slashActive = mode === "chat" && !slashDismissed && /^\/[a-z]*$/i.test(draft);
-  const slashMatches = slashActive ? matchSlashCommands(draft.slice(1)) : [];
+  const slashToken = /^\/([a-z]*)$/i.exec(draft)?.[1];
+  const slashEngaged = mode === "chat" && slashToken !== undefined && slashDismissed !== slashToken;
+  const slashMatches = slashEngaged ? matchSlashCommands(slashToken!) : [];
   const slashSel = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
   useInput((input, key) => {
-    // The `/` popup owns the keys while it is open: arrows move the selection,
-    // Tab completes the highlighted command, Esc dismisses. Handled before the
-    // global Esc so dismissing the popup does not read as a cancel.
-    if (slashActive && slashMatches.length > 0) {
-      if (key.upArrow || input === "k") return setSlashIndex((n) => wrapSlash(n, slashMatches.length, -1));
-      if (key.downArrow || input === "j") return setSlashIndex((n) => wrapSlash(n, slashMatches.length, 1));
-      if (key.tab) {
-        setDraft(`/${slashMatches[slashSel]!.name}`);
-        setSlashDismissed(true);
+    // While a `/` command is being typed, the popup owns the keys — Codex-style:
+    // arrows/1-9 move and run, Tab completes into the draft, Esc dismisses this
+    // token. Enter runs the highlighted command (or submits the raw text when
+    // nothing matches), never a half-typed string to the model.
+    if (slashEngaged) {
+      if (key.upArrow || input === "k") {
+        if (slashMatches.length > 0) setSlashIndex((n) => wrapSlash(n, slashMatches.length, -1));
+        return;
+      }
+      if (key.downArrow || input === "j") {
+        if (slashMatches.length > 0) setSlashIndex((n) => wrapSlash(n, slashMatches.length, 1));
         return;
       }
       if (key.escape) {
-        setSlashDismissed(true);
+        setSlashDismissed(slashToken!);
+        return;
+      }
+      if (key.tab) {
+        const match = slashMatches[slashSel];
+        if (match) setDraft(`/${match.name}`);
+        return;
+      }
+      if (input >= "1" && input <= "9") {
+        const match = slashMatches[Number(input) - 1];
+        if (match) submit(`/${match.name}`);
+        return;
+      }
+      if (key.return) {
+        const match = slashMatches[slashSel];
+        submit(match ? `/${match.name}` : draft);
         return;
       }
     }
@@ -653,15 +669,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         <UsagePanel onCancel={() => setMode("chat")} />
       ) : (
         <>
-          {slashActive && slashMatches.length > 0 ? <SlashPopup commands={slashMatches} selected={slashSel} /> : null}
+          {slashEngaged && slashMatches.length > 0 ? <SlashPopup commands={slashMatches} selected={slashSel} /> : null}
           <Composer
             value={draft}
-            onChange={updateDraft}
+            onChange={setDraft}
             onSubmit={submit}
             history={history}
             isActive
             busy={busy}
-            popupOpen={slashActive}
+            popupOpen={slashEngaged}
           />
         </>
       )}

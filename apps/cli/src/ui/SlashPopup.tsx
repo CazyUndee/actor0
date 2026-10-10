@@ -32,6 +32,7 @@ export function SlashPopup({ commands, selected }: SlashPopupProps) {
           // Sibling `<Text>`s in a row `Box`, not nested `<Text>` — nested ones
           // collide on an empty React key.
           <Box flexDirection="row" key={command.name}>
+            <Text color={color.dim}>{`${index + 1} `}</Text>
             <Text color={tone}>{`${active ? "❯" : " "} /${command.name}`.padEnd(nameWidth + 4)}</Text>
             <Text color={color.dim}>{`/${alias}`.padEnd(5)}</Text>
             <Text color={tone}>{command.description}</Text>

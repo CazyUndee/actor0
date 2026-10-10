@@ -1025,10 +1025,31 @@ const ask = async (question: string): Promise<void> => {
   stdin.write("\u001b");
   await wait(120);
 
-  // The `/` command popup: typing a prefix lists matches with descriptions.
-  stdin.write("/pro");
+  // The `/` command popup, driven like a user: type a prefix, see it filter,
+  // arrow to move the highlight, and a number runs that command outright.
+  stdin.write("/");
+  await wait(150);
+  await show("29 · / lists every command");
+
+  stdin.write("m");
+  await wait(150);
+  await show("30 · typing narrows it to /model");
+
+  // Pressing "1" runs the highlighted command directly — no half-typed string
+  // reaches the model. /model with no argument opens the model list.
+  stdin.write("1");
   await wait(200);
-  await show("29 · / popup filters as you type");
+  await show("31 · a number runs the command");
+
+  // Esc dismisses the popup for this token; editing reopens it.
+  stdin.write("/h");
+  await wait(150);
+  await show("32 · popup reopened on a new token");
+  stdin.write("\u001b");
+  await wait(120);
+  stdin.write("e");
+  await wait(150);
+  await show("33 · Esc hid it; editing the token reopened it");
 
   app.unmount();
   process.exit(0);
