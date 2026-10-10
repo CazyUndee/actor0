@@ -4,6 +4,7 @@ import { Writable } from "node:stream";
 import { render } from "ink";
 import { ProviderMenu } from "./ProviderMenu.js";
 import { AddProvider } from "./AddProvider.js";
+import { SlashPopup } from "./SlashPopup.js";
 import type { NamedProvider } from "../config.js";
 
 /**
@@ -88,6 +89,24 @@ test("first-run onboarding frames the kind picker as a welcome", () => {
 
   const manage = captureFrame(<AddProvider onDone={() => {}} onCancel={() => {}} />);
   assert.match(manage, /add a provider/, "/provider → add keeps the management framing");
+});
+
+test("the slash popup lists commands with descriptions and a highlight", () => {
+  const commands = [
+    { name: "provider", description: "manage providers" },
+    { name: "setup", description: "re-run the setup wizard" },
+  ];
+  const frame = captureFrame(<SlashPopup commands={commands} selected={1} />);
+  assert.match(frame, /\/provider/, "the command");
+  assert.match(frame, /manage providers/, "its description");
+  assert.match(frame, /\/setup/, "and the next");
+  // The highlight marker sits on the selected row.
+  const setupLine = frame.split("\n").find((line) => line.includes("/setup"))!;
+  assert.match(setupLine, /❯/, "the selected row carries the cursor");
+});
+
+test("an empty slash popup renders nothing", () => {
+  assert.equal(captureFrame(<SlashPopup commands={[]} selected={0} />), "");
 });
 
 test("the add-provider flow opens on the kind picker", () => {

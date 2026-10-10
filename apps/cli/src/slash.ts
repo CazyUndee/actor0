@@ -21,6 +21,22 @@ export type SlashCommand =
 
 export const COMMANDS = ["help", "clear", "model", "provider", "setup", "quit"] as const;
 
+/**
+ * Commands with one-line descriptions, for the `/` popup.
+ *
+ * Ordered by how often they are reached, so the popup's default highlight lands
+ * on the useful one. `/model <name>` and `/quit` are the same commands with an
+ * argument or alias, described here in their bare form.
+ */
+export const SLASH_COMMANDS: { name: string; description: string }[] = [
+  { name: "provider", description: "manage providers — switch, sign in, add, remove" },
+  { name: "setup", description: "re-run the setup wizard" },
+  { name: "model", description: "switch to a model by name" },
+  { name: "clear", description: "start a new conversation" },
+  { name: "help", description: "show all commands" },
+  { name: "quit", description: "exit" },
+];
+
 export const HELP_TEXT: [string, string][] = [
   ["/help", "show this list"],
   ["/clear", "start a new conversation"],
@@ -30,6 +46,12 @@ export const HELP_TEXT: [string, string][] = [
   ["/model <name>", "switch to a model by name"],
   ["/quit", "exit (Ctrl+D does the same)"],
 ];
+
+/** Commands whose name starts with the typed query, in list order. */
+export function matchSlashCommands(query: string): { name: string; description: string }[] {
+  const q = query.toLowerCase();
+  return SLASH_COMMANDS.filter((command) => command.name.startsWith(q));
+}
 
 /**
  * Parse a line of input. Returns undefined when the input is ordinary text, so

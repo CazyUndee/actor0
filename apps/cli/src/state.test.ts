@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSlash, COMMANDS } from "./slash.js";
+import { parseSlash, matchSlashCommands, COMMANDS } from "./slash.js";
 import { cronix } from "./theme.generated.js";
 import { PROVIDER_KINDS } from "./providers.js";
 
@@ -36,6 +36,15 @@ test("commands are case-insensitive and tolerate surrounding space", () => {
 
 test("an unknown command is reported rather than guessed at", () => {
   assert.deepEqual(parseSlash("/wat"), { name: "unknown", input: "/wat" });
+});
+
+test("the / popup filters commands by the typed prefix", () => {
+  assert.ok(matchSlashCommands("").length >= 5, "an empty query lists every command");
+  assert.deepEqual(matchSlashCommands("pro").map((c) => c.name), ["provider"]);
+  assert.deepEqual(matchSlashCommands("s").map((c) => c.name), ["setup"]);
+  assert.deepEqual(matchSlashCommands("mo").map((c) => c.name), ["model"]);
+  assert.deepEqual(matchSlashCommands("zzz"), [], "no match is an empty list, not everything");
+  assert.ok(matchSlashCommands("").every((c) => c.description.length > 0), "each carries a description");
 });
 
 test("every command has help text", () => {

@@ -993,6 +993,16 @@ const ask = async (question: string): Promise<void> => {
   await wait(200);
   await show("27 · add a provider — pick a kind");
 
+  // The `/` command popup: back to chat, typing a prefix lists matches with
+  // descriptions; Esc dismisses.
+  stdin.write("\u001b");
+  await wait(150);
+  stdin.write("\u001b");
+  await wait(150);
+  stdin.write("/pro");
+  await wait(200);
+  await show("28 · / popup filters as you type");
+
   app.unmount();
   process.exit(0);
 }

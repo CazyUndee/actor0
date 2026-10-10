@@ -77,6 +77,7 @@ export function Composer({
   history,
   isActive,
   busy,
+  popupOpen = false,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -84,6 +85,8 @@ export function Composer({
   history: string[];
   isActive: boolean;
   busy: boolean;
+  /** While the `/` popup is open, arrows drive it, not history. */
+  popupOpen?: boolean;
 }) {
   const [cursor, setCursor] = useState<number | null>(null);
   // `null` means "editing a fresh line"; a number indexes back through history.
@@ -91,6 +94,9 @@ export function Composer({
 
   useInput(
     (_input, key) => {
+      // The `/` popup owns up/down while it is open, so history navigation steps
+      // aside rather than moving two cursors at once.
+      if (popupOpen) return;
       if (!key.upArrow && !key.downArrow) return;
       if (history.length === 0) return;
       if (key.upArrow) {

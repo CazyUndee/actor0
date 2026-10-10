@@ -33,7 +33,9 @@ import { Banner, LiveView, StatusBar, Transcript, bannerActivity, useTerminalSiz
 import { Composer } from "./prompts.js";
 import { AddProvider } from "./AddProvider.js";
 import { ProviderMenu } from "./ProviderMenu.js";
+import { SlashPopup } from "./SlashPopup.js";
 import { providerLabel } from "../provider-presets.js";
+import { matchSlashCommands } from "../slash.js";
 
 /**
  * The root component, and the only place the CLI holds state.
@@ -61,12 +63,26 @@ export type AppProps = {
   transport?: ModelClient;
 };
 
+/** Move `current` by `delta`, wrapping at both ends — for the `/` popup. */
+function wrapSlash(current: number, count: number, delta: number): number {
+  if (count <= 0) return 0;
+  return (((current + delta) % count) + count) % count;
+}
+
 export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", transport }: AppProps) {
   const { exit } = useApp();
 
   const [config, setConfig] = useState<CliConfig>(initialConfig);
   const [conversation, setConversation] = useState<ConversationState>(() => initialConversation());
   const [draft, setDraft] = useState("");
+  // The `/` command popup: shown while the draft is a bare slash-command being
+  // typed, dismissable with Esc, and reset once the draft is no longer a command.
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const updateDraft = (value: string) => {
+    setDraft(value);
+    if (!value.startsWith("/")) setSlashDismissed(false);
+  };
   const [history, setHistory] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState(0);
@@ -417,7 +433,26 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // scrollback now, so the wheel and Shift+PageUp reach it without the app
   // intercepting anything — and no key here can swallow a scroll the user is
   // trying to make, which is what the old PageUp handler did.
+  const slashActive = mode === "chat" && !slashDismissed && /^\/[a-z]*$/i.test(draft);
+  const slashMatches = slashActive ? matchSlashCommands(draft.slice(1)) : [];
+  const slashSel = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
   useInput((input, key) => {
+    // The `/` popup owns the keys while it is open: arrows move the selection,
+    // Tab completes the highlighted command, Esc dismisses. Handled before the
+    // global Esc so dismissing the popup does not read as a cancel.
+    if (slashActive && slashMatches.length > 0) {
+      if (key.upArrow || input === "k") return setSlashIndex((n) => wrapSlash(n, slashMatches.length, -1));
+      if (key.downArrow || input === "j") return setSlashIndex((n) => wrapSlash(n, slashMatches.length, 1));
+      if (key.tab) {
+        setDraft(`/${slashMatches[slashSel]!.name}`);
+        setSlashDismissed(true);
+        return;
+      }
+      if (key.escape) {
+        setSlashDismissed(true);
+        return;
+      }
+    }
     if (key.escape) {
       if (busy) {
         abortRef.current?.abort();
@@ -574,14 +609,18 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           }}
         />
       ) : (
-        <Composer
-          value={draft}
-          onChange={setDraft}
-          onSubmit={submit}
-          history={history}
-          isActive
-          busy={busy}
-        />
+        <>
+          {slashActive && slashMatches.length > 0 ? <SlashPopup commands={slashMatches} selected={slashSel} /> : null}
+          <Composer
+            value={draft}
+            onChange={updateDraft}
+            onSubmit={submit}
+            history={history}
+            isActive
+            busy={busy}
+            popupOpen={slashActive}
+          />
+        </>
       )}
 
       <StatusBar cwd={cwd} endpoint={endpoint} hint={footerHint} />
