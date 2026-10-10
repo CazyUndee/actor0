@@ -563,13 +563,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // dialog is open, Esc is *not* cancelling the turn — the dialog is denying the
   // write, and the global handler is disabled. Telling the user otherwise is
   // the kind of small lie that costs a wrong overwrite.
+  // When a panel (menu, add, usage, model, thinking) is open it renders its
+  // own key hints, so the status bar's second line stays down to quit + path
+  // rather than repeating them.
   const footerHint = busy
     ? "Esc cancels a running turn · Ctrl+D quits"
-    : mode === "usage"
-      ? "tab or 1/2/3 switches period · esc closes · Ctrl+D quits"
-      : mode !== "chat"
-        ? "esc closes · Ctrl+D quits"
-        : "/help for commands · Ctrl+D quits";
+    : mode !== "chat"
+      ? "Ctrl+D quits"
+      : "/help for commands · Ctrl+D quits";
   return (
     // The top margin is the gap between the scrollback and the part of the UI
     // that still moves. `<Static>` is positioned absolutely, so this is the only
