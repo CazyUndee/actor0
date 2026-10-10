@@ -82,8 +82,10 @@ export function bannerLines(opts: {
 
   const label = (text: string): BannerCell[] => [{ text: text.padEnd(LABEL_COL), tone: "label" }];
 
+  // The card is the info fields only; the title and the status face live
+  // above it (see `bannerRows` in scroll.tsx), so they can be the expressive
+  // part rather than a fixed `>_` line inside a box.
   const lines: BannerCell[][] = [
-    [{ text: `>_ ${opts.title} (v${opts.version})`, tone: "title" }],
     [],
     [...label("model:"), ...cell(opts.model, opts.hint)],
     [...label("endpoint:"), ...cell(opts.endpoint)],

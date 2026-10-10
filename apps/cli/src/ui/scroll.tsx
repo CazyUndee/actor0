@@ -1,4 +1,4 @@
-import { Text } from "ink";
+import { Box, Text } from "ink";
 import type { ReactNode } from "react";
 import type { Entry, Live } from "../conversation.js";
 import { HELP_TEXT } from "../slash.js";
@@ -68,15 +68,67 @@ function helpRows(columns: number): ReactNode[] {
   return out;
 }
 
-/** Flatten one committed entry into the terminal rows it occupies. */
 const BANNER_TONE = (t: BannerCell["tone"]): string | undefined =>
   t === "title" ? color.accent : t === "label" ? color.muted : t === "dim" ? color.dim : color.text;
 
-/** The opening card, flattened into the rows it occupies so it scrolls away. */
-export function bannerRows(opts: Parameters<typeof bannerLines>[0]): ReactNode[] {
-  return bannerLines(opts).map((line, lineIndex) => (
-    // eslint-disable-next-line react/no-array-index-key -- the card is positional and fixed
-    <Text key={lineIndex} wrap="truncate-end">
+/** The agent's mood, as a face in a little box — a status indicator, not a `>_`. */
+export type Face = "normal" | "startled" | "idle" | "confused" | "suffering" | "dead" | "happy" | "thinking";
+
+const FACE: Record<Face, string> = {
+  normal: "o_o",
+  startled: "0_0",
+  idle: "-_-",
+  confused: "?_?",
+  suffering: "T_T",
+  dead: "x_x",
+  happy: "ᵔᴥᵔ",
+  thinking: "o_0",
+};
+
+/**
+ * The mood derived from the conversation's state (see App for the two transient
+ * faces, STARTLED and HAPPY, which are moments rather than states).
+ *
+ * Priority reads worst-to-calmest: an API error leaves the agent DEAD, a tool
+ * failure has it SUFFERING (the turn carries on), a `blocked` turn is CONFUSED
+ * (it asked and waits), mid-turn reasoning is THINKING, a turn producing output
+ * is NORMAL, and nothing at all is IDLE.
+ */
+export function stateFace(input: { live: Live; lastEntry?: Entry; blocked: boolean; busy: boolean }): Face {
+  const { live, lastEntry, blocked, busy } = input;
+  if (lastEntry?.kind === "notice" && lastEntry.tone === "error") return "dead";
+  if (lastEntry?.kind === "tool" && lastEntry.status === "error") return "suffering";
+  if (blocked) return "confused";
+  if (live.reasoning.trim()) return "thinking";
+  if (busy) return "normal";
+  return "idle";
+}
+
+/** The face box rows: `╭───╮ / │face│ / ╰───╯`, dim chrome around an accent face. */
+export function faceRows(face: Face): ReactNode[] {
+  const width = 5;
+  const inner = FACE[face];
+  const pad = Math.max(0, width - inner.length);
+  const left = Math.floor(pad / 2);
+  const bar = (l: string, r: string): ReactNode => plain(l + "─".repeat(width) + r, color.dim);
+  const cell: ReactNode = (
+    <Text wrap="truncate-end">
+      <Text color={color.dim}>│</Text>
+      {" ".repeat(left)}
+      <Text color={color.accent} bold>
+        {inner}
+      </Text>
+      {" ".repeat(pad - left)}
+      <Text color={color.dim}>│</Text>
+    </Text>
+  );
+  return [bar("╭", "╮"), cell, bar("╰", "╯")];
+}
+
+/** One info-card row (cells -> colored Text), for the right-hand column. */
+function cardRow(line: BannerCell[]): ReactNode {
+  return (
+    <Text wrap="truncate-end">
       {line.map((cell, cellIndex) => (
         // eslint-disable-next-line react/no-array-index-key -- fixed set of positional segments per line
         <Text key={cellIndex} color={BANNER_TONE(cell.tone)}>
@@ -84,7 +136,52 @@ export function bannerRows(opts: Parameters<typeof bannerLines>[0]): ReactNode[]
         </Text>
       ))}
     </Text>
-  ));
+  );
+}
+
+/**
+ * The opening card, flattened into rows so it scrolls away: the version and
+ * status face on the left, the info card beside it. Side by side when the
+ * terminal is wide enough; stacked (face above, card below) when it is not — a
+ * card squeezed beside the face on a 44-column terminal would push both off the
+ * right edge, which is the one outcome worse than a taller card.
+ */
+export function bannerRows(opts: Parameters<typeof bannerLines>[0], face: Face, columns = 80): ReactNode[] {
+  const title = `${opts.title} (v${opts.version})`;
+  const titleNode: ReactNode = (
+    <Text color={color.accent} bold wrap="truncate-end">
+      {title}
+    </Text>
+  );
+  const leftNodes: ReactNode[] = [titleNode, ...faceRows(face)];
+  const leftWidth = Math.max(title.length, 5);
+  const gap = 2;
+  const minCard = 36;
+  const sideBySide = columns >= leftWidth + gap + minCard;
+
+  if (!sideBySide) {
+    return [
+      ...leftNodes,
+      ...bannerLines(opts).map(cardRow),
+    ];
+  }
+
+  const cards = bannerLines({ ...opts, width: columns - leftWidth - gap }).map(cardRow);
+  const height = Math.max(leftNodes.length, cards.length);
+  const spacer: ReactNode = <Text> </Text>;
+  const rows: ReactNode[] = [];
+  for (let i = 0; i < height; i += 1) {
+    const left = leftNodes[i] ?? spacer;
+    const card = cards[i] ?? spacer;
+    rows.push(
+      <Box key={i} flexDirection="row">
+        <Box width={leftWidth}>{left}</Box>
+        <Text>{" ".repeat(gap)}</Text>
+        {card}
+      </Box>,
+    );
+  }
+  return rows;
 }
 
 export function entryRows(entry: Entry, columns: number): ReactNode[] {

@@ -4,7 +4,7 @@ import { PassThrough } from "node:stream";
 import { Box, render } from "ink";
 import type { ReactNode } from "react";
 import type { Entry } from "../conversation.js";
-import { entryRows, liveRows, windowRows } from "./scroll.js";
+import { entryRows, liveRows, windowRows, stateFace } from "./scroll.js";
 import { ScreenModel } from "./screen-model.js";
 
 /** Render rows through a screen model and return the non-empty lines. */
@@ -74,4 +74,14 @@ test("windowRows scrolls up by the offset, clamped to the content", () => {
 
 test("windowRows shows everything when content is shorter than the window", () => {
   assert.deepEqual(windowRows(["a", "b"], 10, 0), ["a", "b"]);
+});
+
+test("stateFace reads the mood off the conversation state, worst first", () => {
+  const quiet = { text: "", reasoning: "", partial: false };
+  assert.equal(stateFace({ live: quiet, lastEntry: { kind: "notice", tone: "error", text: "e" }, blocked: false, busy: false }), "dead", "an API error is dead");
+  assert.equal(stateFace({ live: quiet, lastEntry: { kind: "tool", name: "shell", target: "", status: "error", output: "" }, blocked: false, busy: false }), "suffering", "a failed tool is suffering, not dead");
+  assert.equal(stateFace({ live: quiet, lastEntry: undefined, blocked: true, busy: false }), "confused", "a blocked turn is confused");
+  assert.equal(stateFace({ live: { ...quiet, reasoning: "hmm" }, lastEntry: undefined, blocked: false, busy: true }), "thinking", "reasoning is thinking");
+  assert.equal(stateFace({ live: { ...quiet, text: "hi" }, lastEntry: undefined, blocked: false, busy: true }), "normal", "a turn producing output is normal");
+  assert.equal(stateFace({ live: quiet, lastEntry: undefined, blocked: false, busy: false }), "idle", "nothing happening is idle");
 });

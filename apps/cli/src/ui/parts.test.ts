@@ -284,7 +284,7 @@ test("the label column is the same width on every row", () => {
 
 test("the hint is right-aligned in the value column", () => {
   const rendered = text(card({ hint: "/model to change" }));
-  const model = rendered[3]!;
+  const model = rendered[2]!; // the card is info-only now: border, blank, model — no title row
   // Strip the borders before asking whether it is flush: the line ends in " │",
   // which trimEnd cannot remove, and the hint would always look one short.
   const inner = model.slice(2, -2);
@@ -295,7 +295,7 @@ test("the hint is right-aligned in the value column", () => {
 test("a value too long for its column is cut, not wrapped", () => {
   const rendered = text(card({ model: "m".repeat(200), width: 50 }));
   for (const line of rendered) assert.ok(line.length <= 50, `line overflowed: ${line.length}`);
-  assert.ok(rendered[3]!.includes("…"));
+  assert.ok(rendered[2]!.includes("…"));
 });
 
 test("a narrow terminal still produces a closed card", () => {

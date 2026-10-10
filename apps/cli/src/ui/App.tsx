@@ -37,7 +37,7 @@ import { color, timing } from "../theme.js";
 import { createToolHost } from "../tools.js";
 import { StatusBar, bannerActivity, useTerminalSize } from "./parts.js";
 import { Composer, composerHeight } from "./prompts.js";
-import { bannerRows, entryRows, liveRows, windowRows } from "./scroll.js";
+import { bannerRows, entryRows, liveRows, windowRows, stateFace, type Face } from "./scroll.js";
 import { AddProvider } from "./AddProvider.js";
 import { UsagePanel } from "./UsagePanel.js";
 import { ModelPicker } from "./ModelPicker.js";
@@ -111,6 +111,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // newest output. The composer is pinned to the bottom of the frame, so this
   // only ever moves the transcript window above it — see the render below.
   const [scrollOffset, setScrollOffset] = useState(0);
+  // A brief "good job" beat after a turn completes, for the status face. Clears
+  // itself so the face settles back to idle rather than grinning for the whole
+  // idle period; a timer ref holds the pending clear so a new turn can cancel it.
+  const [justFinished, setJustFinished] = useState(false);
+  const finishedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Session state lives in refs: it changes on every turn but must never
   // trigger a re-render, because nothing on screen depends on it.
@@ -319,12 +324,16 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         // turns the next keystroke into `/helpwhatever`.
         setDraft("");
         setScrollOffset(0); // a command is the user acting now — jump to the bottom
+        if (finishedTimer.current) { clearTimeout(finishedTimer.current); finishedTimer.current = null; }
+        setJustFinished(false);
         runCommand(command);
         return;
       }
 
       setDraft("");
       setScrollOffset(0); // the user's own turn is at the bottom — follow it
+      if (finishedTimer.current) { clearTimeout(finishedTimer.current); finishedTimer.current = null; }
+      setJustFinished(false);
       setHistory((prev) => [input, ...prev.filter((item) => item !== input)].slice(0, 50));
       setConversation((state) => withUserInput(state, input));
       setBusy(true);
@@ -478,6 +487,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         } finally {
           abortRef.current = null;
           setBusy(false);
+          // A beat of "good job" on the status face, then back to idle. The
+          // clear is on a timer so it never outlives the moment it marks.
+          setJustFinished(true);
+          if (finishedTimer.current) clearTimeout(finishedTimer.current);
+          finishedTimer.current = setTimeout(() => { setJustFinished(false); finishedTimer.current = null; }, 2200);
           try {
             saveSession({
               id: sessionIdRef.current,
@@ -650,7 +664,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const bottomRows = menuOpen
     ? Math.min(Math.max(composerH, 6), Math.max(6, rows - 8)) + statusRows + blockedRows
     : composerH + statusRows + blockedRows;
-  const viewport = Math.max(3, rows - bottomRows);
+  // One row short of the terminal, on purpose. A frame exactly as tall as the
+  // screen is the trap every full-screen TUI hits: the terminal emits a newline
+  // after the last row and scrolls the whole frame up by one on every repaint —
+  // which is a scrollbar appearing and the composer sliding off the bottom the
+  // moment a key is pressed. Leaving the last terminal row blank means ink
+  // repaints in place and the pinned chrome stays put.
+  const frameRows = Math.max(3, rows - 1);
+  const viewport = Math.max(3, frameRows - bottomRows);
 
   // Committed entries are flattened to rows once per commit (not per token), so
   // streaming never re-walks the whole transcript. The opening card and the
@@ -661,6 +682,20 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     [conversation.entries, columns],
   );
   const live = menuOpen ? [] : liveRows(conversation.live, frame, elapsed, columns, viewport, Boolean(conversation.blocked));
+  // The status face. A moment after a turn completes is HAPPY; a user message
+  // that has not yet produced any output is STARTLED (a WAIT WHAT); everything
+  // else is read straight off the conversation's state.
+  const liveQuiet = !(conversation.live.text || conversation.live.reasoning.trim() || conversation.live.tool || conversation.live.status || conversation.live.retrying);
+  const face: Face = justFinished
+    ? "happy"
+    : busy && liveQuiet
+      ? "startled"
+      : stateFace({
+          live: conversation.live,
+          lastEntry: conversation.entries[conversation.entries.length - 1],
+          blocked: Boolean(conversation.blocked),
+          busy,
+        });
   const content = [
     ...bannerRows({
       title: "actor0",
@@ -671,7 +706,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       activity: bannerActivity(conversation.live),
       hint: "/provider to switch",
       width: columns,
-    }),
+    }, face, columns),
     ...entryRowList,
     ...live,
   ];
@@ -682,7 +717,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // `rows` tall and the bottom children are laid out last, the composer (or
     // an open modal) is pinned to the terminal's final rows and the transcript
     // scrolls above it — the wheel moves only the window.
-    <Box flexDirection="column" height={rows} width={columns}>
+    <Box flexDirection="column" height={frameRows} width={columns}>
       <Box flexDirection="column" height={viewport} overflow="hidden" flexShrink={0}>
         {visible.map((node, index) => (
           // eslint-disable-next-line react/no-array-index-key -- windowed transcript rows are positional and stable within a frame
