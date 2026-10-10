@@ -154,7 +154,9 @@ export function Composer({
       </Box>
       {/* Bottom row: key hints on the left, send button on the right. */}
       <Box justifyContent="space-between">
-        <Text color={color.dim}>{busy ? "esc to cancel" : "enter to send · / for commands · ↑ history"}</Text>
+        <Text color={color.dim} wrap="truncate-end">
+          {busy ? "esc to cancel" : "enter to send · / for commands · ↑ history"}
+        </Text>
         <Text
           backgroundColor={canSend ? color.accent : undefined}
           color={canSend ? color.accentText : color.dim}
