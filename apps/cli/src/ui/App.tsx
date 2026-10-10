@@ -541,9 +541,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   }, { isActive: true });
 
   const { columns, rows } = useTerminalSize();
-  // Live text, the blocked banner, the composer and the two-line footer all
-  // have to fit in the terminal at the same time.
-  const CHROME_ROWS = 8;
+  // Live text, the blocked banner, the 5-row composer (bordered box) and the
+  // two-line footer all have to fit in the terminal at the same time. The
+  // composer grew from a single line to a 3-content-row box, so this budget
+  // grew with it.
+  const CHROME_ROWS = 12;
 
   // The footer must describe the key that is actually live. While an approval
   // dialog is open, Esc is *not* cancelling the turn — the dialog is denying the

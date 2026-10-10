@@ -69,7 +69,7 @@ export function TextInput({ value, onChange, onSubmit, isActive = true, placehol
   );
 }
 
-/** The main input line, with up/down history. */
+/** The main composer: a 3-line box, input top-left, send button bottom-right. */
 export function Composer({
   value,
   onChange,
@@ -117,25 +117,50 @@ export function Composer({
     { isActive: isActive && busy === false },
   );
 
+  // The send button is highlighted only when there is something to send; an
+  // empty box leaves it at the normal background, so the highlight reads as
+  // "press me" rather than decoration that is always on.
+  const canSend = !busy && value.trim().length > 0;
+  const borderColor = busy ? color.dim : canSend ? color.accent : color.dim;
+
   return (
-    <Box>
-      <Text color={busy ? color.dim : color.accent} bold>
-        {busy ? "·" : "❯"}{" "}
-      </Text>
-      {/* Active even while a turn runs. Inactive meant every keystroke was
-          dropped on the floor, and a person who begins the next question
-          during a long tool call lost it without being told. What is refused
-          during a turn is the *submit*, not the typing — see `submit`. */}
-      <TextInput
-        value={value}
-        onChange={onChange}
-        // While the `/` popup is open, Enter runs the highlighted command from
-        // the App's handler — submitting here too would fire the half-typed
-        // draft at the model as well.
-        onSubmit={popupOpen ? () => {} : onSubmit}
-        isActive={isActive}
-        placeholder={busy ? "working — Esc to cancel" : "ask something, or /help"}
-      />
+    <Box
+      borderStyle="round"
+      borderColor={borderColor}
+      flexDirection="column"
+      // Three content rows between the borders, so a couple of wrapped lines
+      // have room and the send button can sit clear of the input.
+      height={5}
+      paddingX={1}
+    >
+      <Box flexGrow={1}>
+        <Text color={busy ? color.dim : color.accent} bold>
+          {busy ? "·" : "❯"}{" "}
+        </Text>
+        {/* Active even while a turn runs. Inactive meant every keystroke was
+            dropped on the floor, and a person who begins the next question
+            during a long tool call lost it without being told. What is refused
+            during a turn is the *submit*, not the typing — see `submit`. */}
+        <TextInput
+          value={value}
+          onChange={onChange}
+          // While the `/` popup is open, Enter runs the highlighted command
+          // from the App's handler — submitting here too would fire the
+          // half-typed draft at the model as well.
+          onSubmit={popupOpen ? () => {} : onSubmit}
+          isActive={isActive}
+          placeholder={busy ? "working — Esc to cancel" : "ask something…"}
+        />
+      </Box>
+      {/* Send button, pinned to the bottom-right of the box. */}
+      <Box justifyContent="flex-end">
+        <Text
+          backgroundColor={canSend ? color.accent : undefined}
+          color={canSend ? color.accentText : color.dim}
+        >
+          {canSend ? "  send ↵  " : "  send  "}
+        </Text>
+      </Box>
     </Box>
   );
 }
