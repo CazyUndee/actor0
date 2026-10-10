@@ -788,16 +788,32 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
     }
 
     case "help":
+      // A bordered panel, not flat text — the command list is a reference the
+      // user returns to, and a box reads as a distinct surface rather than
+      // more transcript chatter. Name and alias columns align independently so
+      // the descriptions line up.
+      const helpRows = HELP_TEXT.map(([command, description]) => {
+        const [name, alias] = command.split(/\s{2,}/);
+        return { name: name ?? command, alias: alias ?? "", description };
+      });
+      const helpNameW = Math.max(...helpRows.map((row) => row.name.length));
+      const helpAliasW = Math.max(...helpRows.map((row) => row.alias.length));
       return (
-        <Box flexDirection="column" marginTop={1}>
-          {HELP_TEXT.map(([command, description]) => (
-            <Text key={command}>
-              <Text color={color.accent}>{command.padEnd(16)}</Text>
-              <Text color={color.muted}>{description}</Text>
-            </Text>
-          ))}
-          <Box marginTop={1} flexDirection="column">
-            <Text color={color.dim}>Esc cancels a running turn · Ctrl+D quits</Text>
+        <Box marginTop={1} borderStyle="round" borderColor={color.dim} flexDirection="column" paddingX={1}>
+          <Text color={color.muted} bold>
+            commands
+          </Text>
+          <Box flexDirection="column" marginTop={1}>
+            {helpRows.map((row) => (
+              <Text key={row.name}>
+                <Text color={color.accent}>{row.name.padEnd(helpNameW + 2)}</Text>
+                <Text color={color.dim}>{row.alias.padEnd(helpAliasW + 2)}</Text>
+                <Text color={color.muted}>{row.description}</Text>
+              </Text>
+            ))}
+          </Box>
+          <Box marginTop={1}>
+            <Text color={color.dim}>esc cancels a running turn · Ctrl+D quits</Text>
           </Box>
         </Box>
       );

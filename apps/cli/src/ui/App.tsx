@@ -24,7 +24,7 @@ import {
   withUserInput,
   type ConversationState,
 } from "../conversation.js";
-import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "../turn.js";
+import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn } from "../turn.js";
 import { newSessionId, saveSession } from "../session.js";
 import { refreshProvider } from "../sign-in.js";
 import { verifyProvider } from "../turn.js";
@@ -398,8 +398,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           // the status line can show how full the window is.
           recordUsage(provider.model, total);
           setContextTokens(total.prompt_tokens);
-          const tokens = usageSummary(result.usage);
-          if (tokens) notice("info", tokens);
         } catch (error) {
           // Learn the context window from an overflow the recovery could not
           // clear: the error names it, and remembering it means the status line

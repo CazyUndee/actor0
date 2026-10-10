@@ -37,13 +37,13 @@ export type SlashCommandDef = {
  * the alias beside the name, so it is learned rather than hidden.
  */
 export const SLASH_COMMANDS: SlashCommandDef[] = [
-  { name: "provider", aliases: ["p", "endpoint"], description: "manage providers — switch, sign in, add, remove" },
+  { name: "provider", aliases: ["p", "endpoint"], description: "switch, sign in, add or remove" },
   { name: "setup", aliases: ["s"], description: "re-run the setup wizard" },
-  { name: "model", aliases: ["m"], description: "switch to a model by name" },
-  { name: "thinking", aliases: ["t"], description: "reasoning effort — low, medium, high" },
+  { name: "model", aliases: ["m"], description: "switch to a model" },
+  { name: "thinking", aliases: ["t"], description: "reasoning effort" },
   { name: "clear", aliases: ["c"], description: "start a new conversation" },
-  { name: "usage", aliases: ["u"], description: "token usage and quota — today, this week, this month" },
-  { name: "help", aliases: ["h", "?"], description: "show all commands" },
+  { name: "usage", aliases: ["u"], description: "tokens and quota" },
+  { name: "help", aliases: ["h", "?"], description: "show commands" },
   { name: "quit", aliases: ["q", "exit"], description: "exit" },
 ];
 
