@@ -15,15 +15,17 @@ export type SlashCommand =
   | { name: "clear" }
   | { name: "model"; model?: string }
   | { name: "provider" }
+  | { name: "setup" }
   | { name: "quit" }
   | { name: "unknown"; input: string };
 
-export const COMMANDS = ["help", "clear", "model", "provider", "quit"] as const;
+export const COMMANDS = ["help", "clear", "model", "provider", "setup", "quit"] as const;
 
 export const HELP_TEXT: [string, string][] = [
   ["/help", "show this list"],
   ["/clear", "start a new conversation"],
   ["/provider", "manage providers — switch, sign in, add, remove"],
+  ["/setup", "re-run the setup wizard"],
   ["/model", "list the models you have used"],
   ["/model <name>", "switch to a model by name"],
   ["/quit", "exit (Ctrl+D does the same)"],
@@ -57,6 +59,8 @@ export function parseSlash(input: string): SlashCommand | undefined {
     // the command takes no argument is less useful than showing it.
     case "provider": case "endpoint":
       return { name: "provider" };
+    case "setup":
+      return { name: "setup" };
     default:
       return { name: "unknown", input: trimmed };
   }

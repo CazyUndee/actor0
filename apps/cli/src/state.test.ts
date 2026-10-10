@@ -21,6 +21,8 @@ test("the documented commands parse", () => {
   assert.deepEqual(parseSlash("/clear"), { name: "clear" });
   assert.deepEqual(parseSlash("/quit"), { name: "quit" });
   assert.deepEqual(parseSlash("/model"), { name: "model" });
+  assert.deepEqual(parseSlash("/setup"), { name: "setup" }, "the setup wizard");
+  assert.deepEqual(parseSlash("/provider"), { name: "provider" });
 });
 
 test("/model carries an argument", () => {

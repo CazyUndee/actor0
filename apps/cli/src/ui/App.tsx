@@ -199,6 +199,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           setMode("menu");
           return;
         }
+        case "setup": {
+          // Re-run the first-run wizard at any time.
+          setOnboarding(true);
+          setMode("add");
+          return;
+        }
         case "quit":
           exit();
           return;
