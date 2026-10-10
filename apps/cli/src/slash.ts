@@ -16,6 +16,7 @@ export type SlashCommand =
   | { name: "model"; model?: string }
   | { name: "provider" }
   | { name: "setup" }
+  | { name: "usage" }
   | { name: "quit" }
   | { name: "unknown"; input: string };
 
@@ -39,6 +40,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "setup", aliases: ["s"], description: "re-run the setup wizard" },
   { name: "model", aliases: ["m"], description: "switch to a model by name" },
   { name: "clear", aliases: ["c"], description: "start a new conversation" },
+  { name: "usage", aliases: ["u"], description: "token usage and quota — today, this week, this month" },
   { name: "help", aliases: ["h", "?"], description: "show all commands" },
   { name: "quit", aliases: ["q", "exit"], description: "exit" },
 ];
@@ -97,6 +99,8 @@ export function parseSlash(input: string): SlashCommand | undefined {
       return { name: "provider" };
     case "setup":
       return { name: "setup" };
+    case "usage":
+      return { name: "usage" };
     default:
       return { name: "unknown", input: trimmed };
   }

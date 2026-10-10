@@ -1010,15 +1010,25 @@ const ask = async (question: string): Promise<void> => {
   await wait(200);
   await show("27 · add a provider — pick a kind");
 
-  // The `/` command popup: back to chat, typing a prefix lists matches with
-  // descriptions; Esc dismisses.
+  // The `/usage` panel: back to chat, it totals tokens for today, this week and
+  // this month (Tab or 1/2/3 switches), plus quota when the provider reports it.
   stdin.write("\u001b");
   await wait(150);
   stdin.write("\u001b");
   await wait(150);
+  stdin.write("/usage");
+  await wait(150);
+  stdin.write("\r");
+  await wait(200);
+  await show("28 · /usage — tokens today, this week, this month");
+
+  stdin.write("\u001b");
+  await wait(120);
+
+  // The `/` command popup: typing a prefix lists matches with descriptions.
   stdin.write("/pro");
   await wait(200);
-  await show("28 · / popup filters as you type");
+  await show("29 · / popup filters as you type");
 
   app.unmount();
   process.exit(0);

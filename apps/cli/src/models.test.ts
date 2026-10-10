@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fetchModels, fetchClaudePlan, modelsHeaders, modelsUrl } from "./models.js";
+import { fetchModels, fetchClaudePlan, fetchModelInfos, modelsHeaders, modelsUrl } from "./models.js";
 import type { ResolvedProvider } from "./config.js";
 
 /** Model discovery, tested with a mock fetch. OpenAI and Anthropic share a shape. */
@@ -43,6 +43,21 @@ test("Claude's plan is read from the OAuth profile's org type", async () => {
   assert.equal(await fetchClaudePlan("AT", profile("claude_team")), "team");
   assert.equal(await fetchClaudePlan("AT", profile("something_else")), undefined, "unknown org type is not guessed");
   assert.equal(await fetchClaudePlan("AT", profile()), undefined, "no org is not a plan");
+});
+
+test("a context window is read from whichever field the provider uses", async () => {
+  const infos = await fetchModelInfos(openai, jsonFetch({ data: [
+    { id: "a", context_length: 128000 },
+    { id: "b", context_window: 200000 },
+    { id: "c", max_context_tokens: 8192 },
+    { id: "d" },
+  ] }));
+  assert.deepEqual(infos, [
+    { id: "a", contextWindow: 128000 },
+    { id: "b", contextWindow: 200000 },
+    { id: "c", contextWindow: 8192 },
+    { id: "d" },
+  ], "a window is read under any spelling; an absent one is left undefined, not guessed");
 });
 
 test("a Claude plan fetch that fails is best-effort, not fatal", async () => {

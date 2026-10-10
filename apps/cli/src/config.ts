@@ -81,6 +81,12 @@ export type CliConfig = {
   providers?: NamedProvider[];
   /** Name of the entry in `providers` that is currently in use. */
   activeProvider?: string;
+  /**
+   * Context windows learned per model, from `/models` or an overflow error.
+   * Never a hand-maintained table — it fills in as providers report it, and the
+   * UI degrades to absolute tokens for a model that is not here yet.
+   */
+  contextWindows?: Record<string, number>;
 };
 
 /**
@@ -222,6 +228,16 @@ function parseOAuth(value: unknown): OAuthTokens | undefined {
   };
 }
 
+/** Read the learned context-window map; non-positive or non-number entries drop. */
+function contextWindowsOf(value: unknown): Record<string, number> | undefined {
+  if (!isRecord(value)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [model, window] of Object.entries(value)) {
+    if (typeof window === "number" && window > 0) out[model] = window;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 /**
  * Replace `${NAME}` with the value of that environment variable.
  *
@@ -318,6 +334,7 @@ export function readConfigFile(): CliConfig {
     models,
     ...(effectiveProviders.length ? { providers: effectiveProviders } : {}),
     ...(effectiveActive ? { activeProvider: effectiveActive } : {}),
+    ...(contextWindowsOf(stored.contextWindows) ? { contextWindows: contextWindowsOf(stored.contextWindows) } : {}),
     ...(typeof stored.systemPrompt === "string" && stored.systemPrompt.trim()
       ? { systemPrompt: stored.systemPrompt }
       : {}),
@@ -589,6 +606,13 @@ export function withActiveOAuth(config: CliConfig, tokens: OAuthTokens): CliConf
     ...config,
     providers: config.providers.map((entry) => (entry.name === active.name ? { ...entry, oauth: tokens } : entry)),
   };
+}
+
+/** Record a model's context window (from `/models` or an overflow error). */
+export function withContextWindow(config: CliConfig, model: string, window: number): CliConfig {
+  const existing = config.contextWindows ?? {};
+  if (existing[model] === window) return config;
+  return { ...config, contextWindows: { ...existing, [model]: window } };
 }
 
 /** Remove a registered endpoint. If it was active, the first survivor stands in. */

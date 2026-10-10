@@ -17,6 +17,7 @@ import {
   applyEvent,
   emptyLive,
   initialConversation,
+  totalUsage,
   withHelp,
   withNotice,
   withUserInput,
@@ -26,12 +27,16 @@ import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncati
 import { newSessionId, saveSession } from "../session.js";
 import { refreshProvider } from "../sign-in.js";
 import { verifyProvider } from "../turn.js";
+import { recordUsage, formatTokens } from "../usage.js";
+import { withContextWindow } from "../config.js";
+import { contextWindowTokens } from "@actor0/harness";
 import { parseSlash, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { createToolHost } from "../tools.js";
 import { Banner, LiveView, StatusBar, Transcript, bannerActivity, useTerminalSize } from "./parts.js";
 import { Composer } from "./prompts.js";
 import { AddProvider } from "./AddProvider.js";
+import { UsagePanel } from "./UsagePanel.js";
 import { ProviderMenu } from "./ProviderMenu.js";
 import { SlashPopup } from "./SlashPopup.js";
 import { providerLabel } from "../provider-presets.js";
@@ -91,10 +96,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // other two are the provider menu and its add form, which replace the
   // composer while open — one region at a time, so no two `useInput`s fight
   // over the same key. A menu never opens mid-turn (see `runCommand`).
-  const [mode, setMode] = useState<"chat" | "menu" | "add">("chat");
+  const [mode, setMode] = useState<"chat" | "menu" | "add" | "usage">("chat");
   // True only during the first-run welcome, so the add flow is framed as a
   // welcome and its completion is confirmed as "you're ready".
   const [onboarding, setOnboarding] = useState(false);
+  // Context tokens in the latest request (the input the model just saw), for the
+  // status line's "Context N% used". Zero until the first turn.
+  const [contextTokens, setContextTokens] = useState(0);
 
   // Session state lives in refs: it changes on every turn but must never
   // trigger a re-render, because nothing on screen depends on it.
@@ -139,6 +147,16 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // the status bar, so several providers are recognisable at a glance.
   const active = activeNamedProvider(config);
   const endpoint = active ? providerLabel(active) : "not configured";
+  // Context usage for the status line: "Context 42% used" when the active
+  // model's window is known (from /models or a past overflow), else the absolute
+  // count — never a guessed percentage from a hardcoded window.
+  const activeModel = active?.model;
+  const window = activeModel ? config.contextWindows?.[activeModel] : undefined;
+  const context = contextTokens > 0
+    ? window && contextTokens <= window * 4
+      ? `Context ${Math.min(100, Math.round((contextTokens / window) * 100))}% used`
+      : `${formatTokens(contextTokens)} tokens`
+    : undefined;
 
   // Onboarding. BYOK means there is nothing to talk to until a provider is
   // configured, so on launch — rather than presenting a composer that cannot
@@ -219,6 +237,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           // Re-run the first-run wizard at any time.
           setOnboarding(true);
           setMode("add");
+          return;
+        }
+        case "usage": {
+          setMode("usage");
           return;
         }
         case "quit":
@@ -343,9 +365,23 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           if (recovery) {
             notice("warn", describeRecovery(recovery));
           }
+          const total = totalUsage(result.usage);
+          // Log the turn locally for /usage, and remember the context size so
+          // the status line can show how full the window is.
+          recordUsage(provider.model, total);
+          setContextTokens(total.prompt_tokens);
           const tokens = usageSummary(result.usage);
           if (tokens) notice("info", tokens);
         } catch (error) {
+          // Learn the context window from an overflow the recovery could not
+          // clear: the error names it, and remembering it means the status line
+          // can show "Context N% used" on the next turn instead of a bare count.
+          const learned = contextWindowTokens(error);
+          if (learned !== undefined) {
+            const next = withContextWindow(config, provider.model, learned);
+            setConfig(next);
+            saveConfig(next);
+          }
           // The harness hands the transcript back on abort (AbortedTurnError)
           // and on any other turn failure (FailedTurnError): the input,
           // every finished round, honest answers for the calls a cancel cut
@@ -483,9 +519,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // the kind of small lie that costs a wrong overwrite.
   const footerHint = busy
     ? "Esc cancels a running turn · Ctrl+D quits"
-    : mode !== "chat"
-      ? "esc closes · Ctrl+D quits"
-      : "/help for commands · Ctrl+D quits";
+    : mode === "usage"
+      ? "tab or 1/2/3 switches period · esc closes · Ctrl+D quits"
+      : mode !== "chat"
+        ? "esc closes · Ctrl+D quits"
+        : "/help for commands · Ctrl+D quits";
 
   return (
     // The top margin is the gap between the scrollback and the part of the UI
@@ -569,13 +607,16 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       ) : mode === "add" ? (
         <AddProvider
           onboarding={onboarding}
-          onDone={(provider, models) => {
+          onDone={(provider, models, windows) => {
             // Register the one provider, then remember the chosen models the way
             // `/model` does — the active one first, capped, de-duplicated.
             let next = addProvider(config, provider);
             const remembered = [...new Set([provider.model, ...models].filter((m): m is string => Boolean(m)))];
             const rest = next.models.filter((m) => !remembered.includes(m));
             next = { ...next, models: [...remembered, ...rest].slice(0, 20) };
+            // Merge any context windows the provider published — learned, never a
+            // hand-maintained table.
+            if (windows) for (const [model, window] of Object.entries(windows)) next = withContextWindow(next, model, window);
             setConfig(next);
             saveConfig(next);
             setMode("chat");
@@ -608,6 +649,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
             setMode(onboarding ? "chat" : "menu");
           }}
         />
+      ) : mode === "usage" ? (
+        <UsagePanel onCancel={() => setMode("chat")} />
       ) : (
         <>
           {slashActive && slashMatches.length > 0 ? <SlashPopup commands={slashMatches} selected={slashSel} /> : null}
@@ -623,7 +666,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         </>
       )}
 
-      <StatusBar cwd={cwd} endpoint={endpoint} hint={footerHint} />
+      <StatusBar cwd={cwd} endpoint={endpoint} context={context} hint={footerHint} />
     </Box>
   );
 }

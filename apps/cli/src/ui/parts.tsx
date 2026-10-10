@@ -915,16 +915,19 @@ export function StatusBar({
   cwd,
   hint,
   endpoint,
+  context,
 }: {
   cwd: string;
   hint: string;
   endpoint?: string;
+  /** "Context 42% used" or "42.3k tokens" — sits between the endpoint and the path. */
+  context?: string;
 }) {
   // Two dim lines, not four. Claude Code, aider and gh all keep the footer to
   // context and the next keystroke; the model is an implementation detail the
   // user set once and never reads again, and spending a whole line on it pushed
   // the path and the hint off an 80-column terminal.
-  const line = `${endpoint ? `${endpoint} · ` : ""}${shortenPath(cwd, 52)}`;
+  const line = [endpoint, context, shortenPath(cwd, 52)].filter(Boolean).join(" · ");
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text color={color.dim} wrap="truncate-end">

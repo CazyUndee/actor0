@@ -70,6 +70,54 @@ export async function fetchModels(provider: ModelSource, fetchImpl: typeof fetch
   return [...new Set(ids)];
 }
 
+/** A model id with its context window, when the provider publishes one. */
+export type ModelInfo = { id: string; contextWindow?: number };
+
+/**
+ * List a provider's models with any context window each advertises.
+ *
+ * The window is not universal — OpenAI and Anthropic omit it from `/models`,
+ * while gateways (OpenRouter, vLLM, LiteLLM, Together…) publish it — so every
+ * spelling is tried and an absent one is left undefined rather than guessed.
+ * That keeps the window provider-loaded, never a hand-maintained table.
+ */
+export async function fetchModelInfos(provider: ModelSource, fetchImpl: typeof fetch = fetch): Promise<ModelInfo[]> {
+  const response = await fetchImpl(modelsUrl(provider), { headers: modelsHeaders(provider) });
+  if (!response.ok) {
+    throw new Error(`could not list models from ${modelsUrl(provider)} (HTTP ${response.status})`);
+  }
+  const text = await response.text();
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const data = (value as { data?: unknown }).data;
+  if (!Array.isArray(data)) return [];
+  const seen = new Set<string>();
+  const out: ModelInfo[] = [];
+  for (const entry of data) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id : undefined;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const contextWindow = contextWindowOf(record);
+    out.push(contextWindow !== undefined ? { id, contextWindow } : { id });
+  }
+  return out;
+}
+
+/** The context window a `/models` entry publishes, under any of its spellings. */
+function contextWindowOf(entry: Record<string, unknown>): number | undefined {
+  for (const key of ["context_window", "context_length", "max_context_tokens", "max_input_tokens", "context"]) {
+    const value = entry[key];
+    if (typeof value === "number" && value > 0) return value;
+  }
+  return undefined;
+}
+
 /**
  * Claude's subscription plan, for a readable label.
  *

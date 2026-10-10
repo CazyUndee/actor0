@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import { color } from "../theme.js";
 import { TextInput } from "./prompts.js";
 import { PROVIDER_KINDS, type ProviderKind } from "../provider-presets.js";
-import { fetchModels, fetchClaudePlan } from "../models.js";
+import { fetchModelInfos, fetchClaudePlan } from "../models.js";
 import { runOAuthSignIn } from "../sign-in.js";
 import { openBrowser } from "../oauth.js";
 import { providerName, type NamedProvider } from "../config.js";
@@ -32,8 +32,8 @@ import type { OAuthTokens } from "../oauth.js";
 const OFFERED = PROVIDER_KINDS;
 
 export type AddProviderProps = {
-  /** Register one provider and remember these models (first is active). */
-  onDone: (provider: NamedProvider, models: string[]) => void;
+  /** Register one provider, remember these models (first is active), and store any context windows. */
+  onDone: (provider: NamedProvider, models: string[], contextWindows?: Record<string, number>) => void;
   onCancel: () => void;
   /** First run: frame the kind picker as a welcome rather than "add a provider". */
   onboarding?: boolean;
@@ -45,7 +45,7 @@ type Phase =
   | { kind: "kind" }
   | { kind: "key"; provider: ProviderKind }
   | { kind: "working"; provider: ProviderKind; note: string }
-  | { kind: "models"; provider: ProviderKind; base: Base; models: string[]; cursor: number; chosen: Set<string> }
+  | { kind: "models"; provider: ProviderKind; base: Base; models: string[]; cursor: number; chosen: Set<string>; windows: Record<string, number> }
   | { kind: "error"; provider: ProviderKind; message: string };
 
 export function AddProvider({ onDone, onCancel, onboarding = false }: AddProviderProps) {
@@ -87,8 +87,14 @@ export function AddProvider({ onDone, onCancel, onboarding = false }: AddProvide
 
   const listModels = (provider: ProviderKind, base: Base) => {
     setPhase({ kind: "working", provider, note: "listing models…" });
-    void fetchModels(base)
-      .then((models) => setPhase({ kind: "models", provider, base, models, cursor: 0, chosen: new Set() }))
+    void fetchModelInfos(base)
+      .then((infos) => {
+        // Keep any context window the provider publishes, so the status line can
+        // show "Context N% used" without a hand-maintained table.
+        const windows: Record<string, number> = {};
+        for (const info of infos) if (info.contextWindow !== undefined) windows[info.id] = info.contextWindow;
+        setPhase({ kind: "models", provider, base, models: infos.map((info) => info.id), cursor: 0, chosen: new Set(), windows });
+      })
       .catch((error: Error) => setPhase({ kind: "error", provider, message: error.message }));
   };
 
@@ -96,7 +102,7 @@ export function AddProvider({ onDone, onCancel, onboarding = false }: AddProvide
     if (phase.kind !== "models") return;
     const active = chosen[0] ?? phase.models[phase.cursor];
     const provider: NamedProvider = { ...phase.base, name: providerName(phase.base.baseUrl), ...(active ? { model: active } : {}) };
-    onDone(provider, chosen);
+    onDone(provider, chosen, phase.windows);
   };
 
   useInput((input, keypress) => {
