@@ -911,30 +911,39 @@ export function LiveView({
  * visible signal said everything was fine and the only symptom was an HTML
  * error page from a server that was never asked the right question.
  */
+type Chip = { text: string; tone: "accent" | "success" | "warning" | "error" | "muted" | "dim" };
+
 export function StatusBar({
   cwd,
   hint,
-  endpoint,
-  context,
-  indicators,
+  chips,
 }: {
   cwd: string;
   hint: string;
-  endpoint?: string;
-  /** "Context 42% used" or "42.3k tokens" — sits in the indicator row. */
-  context?: string;
-  /** Extra status chips: git branch, reasoning effort, tokens-today. */
-  indicators?: { icon: string; text: string }[];
+  /** Coloured status chips, joined by ` · `. */
+  chips: Chip[];
 }) {
-  // Row one: the status indicators — what the agent is working against. Kept to
-  // a single dim line that truncates, so it never wraps and pushes the composer
-  // off a small terminal. Row two: the live hint, then the path.
-  const chips = [endpoint, context, ...(indicators ?? []).map((i) => `${i.icon} ${i.text}`)].filter(Boolean);
+  const toneColor = (tone: Chip["tone"]): string | undefined =>
+    tone === "accent"
+      ? color.accent
+      : tone === "success"
+        ? color.success
+        : tone === "warning"
+          ? color.warning
+          : tone === "error"
+            ? color.error
+            : tone === "muted"
+              ? color.muted
+              : color.dim;
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color={color.dim} wrap="truncate-end">
-        {chips.join(" · ")}
-      </Text>
+      <Box flexDirection="row">
+        {chips.map((chip, index) => (
+          <Text key={index} color={toneColor(chip.tone)} wrap="truncate-end">
+            {index === 0 ? chip.text : ` · ${chip.text}`}
+          </Text>
+        ))}
+      </Box>
       <Text color={color.dim} wrap="truncate-end">
         {hint} · {shortenPath(cwd, 40)}
       </Text>

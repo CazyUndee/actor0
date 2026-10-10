@@ -28,7 +28,7 @@ import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncati
 import { newSessionId, saveSession } from "../session.js";
 import { refreshProvider } from "../sign-in.js";
 import { verifyProvider } from "../turn.js";
-import { recordUsage, formatTokens, readUsage, startOfDay, usageSince } from "../usage.js";
+import { recordUsage, formatTokens, contextBar, readUsage, startOfDay, usageSince } from "../usage.js";
 import { gitBranch } from "../git.js";
 import { withContextWindow } from "../config.js";
 import { contextWindowTokens } from "@actor0/harness";
@@ -154,20 +154,24 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // count — never a guessed percentage from a hardcoded window.
   const activeModel = active?.model;
   const window = activeModel ? config.contextWindows?.[activeModel] : undefined;
+  // Status chips for the bottom bar, each with a tone. The context chip is
+  // coloured by how full the window is — green, then amber, then red — so the
+  // gauge is readable at a glance, not just numeric.
   const context = contextTokens > 0
     ? window && contextTokens <= window * 4
-      ? `Context ${Math.min(100, Math.round((contextTokens / window) * 100))}% used`
-      : `${formatTokens(contextTokens)} tokens`
+      ? { text: `${contextBar(contextTokens / window)} ${Math.min(100, Math.round((contextTokens / window) * 100))}%`, tone: (contextTokens / window >= 0.85 ? "error" : contextTokens / window >= 0.6 ? "warning" : "success") as "error" | "warning" | "success" }
+      : { text: `${formatTokens(contextTokens)} tokens`, tone: "muted" as const }
     : undefined;
-  // Status chips: git branch, reasoning effort, and tokens used today (local
-  // log — exact, no round trip). Read once per render; the branch read is a
-  // single stat.
+  // Read once per render; the branch read is a single stat.
   const branch = gitBranch(cwd);
   const tokensToday = usageSince(readUsage(), startOfDay()).tokens;
-  const indicators: { icon: string; text: string }[] = [];
-  if (branch) indicators.push({ icon: "⎇", text: branch });
-  if (active?.reasoningEffort) indicators.push({ icon: "◆", text: active.reasoningEffort });
-  if (tokensToday > 0) indicators.push({ icon: "≡", text: `${formatTokens(tokensToday)} today` });
+  const chips: { text: string; tone: "accent" | "success" | "warning" | "error" | "muted" | "dim" }[] = [
+    { text: endpoint, tone: "accent" },
+  ];
+  if (context) chips.push(context);
+  if (branch) chips.push({ text: `⎇ ${branch}`, tone: "muted" });
+  if (active?.reasoningEffort) chips.push({ text: `◆ ${active.reasoningEffort}`, tone: "muted" });
+  if (tokensToday > 0) chips.push({ text: `≡ ${formatTokens(tokensToday)} today`, tone: "dim" });
 
   // Onboarding. BYOK means there is nothing to talk to until a provider is
   // configured, so on launch — rather than presenting a composer that cannot
@@ -734,7 +738,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         </>
       )}
 
-      <StatusBar cwd={cwd} endpoint={endpoint} context={context} indicators={indicators} hint={footerHint} />
+      <StatusBar cwd={cwd} chips={chips} hint={footerHint} />
     </Box>
   );
 }

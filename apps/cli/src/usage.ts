@@ -92,3 +92,14 @@ export function formatTokens(tokens: number): string {
   if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(1)}k`;
   return `${(tokens / 1_000_000).toFixed(1)}M`;
 }
+
+/**
+ * A 10-cell context bar for a fraction used (0..1), e.g. `[████░░░░░░]`.
+ * A visual gauge for the status line, where a bare percentage hides how close
+ * to the edge the window is.
+ */
+export function contextBar(fraction: number): string {
+  const cells = 10;
+  const filled = Math.max(0, Math.min(cells, Math.round(fraction * cells)));
+  return `[${"█".repeat(filled)}${"░".repeat(cells - filled)}]`;
+}
