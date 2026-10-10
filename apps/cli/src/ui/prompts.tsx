@@ -29,6 +29,12 @@ export function TextInput({ value, onChange, onSubmit, isActive = true, placehol
         onChange(value.slice(0, -1));
         return;
       }
+      if (key.ctrl && input === "u") {
+        // Clear the line, the way every shell composer does. Handled before the
+        // ctrl/meta guard below, which would otherwise drop it.
+        onChange("");
+        return;
+      }
       if (key.ctrl || key.meta) return;
       if (!input) return;
 
