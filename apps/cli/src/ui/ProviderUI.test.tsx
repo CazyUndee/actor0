@@ -80,6 +80,16 @@ test("an empty provider menu says there is nothing yet, and how to fix it", () =
   assert.match(frame, /add new provider/, "the add row is still there");
 });
 
+test("first-run onboarding frames the kind picker as a welcome", () => {
+  const welcome = captureFrame(<AddProvider onboarding onDone={() => {}} onCancel={() => {}} />);
+  assert.match(welcome, /welcome to actor0/, "a welcome, not a bare menu");
+  assert.match(welcome, /bring your own provider/, "and what to do");
+  assert.doesNotMatch(welcome, /add a provider/, "the management framing is not shown on first run");
+
+  const manage = captureFrame(<AddProvider onDone={() => {}} onCancel={() => {}} />);
+  assert.match(manage, /add a provider/, "/provider → add keeps the management framing");
+});
+
 test("the add-provider flow opens on the kind picker", () => {
   const frame = captureFrame(<AddProvider onDone={() => {}} onCancel={() => {}} />);
   assert.match(frame, /add a provider/, "the heading");

@@ -74,6 +74,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // composer while open — one region at a time, so no two `useInput`s fight
   // over the same key. A menu never opens mid-turn (see `runCommand`).
   const [mode, setMode] = useState<"chat" | "menu" | "add">("chat");
+  // True only during the first-run welcome, so the add flow is framed as a
+  // welcome and its completion is confirmed as "you're ready".
+  const [onboarding, setOnboarding] = useState(false);
 
   // Session state lives in refs: it changes on every turn but must never
   // trigger a re-render, because nothing on screen depends on it.
@@ -128,7 +131,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (openedOnboarding.current) return;
     if (!provider && /No provider is configured/.test(resolved.error ?? "")) {
       openedOnboarding.current = true;
-      setMode("menu");
+      // Open the add flow as a welcome, not the empty management menu — the
+      // first thing a new user should see is how to bring their own provider.
+      setOnboarding(true);
+      setMode("add");
     }
   }, [provider, resolved.error]);
 
@@ -237,7 +243,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       // reported here, in front of the user, instead of failing the first
       // request with a transport error about a URL they cannot see.
       if (!provider) {
-        notice("error", `the endpoint is not configured — ${resolved.error}`);
+        // No provider yet: walk into setup rather than dead-ending on an error.
+        setOnboarding(true);
+        setMode("add");
         return;
       }
       const controller = new AbortController();
@@ -517,6 +525,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         />
       ) : mode === "add" ? (
         <AddProvider
+          onboarding={onboarding}
           onDone={(provider, models) => {
             // Register the one provider, then remember the chosen models the way
             // `/model` does — the active one first, capped, de-duplicated.
@@ -527,9 +536,20 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
             setConfig(next);
             saveConfig(next);
             setMode("chat");
-            notice("info", `added ${next.activeProvider}${remembered.length ? ` · ${remembered.length} model${remembered.length === 1 ? "" : "s"}` : ""}`);
+            notice(
+              "info",
+              onboarding
+                ? `ready — ${next.activeProvider} is set up. Ask anything, or /provider to manage providers.`
+                : `added ${next.activeProvider}${remembered.length ? ` · ${remembered.length} model${remembered.length === 1 ? "" : "s"}` : ""}`,
+            );
+            setOnboarding(false);
           }}
-          onCancel={() => setMode("menu")}
+          onCancel={() => {
+            setOnboarding(false);
+            // From onboarding there is nothing to manage yet, so cancel returns
+            // to the composer; from /provider it returns to the provider menu.
+            setMode(onboarding ? "chat" : "menu");
+          }}
         />
       ) : (
         <Composer

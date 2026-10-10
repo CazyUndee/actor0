@@ -35,6 +35,8 @@ export type AddProviderProps = {
   /** Register one provider and remember these models (first is active). */
   onDone: (provider: NamedProvider, models: string[]) => void;
   onCancel: () => void;
+  /** First run: frame the kind picker as a welcome rather than "add a provider". */
+  onboarding?: boolean;
 };
 
 type Base = Omit<NamedProvider, "name" | "model">;
@@ -46,10 +48,13 @@ type Phase =
   | { kind: "models"; provider: ProviderKind; base: Base; models: string[]; cursor: number; chosen: Set<string> }
   | { kind: "error"; provider: ProviderKind; message: string };
 
-export function AddProvider({ onDone, onCancel }: AddProviderProps) {
+export function AddProvider({ onDone, onCancel, onboarding = false }: AddProviderProps) {
   const [phase, setPhase] = useState<Phase>({ kind: "kind" });
   const [kindCursor, setKindCursor] = useState(0);
   const [key, setKey] = useState("");
+  // A model typed by hand when the provider listed none — setup must not
+  // dead-end on an empty model list.
+  const [manual, setManual] = useState("");
   // Aborts an in-flight OAuth sign-in, which closes its loopback server — a
   // cancelled ChatGPT sign-in must not leave port 1455 occupied for the next one.
   const signInAbort = useRef<AbortController | null>(null);
@@ -126,6 +131,8 @@ export function AddProvider({ onDone, onCancel }: AddProviderProps) {
       return;
     }
     if (phase.kind === "models") {
+      // An empty list hands the keyboard to the manual-entry input below.
+      if (phase.models.length === 0) return;
       if (keypress.upArrow || input === "k") return setPhase({ ...phase, cursor: wrap(phase.cursor, phase.models.length, -1) });
       if (keypress.downArrow || input === "j") return setPhase({ ...phase, cursor: wrap(phase.cursor, phase.models.length, 1) });
       if (input === " ") {
@@ -148,8 +155,15 @@ export function AddProvider({ onDone, onCancel }: AddProviderProps) {
   if (phase.kind === "kind") {
     return (
       <Box flexDirection="column" marginTop={1}>
-        <Text color={color.muted} bold>add a provider</Text>
-        <Box flexDirection="column" marginLeft={2}>
+        {onboarding ? (
+          <>
+            <Text color={color.accent} bold>welcome to actor0</Text>
+            <Text color={color.dim}>{"bring your own provider — pick one to start"}</Text>
+          </>
+        ) : (
+          <Text color={color.muted} bold>add a provider</Text>
+        )}
+        <Box flexDirection="column" marginLeft={2} marginTop={onboarding ? 1 : 0}>
           {OFFERED.map((kind, index) => (
             <Text key={kind.id} color={index === kindCursor ? color.accent : color.text}>
               {index === kindCursor ? "❯ " : "  "}
@@ -209,19 +223,37 @@ export function AddProvider({ onDone, onCancel }: AddProviderProps) {
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color={color.muted} bold>{`${phase.provider.label} — ${phase.models.length} models`}</Text>
-      <Box flexDirection="column" marginLeft={2}>
-        {phase.models.map((model, index) => (
-          <Text key={model} color={index === phase.cursor ? color.accent : color.text}>
-            {index === phase.cursor ? "❯ " : "  "}
-            {phase.chosen.has(model) ? "◉ " : "○ "}
-            {model}
-          </Text>
-        ))}
-      </Box>
-      <Box marginTop={1}>
-        <Text color={color.dim}>{"space toggles · a all · n none · enter uses highlighted · esc cancel"}</Text>
-      </Box>
+      {phase.models.length === 0 ? (
+        <>
+          <Text color={color.muted} bold>{`${phase.provider.label} — no models listed`}</Text>
+          <Text color={color.dim}>{"type a model name, or enter to add it and set one later with /model"}</Text>
+          <Box marginLeft={2} marginTop={1}>
+            <Text color={color.accent}>{"❯ "}</Text>
+            <TextInput
+              value={manual}
+              onChange={setManual}
+              onSubmit={(raw) => register(raw.trim() ? [raw.trim()] : [])}
+              placeholder="model name"
+            />
+          </Box>
+        </>
+      ) : (
+        <>
+          <Text color={color.muted} bold>{`${phase.provider.label} — ${phase.models.length} models`}</Text>
+          <Box flexDirection="column" marginLeft={2}>
+            {phase.models.map((model, index) => (
+              <Text key={model} color={index === phase.cursor ? color.accent : color.text}>
+                {index === phase.cursor ? "❯ " : "  "}
+                {phase.chosen.has(model) ? "◉ " : "○ "}
+                {model}
+              </Text>
+            ))}
+          </Box>
+          <Box marginTop={1}>
+            <Text color={color.dim}>{"space toggles · a all · n none · enter uses highlighted · esc cancel"}</Text>
+          </Box>
+        </>
+      )}
     </Box>
   );
 }
