@@ -787,7 +787,7 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
       );
     }
 
-    case "help":
+    case "help": {
       // A bordered panel, not flat text — the command list is a reference the
       // user returns to, and a box reads as a distinct surface rather than
       // more transcript chatter. Name and alias columns align independently so
@@ -817,6 +817,7 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
           </Box>
         </Box>
       );
+    }
 
     default:
       return null;
