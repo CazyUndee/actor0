@@ -162,9 +162,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       ? { text: `${contextBar(contextTokens / window)} ${Math.min(100, Math.round((contextTokens / window) * 100))}%`, tone: (contextTokens / window >= 0.85 ? "error" : contextTokens / window >= 0.6 ? "warning" : "success") as "error" | "warning" | "success" }
       : { text: `${formatTokens(contextTokens)} tokens`, tone: "muted" as const }
     : undefined;
-  // Read once per render; the branch read is a single stat.
-  const branch = gitBranch(cwd);
-  const tokensToday = usageSince(readUsage(), startOfDay()).tokens;
+  // The git branch and today's token total change only with the directory
+  // or a completed turn (contextTokens advances once per turn), so memoise
+  // them — reading the usage log and .git/HEAD on every keystroke and spinner
+  // frame is pure waste.
+  const { branch, tokensToday } = useMemo(
+    () => ({ branch: gitBranch(cwd), tokensToday: usageSince(readUsage(), startOfDay()).tokens }),
+    [cwd, contextTokens],
+  );
   const chips: { text: string; tone: "accent" | "success" | "warning" | "error" | "muted" | "dim" }[] = [
     { text: endpoint, tone: "accent" },
   ];
