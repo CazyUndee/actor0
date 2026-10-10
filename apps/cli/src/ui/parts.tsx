@@ -644,16 +644,23 @@ export function DiffBlock({ lines }: { lines: DiffLine[] }) {
 export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: number }) {
   switch (entry.kind) {
     case "user":
-      // Grey, not accent. What the user typed is already the loudest thing in
-      // the transcript and the answer is the thing being read; tinting the
-      // prompt the same colour as the agent's activity made their own words
-      // look like a tool call.
+      // A left rule marks the user's turn against the agent's — the one thing
+      // in the transcript that is theirs, set apart from the tool chatter and
+      // streamed answers around it.
       return (
-        <Box marginTop={1}>
-          <Text color={color.muted} bold>
+        <Box
+          marginTop={1}
+          borderStyle="round"
+          borderColor={color.dim}
+          borderTop={false}
+          borderRight={false}
+          borderBottom={false}
+          paddingLeft={1}
+        >
+          <Text color={color.accent} bold>
             ❯{" "}
           </Text>
-          <Text color={color.muted}>{entry.text}</Text>
+          <Text color={color.text}>{entry.text}</Text>
         </Box>
       );
 
