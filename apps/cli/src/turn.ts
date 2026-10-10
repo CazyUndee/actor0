@@ -222,7 +222,7 @@ export function promptClearsProviderFloor(prompt: string): boolean {
  * transport that is configured but not yet wired (ChatGPT Responses) fails here
  * by name rather than silently speaking the wrong protocol.
  */
-export function createModel(provider: ResolvedProvider): ModelClient {
+export function createModel(provider: ResolvedProvider, fetchImpl?: typeof fetch): ModelClient {
   const transport = provider.transport ?? "openai";
   const auth = provider.auth ?? "api-key";
 
@@ -233,6 +233,7 @@ export function createModel(provider: ResolvedProvider): ModelClient {
       ...(provider.path ? { path: provider.path } : {}),
       model: provider.model,
       ...(provider.headers ? { headers: provider.headers } : {}),
+      ...(fetchImpl ? { fetchImpl } : {}),
       auth: oauth
         ? { kind: "oauth", accessToken: oauth.accessToken }
         : { kind: "api-key", apiKey: provider.apiKey ?? "" },
@@ -251,6 +252,7 @@ export function createModel(provider: ResolvedProvider): ModelClient {
       accessToken: oauth.accessToken,
       ...(oauth.accountId ? { accountId: oauth.accountId } : {}),
       ...(provider.headers ? { headers: provider.headers } : {}),
+      ...(fetchImpl ? { fetchImpl } : {}),
     });
   }
 
@@ -266,7 +268,41 @@ export function createModel(provider: ResolvedProvider): ModelClient {
     // endpoint with no key needs.
     ...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
     ...(provider.headers ? { headers: provider.headers } : {}),
+    ...(fetchImpl ? { fetchImpl } : {}),
   });
+}
+
+/**
+ * Confirm a provider actually answers, end to end — credential *and* model.
+ *
+ * The model-list fetch during onboarding proves the credential, but not that
+ * the chosen model responds (a hand-typed or stale name would still look set
+ * up). This drives one trivial turn through the real client, so "ready" means
+ * reachable, not merely configured. Best-effort: a transport error is returned
+ * with its retriability, so the caller can tell an auth/config failure (surface
+ * it) from a network blip (don't block setup on it).
+ */
+export async function verifyProvider(
+  provider: ResolvedProvider,
+  fetchImpl?: typeof fetch,
+): Promise<{ ok: boolean; message?: string; retriable?: boolean }> {
+  try {
+    const client = createModel(provider, fetchImpl);
+    // Driving the stream to completion is the check: it throws on a bad
+    // credential, a missing model, or an unreachable host. The events themselves
+    // are not needed, so the iterator is drained rather than bound to a name.
+    const iterator = client.stream([{ role: "user", content: "hi" }], [], new AbortController().signal)[Symbol.asyncIterator]();
+    let next = await iterator.next();
+    while (!next.done) next = await iterator.next();
+    return { ok: true };
+  } catch (error) {
+    const transport = error as { message?: string; retriable?: boolean };
+    return {
+      ok: false,
+      message: transport?.message ?? String(error),
+      retriable: transport?.retriable === true,
+    };
+  }
 }
 
 /**

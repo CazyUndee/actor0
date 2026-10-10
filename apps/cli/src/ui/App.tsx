@@ -11,6 +11,7 @@ import {
   setActiveProvider,
   withModel,
   type CliConfig,
+  type ResolvedProvider,
 } from "../config.js";
 import {
   applyEvent,
@@ -24,6 +25,7 @@ import {
 import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "../turn.js";
 import { newSessionId, saveSession } from "../session.js";
 import { refreshProvider } from "../sign-in.js";
+import { verifyProvider } from "../turn.js";
 import { parseSlash, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { createToolHost } from "../tools.js";
@@ -536,13 +538,27 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
             setConfig(next);
             saveConfig(next);
             setMode("chat");
-            notice(
-              "info",
-              onboarding
-                ? `ready — ${next.activeProvider} is set up. Ask anything, or /provider to manage providers.`
-                : `added ${next.activeProvider}${remembered.length ? ` · ${remembered.length} model${remembered.length === 1 ? "" : "s"}` : ""}`,
-            );
             setOnboarding(false);
+            const name = next.activeProvider ?? "provider";
+            if (!onboarding) {
+              notice("info", `added ${name}${remembered.length ? ` · ${remembered.length} model${remembered.length === 1 ? "" : "s"}` : ""}`);
+              return;
+            }
+            // First run: the model-list fetch already proved the credential, but
+            // confirm the chosen model actually answers before calling it ready.
+            let resolved: ResolvedProvider;
+            try {
+              resolved = resolveProvider(next);
+            } catch {
+              notice("info", `added ${name} — set a model with /model <name> to start.`);
+              return;
+            }
+            notice("info", `verifying ${name}…`);
+            void verifyProvider(resolved).then((result) => {
+              if (result.ok) notice("info", `ready — ${name} works. Ask anything, or /provider to manage providers.`);
+              else if (result.retriable) notice("warn", `added ${name}, but couldn't verify it (network) — it may still work.`);
+              else notice("warn", `added ${name}, but it didn't answer: ${result.message}`);
+            });
           }}
           onCancel={() => {
             setOnboarding(false);

@@ -14,6 +14,7 @@ import {
   describeRecovery,
   failedTurnMessages,
   defaultSystemPrompt,
+  verifyProvider,
   INTERRUPT_MARKER,
   FAILED_MARKER,
   PROVIDER_PROMPT_FLOOR_CHARS,
@@ -23,6 +24,7 @@ import { AbortedTurnError, FailedTurnError, type ChatMessage } from "@actor0/har
 import { createToolHost, resolveShell } from "./tools.js";
 import { applyEvent, initialConversation } from "./conversation.js";
 import { CHARS_PER_TOKEN } from "./history.js";
+import type { ResolvedProvider } from "./config.js";
 
 /**
  * End-to-end through the real harness.
@@ -998,4 +1000,36 @@ test("failedTurnMessages rejects anything that is not a failed turn carrying a t
     failedTurnMessages(new AbortedTurnError([{ role: "user", content: "go" }], "")),
     undefined,
   );
+});
+
+// --- Provider verification (onboarding "ready") --------------------------------
+
+const openaiProvider = (apiKey: string): ResolvedProvider => ({
+  baseUrl: "https://api.example.com/v1",
+  model: "test-model",
+  transport: "openai",
+  auth: "api-key",
+  apiKey,
+});
+
+test("verifyProvider reports ok when the endpoint answers a trivial turn", async () => {
+  const sse = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n';
+  const fetchImpl = (async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  assert.deepEqual(await verifyProvider(openaiProvider("k"), fetchImpl), { ok: true });
+});
+
+test("verifyProvider surfaces an auth failure as not-ok and not retriable", async () => {
+  // A 401 is permanent, so onboarding should surface it rather than blame the network.
+  const fetchImpl = (async () => new Response(JSON.stringify({ error: { message: "invalid api key" } }), { status: 401, headers: { "content-type": "application/json" } })) as typeof fetch;
+  const result = await verifyProvider(openaiProvider("bad"), fetchImpl);
+  assert.equal(result.ok, false);
+  assert.equal(result.retriable, false);
+  assert.match(result.message ?? "", /invalid api key/);
+});
+
+test("verifyProvider marks a 5xx as retriable, so a blip does not block setup", async () => {
+  const fetchImpl = (async () => new Response("boom", { status: 503 })) as typeof fetch;
+  const result = await verifyProvider(openaiProvider("k"), fetchImpl);
+  assert.equal(result.ok, false);
+  assert.equal(result.retriable, true);
 });
