@@ -118,9 +118,14 @@ export function disableMouse(): void {
 /** Shared between `installMouse` (wired at boot) and the App (which owns send). */
 
 /**
- * Wrap the real streams for Ink and start tracking. Call once, at boot; pass the
- * returned streams to `render`. `stdout` feeds the screen model; `stdin` strips
- * mouse reports so Ink sees only keys.
+ * Wrap the real streams for Ink and start tracking. Call once, at boot; pass
+ * the returned `stdout` to `render` and leave `stdin` as the returned (same)
+ * stream. `stdout` feeds the screen model; `stdin.read` is wrapped in place so
+ * mouse bytes are stripped before Ink reads them.
+ *
+ * Ink keeps the *native* `process.stdin` — its isTTY, raw-mode and quit handling
+ * are untouched, because those are exactly what breaks if stdin is replaced
+ * with a look-alike. Only the payload `read()` returns is filtered.
  */
 export function installMouse(stdin: NodeJS.ReadStream, stdout: NodeJS.WriteStream): MouseStreams {
   realStdout = stdout;
@@ -154,57 +159,31 @@ export function installMouse(stdin: NodeJS.ReadStream, stdout: NodeJS.WriteStrea
     off(...a: Parameters<NodeJS.WriteStream["on"]>) { return stdout.off(...a); },
   };
 
-  const keyboard: string[] = [];
-  const readable = new Set<() => void>();
+  // Strip mouse reports out of what Ink reads, in place. Ink reads stdin with
+  // the paused/'readable' + `read()` protocol, so wrapping `read()` is enough
+  // and keeps everything else native. Adding a 'data' listener instead would put
+  // the stream in flowing mode and stop 'readable' from ever firing — the
+  // invisible way a real terminal ends up with no keyboard at all.
+  const readStream = stdin as unknown as { read: (...args: unknown[]) => unknown };
+  const originalRead = readStream.read.bind(readStream);
   let residual = "";
-  const onData = (chunk: Buffer | string): void => {
-    residual += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  readStream.read = (...args: unknown[]): unknown => {
+    const chunk = originalRead(...args);
+    if (chunk === null || chunk === undefined) return chunk;
+    residual += typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf8");
     const { inkText, clicks, scroll, hold } = filterMouseChunk(residual);
     residual = hold;
     for (const click of clicks) mouseLink.onClick?.(click);
     if (scroll !== 0) mouseLink.onScroll?.(scroll);
-    // Forward to Ink only when it is actually reading — i.e. it registered a
-    // 'readable' listener, which it does only on a TTY in raw mode. On a pipe
-    // Ink ignores input, and buffering it would grow a slice nobody drains.
-    if (inkText && readable.size > 0) {
-      keyboard.push(inkText);
-      for (const cb of readable) cb();
-    }
+    return inkText;
   };
-
-  // Always attached: the filter is a no-op without mouse tracking (no SGR
-  // reports arrive), so draining stdin never costs keystrokes. Only the mouse
-  // *escape writes* are TTY-gated above.
-  stdin.setEncoding("utf8");
-  stdin.on("data", onData);
-
-  const wrappedStdin = {
-    get isTTY() { return stdin.isTTY; },
-    setRawMode(mode: boolean) { return stdin.setRawMode?.(mode); },
-    setEncoding() { return undefined as void; }, // the real stream is already utf8 for onData
-    ref() { return stdin.ref?.(); },
-    unref() { return stdin.unref?.(); },
-    pause() { return stdin.pause?.(); },
-    resume() { return stdin.resume?.(); },
-    read() { return keyboard.length > 0 ? (keyboard.shift() as string) : null; },
-    addListener(event: string, cb: (...a: unknown[]) => void) {
-      if (event === "readable") readable.add(cb as () => void);
-      else (stdin as unknown as NodeJS.EventEmitter).on(event, cb);
-      return this;
-    },
-    on(event: string, cb: (...a: unknown[]) => void) { return this.addListener(event, cb); },
-    removeListener(event: string, cb: (...a: unknown[]) => void) {
-      if (event === "readable") readable.delete(cb as () => void);
-      else (stdin as unknown as NodeJS.EventEmitter).removeListener(event, cb);
-      return this;
-    },
-  };
+  if (stdin.isTTY) stdin.setEncoding("utf8");
 
   return {
-    stdin: wrappedStdin as unknown as NodeJS.ReadStream,
+    stdin,
     stdout: wrappedStdout as unknown as NodeJS.WriteStream,
     dispose() {
-      (stdin as unknown as NodeJS.EventEmitter).off("data", onData);
+      readStream.read = originalRead;
       stdout.off("resize", refreshColumns);
       if (tracking) { try { stdout.write(DISABLE); } catch { /* already gone */ } }
     },

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +13,18 @@ import { addProvider, withModel } from "../config.js";
 
 const ESC = "\x1b";
 const tick = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
+
+/**
+ * A real readable stream, because Ink reads stdin through the paused
+ * 'readable' + `read()` protocol and the mouse filter wraps `read()` — a plain
+ * EventEmitter never emits 'readable' and would leave Ink with no input, which
+ * is not what a TTY does. The TTY-only members Ink checks are added on top.
+ */
+function makeStdin(): NodeJS.ReadStream {
+  const s = new PassThrough();
+  Object.assign(s, { isTTY: true, columns: 80, rows: 24, setRawMode() { return s; }, ref() { return s; }, unref() { return s; } });
+  return s as unknown as NodeJS.ReadStream;
+}
 
 /**
  * The whole pipeline, end to end: real streams wrapped by installMouse, the
@@ -31,13 +42,8 @@ test("a click on the send button submits; a click elsewhere and keyboard input t
   process.env.ACTOR0_CONFIG_DIR = dir;
 
   // Real stream stand-ins. isTTY true is mandatory: Ink throws without it, and
-  // installMouse only strips mouse bytes off a TTY stdin.
-  const realStdin = new EventEmitter();
-  Object.assign(realStdin, {
-    isTTY: true, setRawMode() { return realStdin; }, setEncoding() { return realStdin; },
-    ref() { return realStdin; }, unref() { return realStdin; }, read() { return null; },
-    pause() { return realStdin; }, resume() { return realStdin; },
-  });
+  // the filter only strips mouse bytes off a TTY stdin.
+  const realStdin = makeStdin();
   const realStdout = new PassThrough();
   Object.assign(realStdout, { isTTY: true, columns: 80, rows: 24 });
 
@@ -67,10 +73,10 @@ test("a click on the send button submits; a click elsewhere and keyboard input t
   try {
     await tick(400); // let the frame render so the screen model has the send row
 
-    // Type "hi" through the stdin proxy — the same path the mouse filter must
-    // not disturb. If the filter mangled keystrokes, the draft would be empty
-    // and the click below would submit nothing, failing the assertion.
-    realStdin.emit("data", "hi");
+    // Type "hi" through the stream — the same path the mouse filter must not
+    // disturb. If the filter mangled keystrokes, the draft would be empty and
+    // the click below would submit nothing, failing the assertion.
+    realStdin.write("hi");
     await tick(80);
 
     const screen = mouseLink.screen;
@@ -80,12 +86,12 @@ test("a click on the send button submits; a click elsewhere and keyboard input t
     const sendX = mouseLink.columns - 3;
 
     // A click far from the button must do nothing.
-    realStdin.emit("data", `${ESC}[<0;2;2m`);
+    realStdin.write(`${ESC}[<0;2;2m`);
     await tick(80);
     assert.equal(turnStarted, false, "a click away from the send button does not submit");
 
     // A click squarely on the send button submits.
-    realStdin.emit("data", `${ESC}[<0;${sendX};${sendY}m`);
+    realStdin.write(`${ESC}[<0;${sendX};${sendY}m`);
     await tick(120);
     assert.equal(turnStarted, true, "clicking the send button runs the turn");
   } finally {
@@ -108,12 +114,7 @@ test("wheel scroll moves the transcript window but never the pinned composer", a
   const dir = mkdtempSync(join(tmpdir(), "actor0-scroll-"));
   process.env.ACTOR0_CONFIG_DIR = dir;
 
-  const realStdin = new EventEmitter();
-  Object.assign(realStdin, {
-    isTTY: true, setRawMode() { return realStdin; }, setEncoding() { return realStdin; },
-    ref() { return realStdin; }, unref() { return realStdin; }, read() { return null; },
-    pause() { return realStdin; }, resume() { return realStdin; },
-  });
+  const realStdin = makeStdin();
   const realStdout = new PassThrough();
   Object.assign(realStdout, { isTTY: true, columns: 80, rows: 24 });
   const mouse = installMouse(
@@ -140,7 +141,7 @@ test("wheel scroll moves the transcript window but never the pinned composer", a
   const sendClick = async (): Promise<void> => {
     const y = screen.lastContentRow() - SEND_ROWS_ABOVE_FOOTER + 1;
     const x = mouseLink.columns - 3;
-    realStdin.emit("data", `${ESC}[<0;${x};${y}m`);
+    realStdin.write(`${ESC}[<0;${x};${y}m`);
   };
 
   try {
@@ -148,7 +149,7 @@ test("wheel scroll moves the transcript window but never the pinned composer", a
     // Build a transcript taller than the 24-row terminal, via the send button.
     for (let n = 1; n <= 6; n++) {
       answer = `answer ${n}: ${"word ".repeat(40)}`;
-      realStdin.emit("data", `q${n}`);
+      realStdin.write(`q${n}`);
       await tick(40);
       await sendClick();
       await tick(140);
@@ -158,7 +159,7 @@ test("wheel scroll moves the transcript window but never the pinned composer", a
     const footerBefore = screen.lastContentRow();
     const topBefore = screen.lines().filter((l) => l.trim()).slice(0, 2).join("\n");
 
-    for (let i = 0; i < 25; i++) { realStdin.emit("data", `${ESC}[<64;1;1M`); await tick(4); }
+    for (let i = 0; i < 25; i++) { realStdin.write(`${ESC}[<64;1;1M`); await tick(4); }
     await tick(150);
 
     const sendRowAfter = screen.lines().findIndex((l) => l.includes("enter to send"));
@@ -169,6 +170,52 @@ test("wheel scroll moves the transcript window but never the pinned composer", a
     assert.equal(sendRowAfter, sendRowBefore, "the composer's send row did not move under scroll");
     assert.equal(footerAfter, footerBefore, "the footer stayed on the terminal's last row");
     assert.notEqual(topAfter, topBefore, "the transcript window scrolled to show earlier content");
+  } finally {
+    instance.unmount();
+    mouse.dispose();
+    if (prev === undefined) delete process.env.ACTOR0_CONFIG_DIR;
+    else process.env.ACTOR0_CONFIG_DIR = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Quitting goes through the same native stdin the mouse filter now leaves in
+ * place. This is the regression that mattered: an earlier versions of the mouse
+ * layer replaced stdin with a look-alike to strip mouse bytes, and that broke
+ * raw mode and every keyboard path — typing and quitting both. Ctrl+C/Ctrl+D
+ * must still exit. Ctrl+C first cancels a running turn and exits only when
+ * there is nothing to cancel, so this quits from idle with Ctrl+D.
+ */
+test("Ctrl+D quits through the mouse-wrapped streams", async () => {
+  const prev = process.env.ACTOR0_CONFIG_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "actor0-quit-"));
+  process.env.ACTOR0_CONFIG_DIR = dir;
+
+  const realStdin = makeStdin();
+  const realStdout = new PassThrough();
+  Object.assign(realStdout, { isTTY: true, columns: 80, rows: 24 });
+  const mouse = installMouse(
+    realStdin as unknown as NodeJS.ReadStream,
+    realStdout as unknown as NodeJS.WriteStream,
+  );
+  const transport: ModelClient = { async *stream() {} };
+  const config = addProvider(withModel({ model: "m", models: ["m"] }, "m"), {
+    name: "claude", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "oauth",
+    model: "claude-opus-4-6", oauth: { accessToken: "t", plan: "max" },
+  });
+  const instance = render(createElement(App, { cwd: process.cwd(), config, transport }), {
+    stdin: mouse.stdin, stdout: mouse.stdout, exitOnCtrlC: false, patchConsole: false,
+  });
+
+  try {
+    await tick(350);
+    realStdin.write("\x04"); // Ctrl+D
+    const outcome = await Promise.race([
+      instance.waitUntilExit().then(() => "exited" as const),
+      tick(1000).then(() => "stuck" as const),
+    ]);
+    assert.equal(outcome, "exited", "Ctrl+D exits the app — quitting is not broken");
   } finally {
     instance.unmount();
     mouse.dispose();
