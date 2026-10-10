@@ -70,6 +70,18 @@ export function usageSince(entries: UsageEntry[], since: number): UsageBucket {
     .reduce<UsageBucket>((acc, entry) => ({ tokens: acc.tokens + entry.total, turns: acc.turns + 1 }), { tokens: 0, turns: 0 });
 }
 
+/** Tokens grouped by model, largest first, for entries at or after `since`. */
+export function usageByModel(entries: UsageEntry[], since = 0): { model: string; tokens: number }[] {
+  const totals = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.t < since) continue;
+    totals.set(entry.model, (totals.get(entry.model) ?? 0) + entry.total);
+  }
+  return [...totals.entries()]
+    .map(([model, tokens]) => ({ model, tokens }))
+    .sort((a, b) => b.tokens - a.tokens);
+}
+
 /** Midnight local time today. */
 export function startOfDay(now: Date = new Date()): number {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();

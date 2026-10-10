@@ -10,6 +10,7 @@ import {
   startOfDay,
   startOfMonth,
   startOfWeek,
+  usageByModel,
   usageSince,
 } from "./usage.js";
 
@@ -62,6 +63,18 @@ test("a corrupt line is skipped, not fatal", () => {
     appendFileSync(join(process.env.ACTOR0_DATA_DIR!, "usage.jsonl"), "{not json}\n", "utf8");
     recordUsage("m", { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 });
     assert.deepEqual(readUsage().map((e) => e.total), [2, 4], "the torn line drops, the good ones survive");
+  });
+});
+
+test("usage totals group by model, largest first", () => {
+  withDataDir(() => {
+    recordUsage("claude", { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 });
+    recordUsage("gpt", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 });
+    recordUsage("claude", { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 });
+    assert.deepEqual(usageByModel(readUsage()), [
+      { model: "claude", tokens: 40 },
+      { model: "gpt", tokens: 2 },
+    ]);
   });
 });
 

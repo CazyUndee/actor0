@@ -7,6 +7,7 @@ import {
   startOfDay,
   startOfMonth,
   startOfWeek,
+  usageByModel,
   usageSince,
 } from "../usage.js";
 
@@ -42,6 +43,7 @@ export function UsagePanel({ quota, onCancel }: UsagePanelProps) {
   const period = PERIODS[index]!;
   const bucket = usageSince(entries, period.since(now));
   const allTime = usageSince(entries, 0);
+  const byModel = usageByModel(entries, period.since(now));
 
   useInput((input, key) => {
     if (key.tab || key.rightArrow) return setIndex((n) => (n + 1) % PERIODS.length);
@@ -60,6 +62,15 @@ export function UsagePanel({ quota, onCancel }: UsagePanelProps) {
           <Text color={color.dim}>{`  across ${bucket.turns} turn${bucket.turns === 1 ? "" : "s"}`}</Text>
         </Text>
         <Text color={color.dim}>{`all time: ${formatTokens(allTime.tokens)} tokens across ${allTime.turns} turns`}</Text>
+        {byModel.length > 0 ? (
+          <Box flexDirection="column" marginTop={1}>
+            {byModel.slice(0, 5).map((row) => (
+              <Text key={row.model} color={color.muted}>
+                {`  ${formatTokens(row.tokens).padStart(7)}  ${row.model}`}
+              </Text>
+            ))}
+          </Box>
+        ) : null}
         <Text color={quota ? color.text : color.dim}>
           {quota ? `quota: ${quota.remaining} ${quota.label}` : "quota: not reported by this provider"}
         </Text>
