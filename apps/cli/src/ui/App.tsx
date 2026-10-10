@@ -36,7 +36,7 @@ import { parseSlash, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { createToolHost } from "../tools.js";
 import { Banner, LiveView, StatusBar, Transcript, bannerActivity, useTerminalSize } from "./parts.js";
-import { Composer } from "./prompts.js";
+import { Composer, composerHeight } from "./prompts.js";
 import { AddProvider } from "./AddProvider.js";
 import { UsagePanel } from "./UsagePanel.js";
 import { ModelPicker } from "./ModelPicker.js";
@@ -614,7 +614,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           live={conversation.live}
           frame={frame}
           elapsed={elapsed}
-          rows={Math.max(1, rows - CHROME_ROWS)}
+          rows={Math.max(1, rows - CHROME_ROWS - Math.max(0, composerHeight(draft) - 5))}
           columns={columns}
         />
 

@@ -38,16 +38,11 @@ export function TextInput({ value, onChange, onSubmit, isActive = true, placehol
       if (key.ctrl || key.meta) return;
       if (!input) return;
 
-      // A pasted chunk arrives as a single `input` string with no key events,
-      // so a pasted newline would otherwise be inserted as a literal control
-      // character. Take the first line and submit it, which is what pasting a
-      // finished sentence into a prompt should do.
-      const newline = input.search(/[\r\n]/);
-      if (newline !== -1) {
-        onChange(value + input.slice(0, newline));
-        onSubmit(value + input.slice(0, newline));
-        return;
-      }
+      // A pasted chunk arrives as a single `input` string. Typed Enter already
+      // came through as `key.return` above and submitted, so a newline *here* is
+      // a paste, not a submit: insert the whole thing verbatim. The old code cut
+      // at the first newline and submitted, which silently threw away everything
+      // pasted after line one — a lost stack trace or prompt.
       onChange(value + input);
     },
     { isActive },
@@ -73,6 +68,19 @@ export function TextInput({ value, onChange, onSubmit, isActive = true, placehol
       {isActive && !empty ? <Text color={color.accent}>▏</Text> : null}
     </Text>
   );
+}
+
+/**
+ * The composer box's height for a given draft, in rows.
+ *
+ * A floor of five keeps the empty composer feeling like a composer rather than
+ * a bare input; it grows with pasted newlines so multi-line input is not
+ * clipped, capped so a runaway paste cannot push the frame over the terminal
+ * (the live region gives up the same rows — see App — so total height is fixed).
+ */
+export function composerHeight(value: string): number {
+  const lines = Math.min(6, Math.max(1, value.split("\n").length));
+  return Math.max(5, lines + 3);
 }
 
 /** The main composer: a 3-line box, input top-left, send button bottom-right. */
@@ -135,8 +143,9 @@ export function Composer({
       borderColor={borderColor}
       flexDirection="column"
       // Three content rows between the borders, so a couple of wrapped lines
-      // have room and the send button can sit clear of the input.
-      height={5}
+      // have room and the send button can sit clear of the input. Grows with a
+      // multi-line paste, capped — see `composerHeight`.
+      height={composerHeight(value)}
       paddingX={1}
     >
       <Box flexGrow={1}>
