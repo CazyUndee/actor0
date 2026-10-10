@@ -28,7 +28,8 @@ import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncati
 import { newSessionId, saveSession } from "../session.js";
 import { refreshProvider } from "../sign-in.js";
 import { verifyProvider } from "../turn.js";
-import { recordUsage, formatTokens } from "../usage.js";
+import { recordUsage, formatTokens, readUsage, startOfDay, usageSince } from "../usage.js";
+import { gitBranch } from "../git.js";
 import { withContextWindow } from "../config.js";
 import { contextWindowTokens } from "@actor0/harness";
 import { parseSlash, type SlashCommand } from "../slash.js";
@@ -158,6 +159,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       ? `Context ${Math.min(100, Math.round((contextTokens / window) * 100))}% used`
       : `${formatTokens(contextTokens)} tokens`
     : undefined;
+  // Status chips: git branch, reasoning effort, and tokens used today (local
+  // log — exact, no round trip). Read once per render; the branch read is a
+  // single stat.
+  const branch = gitBranch(cwd);
+  const tokensToday = usageSince(readUsage(), startOfDay()).tokens;
+  const indicators: { icon: string; text: string }[] = [];
+  if (branch) indicators.push({ icon: "⎇", text: branch });
+  if (active?.reasoningEffort) indicators.push({ icon: "◆", text: active.reasoningEffort });
+  if (tokensToday > 0) indicators.push({ icon: "≡", text: `${formatTokens(tokensToday)} today` });
 
   // Onboarding. BYOK means there is nothing to talk to until a provider is
   // configured, so on launch — rather than presenting a composer that cannot
@@ -724,7 +734,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         </>
       )}
 
-      <StatusBar cwd={cwd} endpoint={endpoint} context={context} hint={footerHint} />
+      <StatusBar cwd={cwd} endpoint={endpoint} context={context} indicators={indicators} hint={footerHint} />
     </Box>
   );
 }

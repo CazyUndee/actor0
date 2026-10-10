@@ -1,5 +1,5 @@
 import type { ChatMessage } from "@actor0/harness";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { compactHistory, compactHistoryPerMessage, repairHistory, SESSION_KEEP_RECENT } from "./history.js";
 import { sessionsDir } from "./paths.js";
@@ -17,7 +17,10 @@ import { sessionsDir } from "./paths.js";
  * `history.ts` for why that is better than dropping messages.
  */
 
+export const SESSION_VERSION = 1;
+
 export type StoredSession = {
+  version?: number;
   id: string;
   createdAt: string;
   updatedAt: string;
@@ -77,6 +80,7 @@ export function saveSession(session: StoredSession): void {
   });
   const payload: StoredSession = {
     ...session,
+    version: SESSION_VERSION,
     messages: compactHistory(messages, { keepRecent: SESSION_KEEP_RECENT }),
   };
   const target = sessionFile(session.id);
@@ -91,7 +95,7 @@ export function saveSession(session: StoredSession): void {
   // thing a user cannot reconstruct.
   const staging = `${target}.${process.pid}.tmp`;
   try {
-    writeFileSync(staging, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    const handle = openSync(staging, "w"); try { writeFileSync(handle, `${JSON.stringify(payload, null, 2)}\n`, "utf8"); fsyncSync(handle); } finally { closeSync(handle); }
     renameSync(staging, target);
   } catch (error) {
     // Never leave a staging file behind for `listSessions` to trip over.
@@ -132,6 +136,7 @@ export function loadSession(id: string): StoredSession | undefined {
   // save symmetric: both ends of the file's life run the validity pass.
   const messages = repairHistory(parsed.messages.filter(isChatMessage));
   return {
+    version: typeof parsed.version === "number" ? parsed.version : 0,
     id: parsed.id,
     createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : "",
     updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",

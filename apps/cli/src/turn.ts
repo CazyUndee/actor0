@@ -653,6 +653,8 @@ export function describeStop(reason: string | undefined): string {
   switch (reason) {
     case "round_limit":
       return "stopped: this turn reached its tool budget — ask to continue if you want more";
+    case "deadline":
+      return "stopped: this turn reached its time budget — ask to continue if you want more";
     case "tool_errors":
       return "stopped: tool calls kept failing — check the paths and try again";
     default:

@@ -916,25 +916,27 @@ export function StatusBar({
   hint,
   endpoint,
   context,
+  indicators,
 }: {
   cwd: string;
   hint: string;
   endpoint?: string;
-  /** "Context 42% used" or "42.3k tokens" — sits between the endpoint and the path. */
+  /** "Context 42% used" or "42.3k tokens" — sits in the indicator row. */
   context?: string;
+  /** Extra status chips: git branch, reasoning effort, tokens-today. */
+  indicators?: { icon: string; text: string }[];
 }) {
-  // Two dim lines, not four. Claude Code, aider and gh all keep the footer to
-  // context and the next keystroke; the model is an implementation detail the
-  // user set once and never reads again, and spending a whole line on it pushed
-  // the path and the hint off an 80-column terminal.
-  const line = [endpoint, context, shortenPath(cwd, 52)].filter(Boolean).join(" · ");
+  // Row one: the status indicators — what the agent is working against. Kept to
+  // a single dim line that truncates, so it never wraps and pushes the composer
+  // off a small terminal. Row two: the live hint, then the path.
+  const chips = [endpoint, context, ...(indicators ?? []).map((i) => `${i.icon} ${i.text}`)].filter(Boolean);
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text color={color.dim} wrap="truncate-end">
-        {line}
+        {chips.join(" · ")}
       </Text>
       <Text color={color.dim} wrap="truncate-end">
-        {hint}
+        {hint} · {shortenPath(cwd, 40)}
       </Text>
     </Box>
   );
