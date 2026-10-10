@@ -939,6 +939,7 @@ export function StatusBar({
     <Box flexDirection="column" marginTop={1}>
       <Box flexDirection="row">
         {chips.map((chip, index) => (
+          // eslint-disable-next-line react/no-array-index-key -- chips are a fixed positional row; text can repeat
           <Text key={index} color={toneColor(chip.tone)} wrap="truncate-end">
             {index === 0 ? chip.text : ` · ${chip.text}`}
           </Text>
