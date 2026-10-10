@@ -53,6 +53,8 @@ export type ProviderConfig = {
   apiKey?: string;
   /** OAuth tokens, when `auth` is "oauth". */
   oauth?: OAuthTokens;
+  /** Reasoning effort for models that support it — low / medium / high. */
+  reasoningEffort?: "low" | "medium" | "high";
   /** Extra request headers, for gateways that need them. Values take `${NAME}`. */
   headers?: Record<string, string>;
 };
@@ -115,6 +117,8 @@ export type ResolvedProvider = {
   apiKey?: string;
   /** OAuth tokens, when `auth` is "oauth". */
   oauth?: OAuthTokens;
+  /** Reasoning effort, when the transport and model support it. */
+  reasoningEffort?: "low" | "medium" | "high";
   headers?: Record<string, string>;
   /** Where the credential came from, for display. Never the credential. */
   apiKeySource?: string;
@@ -198,6 +202,7 @@ function parseProviders(value: unknown): NamedProvider[] {
       ...(isAuth(entry.auth) ? { auth: entry.auth } : {}),
       ...(nonEmptyString(entry.apiKey) ? { apiKey: nonEmptyString(entry.apiKey)! } : {}),
       ...(oauth ? { oauth } : {}),
+      ...(isEffort(entry.reasoningEffort) ? { reasoningEffort: entry.reasoningEffort } : {}),
       ...(stringMap(entry.headers) ? { headers: stringMap(entry.headers)! } : {}),
     });
   }
@@ -206,11 +211,15 @@ function parseProviders(value: unknown): NamedProvider[] {
 
 const TRANSPORTS = new Set(["openai", "anthropic", "chatgpt"]);
 const AUTHS = new Set(["api-key", "oauth"]);
+const EFFORTS = new Set(["low", "medium", "high"]);
 function isTransport(value: unknown): value is ProviderTransport {
   return typeof value === "string" && TRANSPORTS.has(value);
 }
 function isAuth(value: unknown): value is ProviderAuth {
   return typeof value === "string" && AUTHS.has(value);
+}
+function isEffort(value: unknown): value is "low" | "medium" | "high" {
+  return typeof value === "string" && EFFORTS.has(value);
 }
 
 /** Read stored OAuth tokens; an entry with no access token is dropped. */
@@ -425,6 +434,7 @@ export function resolveProvider(config: CliConfig): ResolvedProvider {
     auth,
     ...(apiKey ? { apiKey, apiKeySource: envKey ? "ACTOR0_API_KEY" : "config.json" } : {}),
     ...(oauth ? { oauth } : {}),
+    ...(stored?.reasoningEffort ? { reasoningEffort: stored.reasoningEffort } : {}),
     ...(Object.keys(headers).length ? { headers } : {}),
   };
 }
@@ -613,6 +623,21 @@ export function withContextWindow(config: CliConfig, model: string, window: numb
   const existing = config.contextWindows ?? {};
   if (existing[model] === window) return config;
   return { ...config, contextWindows: { ...existing, [model]: window } };
+}
+
+/** Set (or clear) the reasoning effort on the active provider; no-op with none. */
+export function withActiveReasoningEffort(
+  config: CliConfig,
+  effort: "low" | "medium" | "high" | undefined,
+): CliConfig {
+  const active = activeNamedProvider(config);
+  if (!active || !config.providers) return config;
+  return {
+    ...config,
+    providers: config.providers.map((entry) =>
+      entry.name === active.name ? { ...entry, ...(effort ? { reasoningEffort: effort } : { reasoningEffort: undefined }) } : entry,
+    ),
+  };
 }
 
 /** Remove a registered endpoint. If it was active, the first survivor stands in. */

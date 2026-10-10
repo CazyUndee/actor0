@@ -17,6 +17,7 @@ export type SlashCommand =
   | { name: "provider" }
   | { name: "setup" }
   | { name: "usage" }
+  | { name: "thinking"; effort?: string }
   | { name: "quit" }
   | { name: "unknown"; input: string };
 
@@ -39,6 +40,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "provider", aliases: ["p", "endpoint"], description: "manage providers — switch, sign in, add, remove" },
   { name: "setup", aliases: ["s"], description: "re-run the setup wizard" },
   { name: "model", aliases: ["m"], description: "switch to a model by name" },
+  { name: "thinking", aliases: ["t"], description: "reasoning effort — low, medium, high" },
   { name: "clear", aliases: ["c"], description: "start a new conversation" },
   { name: "usage", aliases: ["u"], description: "token usage and quota — today, this week, this month" },
   { name: "help", aliases: ["h", "?"], description: "show all commands" },
@@ -101,6 +103,8 @@ export function parseSlash(input: string): SlashCommand | undefined {
       return { name: "setup" };
     case "usage":
       return { name: "usage" };
+    case "thinking":
+      return argument ? { name: "thinking", effort: argument.toLowerCase() } : { name: "thinking" };
     default:
       return { name: "unknown", input: trimmed };
   }

@@ -1025,8 +1025,9 @@ const ask = async (question: string): Promise<void> => {
   stdin.write("\u001b");
   await wait(120);
 
-  // The `/` command popup, driven like a user: type a prefix, see it filter,
-  // arrow to move the highlight, and a number runs that command outright.
+  // The `/` popup and the pickers, driven end to end. Each picker is reached
+  // through the popup's number shortcut, which runs the command and clears the
+  // draft — so every frame starts clean (this driver's stdin cannot backspace).
   stdin.write("/");
   await wait(150);
   await show("29 · / lists every command");
@@ -1035,19 +1036,30 @@ const ask = async (question: string): Promise<void> => {
   await wait(150);
   await show("30 · typing narrows it to /model");
 
-  // Pressing "1" runs the highlighted command directly — no half-typed string
-  // reaches the model. /model with no argument opens the model list.
+  // "1" runs the highlighted command and opens the model picker — and clears the
+  // draft, so no half-typed string reaches the model.
   stdin.write("1");
   await wait(200);
-  await show("31 · a number runs the command");
+  await show("31 · a number runs /model — the picker");
 
-  // Esc dismisses the popup for this token; editing reopens it.
-  stdin.write("/h");
+  stdin.write("\u001b");
   await wait(150);
-  await show("32 · popup reopened on a new token");
+
+  // Same path to /thinking: /t narrows, "1" runs it and opens the effort picker.
+  stdin.write("/t");
+  await wait(150);
+  stdin.write("1");
+  await wait(200);
+  await show("32 · a number runs /thinking — the effort picker");
+
+  // Per-token dismissal: Esc hides the popup for this token; editing reopens it.
+  stdin.write("\u001b");
+  await wait(150);
+  stdin.write("/p");
+  await wait(150);
   stdin.write("\u001b");
   await wait(120);
-  stdin.write("e");
+  stdin.write("r");
   await wait(150);
   await show("33 · Esc hid it; editing the token reopened it");
 

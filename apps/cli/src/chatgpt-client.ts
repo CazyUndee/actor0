@@ -41,6 +41,8 @@ export type ChatGptOptions = {
   accessToken: string;
   /** ChatGPT account id, required as a request header. */
   accountId?: string;
+  /** Reasoning effort for models that support it. */
+  reasoningEffort?: "low" | "medium" | "high";
   /** Override the request path. Defaults to `/responses`. */
   path?: string;
   fetchImpl?: typeof fetch;
@@ -101,6 +103,7 @@ export class ChatGptModel implements ModelClient {
   private readonly model: string;
   private readonly accessToken: string;
   private readonly accountId?: string;
+  private readonly reasoningEffort?: "low" | "medium" | "high";
   private readonly fetchImpl: typeof fetch;
   private readonly headers: Record<string, string>;
 
@@ -124,6 +127,7 @@ export class ChatGptModel implements ModelClient {
     this.model = options.model.trim();
     this.accessToken = options.accessToken;
     this.accountId = options.accountId;
+    this.reasoningEffort = options.reasoningEffort;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.headers = options.headers ?? {};
   }
@@ -136,6 +140,7 @@ export class ChatGptModel implements ModelClient {
       stream: true,
       store: false,
       tool_choice: "auto",
+      ...(this.reasoningEffort ? { reasoning: { effort: this.reasoningEffort } } : {}),
     };
     if (translated.instructions) body.instructions = translated.instructions;
     const responsesTools = toResponsesTools(tools);

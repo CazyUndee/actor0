@@ -41,6 +41,16 @@ export const ANTHROPIC_VERSION = "2023-06-01";
 /** Beta flag that lets a Claude Code OAuth token call the Messages API. */
 export const OAUTH_BETA_HEADER = "oauth-2025-04-20";
 
+/** Beta flag required to enable extended thinking. */
+const THINKING_BETA = "interleaved-thinking-2025-05-14";
+
+/** Reasoning effort → thinking budget, before the max_tokens clamp. */
+const THINKING_BUDGETS: Record<"low" | "medium" | "high", number> = {
+  low: 1_024,
+  medium: 8_192,
+  high: 24_576,
+};
+
 /**
  * The max output tokens for a model: the *model's own* limit, not a fixed cap.
  *
@@ -93,6 +103,8 @@ export type AnthropicOptions = {
   model: string;
   auth: AnthropicAuth;
   maxTokens?: number;
+  /** Reasoning effort — mapped to a thinking budget, when the model supports it. */
+  reasoningEffort?: "low" | "medium" | "high";
   fetchImpl?: typeof fetch;
   headers?: Record<string, string>;
   /** Override the request path. Defaults to `/v1/messages`. */
@@ -204,6 +216,7 @@ export class AnthropicModel implements ModelClient {
   private readonly model: string;
   private readonly auth: AnthropicAuth;
   private readonly maxTokens: number;
+  private readonly reasoningEffort?: "low" | "medium" | "high";
   private readonly fetchImpl: typeof fetch;
   private readonly headers: Record<string, string>;
 
@@ -229,6 +242,7 @@ export class AnthropicModel implements ModelClient {
     // rejects a value above the model's limit, so the value comes from the model.
     // An explicit option, then the environment, then the model's default.
     this.maxTokens = options.maxTokens ?? envMaxOutputTokens() ?? maxOutputTokensForModel(this.model);
+    this.reasoningEffort = options.reasoningEffort;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.headers = options.headers ?? {};
   }
@@ -243,6 +257,22 @@ export class AnthropicModel implements ModelClient {
     return { "x-api-key": this.auth.apiKey };
   }
 
+  /** The non-OAuth beta header for this auth, if any (extended thinking). */
+  private thinkingBeta(): string | undefined {
+    return this.auth.kind === "oauth" ? OAUTH_BETA_HEADER : undefined;
+  }
+
+  /**
+   * The thinking budget for the configured effort, or undefined when thinking is
+   * off. Clamped to stay below max_tokens, which Anthropic requires.
+   */
+  private thinkingBudget(): number | undefined {
+    if (!this.reasoningEffort) return undefined;
+    const wanted = THINKING_BUDGETS[this.reasoningEffort];
+    const ceiling = this.maxTokens - 1;
+    return Math.min(wanted, Math.max(0, ceiling));
+  }
+
   async *stream(messages: ChatMessage[], tools: ToolDefinition[], signal: AbortSignal): AsyncIterable<ModelEvent> {
     const translated = toAnthropicRequest(messages);
     const body: Record<string, unknown> = {
@@ -254,6 +284,12 @@ export class AnthropicModel implements ModelClient {
     if (translated.system) body.system = translated.system;
     const anthropicTools = toAnthropicTools(tools);
     if (anthropicTools.length > 0) body.tools = anthropicTools;
+    // Extended thinking, when the effort asks for it and the model supports it.
+    // The budget must be strictly below max_tokens (Anthropic rejects otherwise),
+    // so it is clamped — an effort larger than the output cap degrades to the
+    // largest budget that fits rather than failing the request.
+    const budget = this.thinkingBudget();
+    if (budget !== undefined) body.thinking = { type: "enabled", budget_tokens: budget };
 
     let response: Response;
     try {
@@ -264,6 +300,7 @@ export class AnthropicModel implements ModelClient {
           Accept: "text/event-stream",
           "anthropic-version": ANTHROPIC_VERSION,
           ...this.authHeaders(),
+          ...(this.thinkingBudget() !== undefined ? { "anthropic-beta": [this.thinkingBeta(), THINKING_BETA].filter(Boolean).join(",") } : {}),
           ...this.headers,
         },
         body: JSON.stringify(body),

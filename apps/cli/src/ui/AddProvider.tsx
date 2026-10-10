@@ -43,15 +43,19 @@ type Base = Omit<NamedProvider, "name" | "model">;
 
 type Phase =
   | { kind: "kind" }
-  | { kind: "key"; provider: ProviderKind }
+  | { kind: "url"; provider: ProviderKind }
+  | { kind: "key"; provider: ProviderKind; baseUrl: string }
   | { kind: "working"; provider: ProviderKind; note: string }
   | { kind: "models"; provider: ProviderKind; base: Base; models: string[]; cursor: number; chosen: Set<string>; windows: Record<string, number> }
-  | { kind: "error"; provider: ProviderKind; message: string };
+  | { kind: "error"; provider: ProviderKind; message: string; baseUrl?: string };
 
 export function AddProvider({ onDone, onCancel, onboarding = false }: AddProviderProps) {
   const [phase, setPhase] = useState<Phase>({ kind: "kind" });
   const [kindCursor, setKindCursor] = useState(0);
   const [key, setKey] = useState("");
+  // The base URL for an API-key provider — editable, so a local or gateway
+  // endpoint is reachable, not just the well-known default host.
+  const [url, setUrl] = useState("");
   // A model typed by hand when the provider listed none — setup must not
   // dead-end on an empty model list.
   const [manual, setManual] = useState("");
@@ -80,7 +84,7 @@ export function AddProvider({ onDone, onCancel, onboarding = false }: AddProvide
           provider.transport === "anthropic" && !tokens.plan
             ? { ...tokens, plan: await fetchClaudePlan(tokens.accessToken).catch(() => undefined) }
             : tokens;
-        listModels(provider, buildBase(provider, { auth: "oauth", oauth: withPlan }));
+        listModels(provider, buildBase(provider, provider.baseUrl, { auth: "oauth", oauth: withPlan }));
       })
       .catch((error: Error) => setPhase({ kind: "error", provider, message: error.message }));
   };
@@ -95,7 +99,7 @@ export function AddProvider({ onDone, onCancel, onboarding = false }: AddProvide
         for (const info of infos) if (info.contextWindow !== undefined) windows[info.id] = info.contextWindow;
         setPhase({ kind: "models", provider, base, models: infos.map((info) => info.id), cursor: 0, chosen: new Set(), windows });
       })
-      .catch((error: Error) => setPhase({ kind: "error", provider, message: error.message }));
+      .catch((error: Error) => setPhase({ kind: "error", provider, message: error.message, baseUrl: base.baseUrl }));
   };
 
   const register = (chosen: string[]) => {
@@ -119,8 +123,10 @@ export function AddProvider({ onDone, onCancel, onboarding = false }: AddProvide
         const chosen = OFFERED[kindCursor]!;
         if (chosen.auth.length === 1 && chosen.auth[0] === "oauth") signIn(chosen);
         else {
-          setKey("");
-          setPhase({ kind: "key", provider: chosen });
+          // An API-key provider asks for the base URL first (editable — local and
+          // gateway endpoints), then the key.
+          setUrl(chosen.baseUrl);
+          setPhase({ kind: "url", provider: chosen });
         }
       }
       return;
@@ -129,9 +135,14 @@ export function AddProvider({ onDone, onCancel, onboarding = false }: AddProvide
       if (keypress.return) {
         const retry = phase.provider;
         if (retry.auth.includes("oauth") && retry.oauth && retry.auth.length === 1) signIn(retry);
-        else {
+        // Retry at the key step, keeping the URL already entered, unless we never
+        // got one — then start at the URL.
+        else if (phase.baseUrl) {
           setKey("");
-          setPhase({ kind: "key", provider: retry });
+          setPhase({ kind: "key", provider: retry, baseUrl: phase.baseUrl });
+        } else {
+          setUrl(retry.baseUrl);
+          setPhase({ kind: "url", provider: retry });
         }
       }
       return;
@@ -183,6 +194,39 @@ export function AddProvider({ onDone, onCancel, onboarding = false }: AddProvide
     );
   }
 
+  if (phase.kind === "url") {
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Text color={color.muted} bold>{`${phase.provider.label} — base URL`}</Text>
+        <Box marginLeft={2}>
+          <Text color={color.accent}>{"❯ "}</Text>
+          <TextInput
+            value={url}
+            onChange={setUrl}
+            onSubmit={(raw) => {
+              const baseUrl = raw.trim();
+              let ok = false;
+              try {
+                const parsed = new URL(baseUrl);
+                ok = parsed.protocol === "http:" || parsed.protocol === "https:";
+              } catch {
+                ok = false;
+              }
+              if (!ok) {
+                setPhase({ kind: "error", provider: phase.provider, message: `"${baseUrl}" is not a valid http(s) URL` });
+                return;
+              }
+              setKey("");
+              setPhase({ kind: "key", provider: phase.provider, baseUrl });
+            }}
+            placeholder={phase.provider.baseUrl}
+          />
+        </Box>
+        <Box marginTop={1}><Text color={color.dim}>{"enter to continue · esc cancel"}</Text></Box>
+      </Box>
+    );
+  }
+
   if (phase.kind === "key") {
     return (
       <Box flexDirection="column" marginTop={1}>
@@ -195,10 +239,10 @@ export function AddProvider({ onDone, onCancel, onboarding = false }: AddProvide
             onSubmit={(raw) => {
               const apiKey = raw.trim();
               if (!apiKey) {
-                setPhase({ kind: "error", provider: phase.provider, message: "an API key is required" });
+                setPhase({ kind: "error", provider: phase.provider, message: "an API key is required", baseUrl: phase.baseUrl });
                 return;
               }
-              listModels(phase.provider, buildBase(phase.provider, { auth: "api-key", apiKey }));
+              listModels(phase.provider, buildBase(phase.provider, phase.baseUrl, { auth: "api-key", apiKey }));
             }}
             placeholder="paste your API key"
           />
@@ -271,10 +315,11 @@ function wrap(current: number, count: number, delta: number): number {
 
 function buildBase(
   provider: ProviderKind,
+  baseUrl: string,
   auth: { auth: "api-key"; apiKey: string } | { auth: "oauth"; oauth: OAuthTokens },
 ): Base {
   return {
-    baseUrl: provider.baseUrl,
+    baseUrl,
     transport: provider.transport,
     ...(provider.path ? { path: provider.path } : {}),
     ...auth,

@@ -225,6 +225,7 @@ export function promptClearsProviderFloor(prompt: string): boolean {
 export function createModel(provider: ResolvedProvider, fetchImpl?: typeof fetch): ModelClient {
   const transport = provider.transport ?? "openai";
   const auth = provider.auth ?? "api-key";
+  const effort = provider.reasoningEffort;
 
   if (transport === "anthropic") {
     const oauth = auth === "oauth" ? provider.oauth : undefined;
@@ -234,6 +235,7 @@ export function createModel(provider: ResolvedProvider, fetchImpl?: typeof fetch
       model: provider.model,
       ...(provider.headers ? { headers: provider.headers } : {}),
       ...(fetchImpl ? { fetchImpl } : {}),
+      ...(effort ? { reasoningEffort: effort } : {}),
       auth: oauth
         ? { kind: "oauth", accessToken: oauth.accessToken }
         : { kind: "api-key", apiKey: provider.apiKey ?? "" },
@@ -253,6 +255,7 @@ export function createModel(provider: ResolvedProvider, fetchImpl?: typeof fetch
       ...(oauth.accountId ? { accountId: oauth.accountId } : {}),
       ...(provider.headers ? { headers: provider.headers } : {}),
       ...(fetchImpl ? { fetchImpl } : {}),
+      ...(effort ? { reasoningEffort: effort } : {}),
     });
   }
 
@@ -269,6 +272,7 @@ export function createModel(provider: ResolvedProvider, fetchImpl?: typeof fetch
     ...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
     ...(provider.headers ? { headers: provider.headers } : {}),
     ...(fetchImpl ? { fetchImpl } : {}),
+    ...(effort ? { reasoningEffort: effort } : {}),
   });
 }
 

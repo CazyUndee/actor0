@@ -114,15 +114,18 @@ test("a response.failed throws a transport error", async () => {
 
 test("the request carries the bearer, account-id and beta headers", async () => {
   let seen: Record<string, string> = {};
+  let body: Record<string, unknown> = {};
   const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
     seen = Object.fromEntries(new Headers(init?.headers).entries());
+    body = JSON.parse(String(init?.body));
     return new Response('data: {"type":"response.completed","response":{"status":"completed"}}\n\n', { status: 200, headers: { "content-type": "text/event-stream" } });
   }) as typeof fetch;
-  const model = new ChatGptModel({ baseUrl: "https://chatgpt.com/backend-api/codex", model: "gpt-5", accessToken: "AT", accountId: "acct-9", fetchImpl });
+  const model = new ChatGptModel({ baseUrl: "https://chatgpt.com/backend-api/codex", model: "gpt-5", accessToken: "AT", accountId: "acct-9", reasoningEffort: "high", fetchImpl });
   await collect(model.stream([{ role: "user", content: "hi" }], [], new AbortController().signal));
   assert.equal(seen["authorization"], "Bearer AT");
   assert.equal(seen["chatgpt-account-id"], "acct-9");
   assert.equal(seen["openai-beta"], "responses=experimental");
+  assert.deepEqual(body.reasoning, { effort: "high" }, "reasoning effort rides in the request");
 });
 
 test("frames split on the blank line and keep the remainder", () => {

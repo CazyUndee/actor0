@@ -9,6 +9,7 @@ import {
   resolveProvider,
   saveConfig,
   setActiveProvider,
+  withActiveReasoningEffort,
   withModel,
   type CliConfig,
   type ResolvedProvider,
@@ -37,6 +38,8 @@ import { Banner, LiveView, StatusBar, Transcript, bannerActivity, useTerminalSiz
 import { Composer } from "./prompts.js";
 import { AddProvider } from "./AddProvider.js";
 import { UsagePanel } from "./UsagePanel.js";
+import { ModelPicker } from "./ModelPicker.js";
+import { ThinkingPicker } from "./ThinkingPicker.js";
 import { ProviderMenu } from "./ProviderMenu.js";
 import { SlashPopup } from "./SlashPopup.js";
 import { providerLabel } from "../provider-presets.js";
@@ -94,7 +97,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // other two are the provider menu and its add form, which replace the
   // composer while open — one region at a time, so no two `useInput`s fight
   // over the same key. A menu never opens mid-turn (see `runCommand`).
-  const [mode, setMode] = useState<"chat" | "menu" | "add" | "usage">("chat");
+  const [mode, setMode] = useState<"chat" | "menu" | "add" | "usage" | "model" | "thinking">("chat");
   // True only during the first-run welcome, so the add flow is framed as a
   // welcome and its completion is confirmed as "you're ready".
   const [onboarding, setOnboarding] = useState(false);
@@ -216,12 +219,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
             notice("info", `model set to ${command.model}`);
             return;
           }
+          // No argument: open the interactive picker over the remembered models
+          // rather than dumping the list as a text notice.
           if (config.models.length === 0) {
-            notice("info", `model is ${config.model} — switch with /model <name>`);
+            notice("info", `model is ${config.model || provider?.model || "(none)"} — switch with /model <name>`);
             return;
           }
-          const listing = [`model: ${config.model}`, ...config.models.map((m) => `  ${m}`)];
-          notice("info", listing.join("\n"));
+          setMode("model");
           return;
         }
         case "provider": {
@@ -239,6 +243,18 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         }
         case "usage": {
           setMode("usage");
+          return;
+        }
+        case "thinking": {
+          const effort = command.effort;
+          if (effort === "low" || effort === "medium" || effort === "high") {
+            const next = withActiveReasoningEffort(config, effort);
+            setConfig(next);
+            saveConfig(next);
+            notice("info", `reasoning effort set to ${effort}`);
+            return;
+          }
+          setMode("thinking");
           return;
         }
         case "quit":
@@ -540,7 +556,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       : mode !== "chat"
         ? "esc closes · Ctrl+D quits"
         : "/help for commands · Ctrl+D quits";
-
   return (
     // The top margin is the gap between the scrollback and the part of the UI
     // that still moves. `<Static>` is positioned absolutely, so this is the only
@@ -667,6 +682,31 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         />
       ) : mode === "usage" ? (
         <UsagePanel onCancel={() => setMode("chat")} />
+      ) : mode === "model" ? (
+        <ModelPicker
+          models={config.models}
+          active={provider?.model ?? config.model}
+          onSelect={(model) => {
+            const next = withModel(config, model);
+            setConfig(next);
+            saveConfig(next);
+            setMode("chat");
+            notice("info", `model set to ${model}`);
+          }}
+          onCancel={() => setMode("chat")}
+        />
+      ) : mode === "thinking" ? (
+        <ThinkingPicker
+          active={active?.reasoningEffort}
+          onSelect={(effort) => {
+            const next = withActiveReasoningEffort(config, effort);
+            setConfig(next);
+            saveConfig(next);
+            setMode("chat");
+            notice("info", `reasoning effort set to ${effort}`);
+          }}
+          onCancel={() => setMode("chat")}
+        />
       ) : (
         <>
           {slashEngaged && slashMatches.length > 0 ? <SlashPopup commands={slashMatches} selected={slashSel} /> : null}

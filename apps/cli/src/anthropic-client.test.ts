@@ -226,6 +226,29 @@ test("the request carries the model's own max_tokens, not a fixed cap", async ()
   assert.equal(body.max_tokens, 32_000, "3.7-sonnet gets its 32k default, not 8192");
 });
 
+test("reasoning effort becomes a thinking budget, and is absent when off", async () => {
+  const capture = async (reasoningEffort?: "low" | "medium" | "high") => {
+    let body: Record<string, unknown> = {};
+    let headers: Record<string, string> = {};
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      headers = Object.fromEntries(new Headers(init?.headers).entries());
+      return new Response('data: {"type":"message_stop"}\n\n', { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const model = new AnthropicModel({ baseUrl: "https://api.anthropic.com", model: "claude-3-7-sonnet-20250219", auth: apiKey(), fetchImpl, ...(reasoningEffort ? { reasoningEffort } : {}) });
+    await collect(model.stream([{ role: "user", content: "hi" }], [], new AbortController().signal));
+    return { body, headers };
+  };
+
+  const off = await capture();
+  assert.equal(off.body.thinking, undefined, "no thinking block when effort is off");
+  assert.equal(off.headers["anthropic-beta"], undefined, "and no thinking beta header");
+
+  const high = await capture("high");
+  assert.deepEqual(high.body.thinking, { type: "enabled", budget_tokens: 24_576 });
+  assert.ok((high.headers["anthropic-beta"] ?? "").includes("interleaved-thinking"), "the thinking beta rides along");
+});
+
 test("frames split on the blank line and keep the remainder", () => {
   const { events, rest } = drainAnthropicFrames('data: {"type":"ping"}\n\ndata: {"type":"partial"');
   assert.equal(events.length, 1);

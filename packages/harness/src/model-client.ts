@@ -62,6 +62,12 @@ export type OpenAiCompatibleOptions = {
    * into every host that has to work around it.
    */
   path?: string;
+  /**
+   * Reasoning effort for models that support it (o-series and reasoning
+   * models). Sent as `reasoning_effort`; omitted entirely when unset, so a
+   * non-reasoning endpoint never sees an unknown field.
+   */
+  reasoningEffort?: "low" | "medium" | "high";
 };
 
 type ToolDelta = {
@@ -93,6 +99,7 @@ export class OpenAiCompatibleModel implements ModelClient {
   private readonly model: string;
   private readonly fetchImpl: typeof fetch;
   private readonly headers: Record<string, string>;
+  private readonly reasoningEffort?: "low" | "medium" | "high";
 
   constructor(options: OpenAiCompatibleOptions) {
     if (!options.model.trim()) throw new Error("model is required");
@@ -112,6 +119,7 @@ export class OpenAiCompatibleModel implements ModelClient {
     this.model = options.model.trim();
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.headers = options.headers ?? {};
+    this.reasoningEffort = options.reasoningEffort;
   }
 
   async *stream(messages: ChatMessage[], tools: ToolDefinition[], signal: AbortSignal): AsyncIterable<ModelEvent> {
@@ -125,7 +133,7 @@ export class OpenAiCompatibleModel implements ModelClient {
           ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
           ...this.headers,
         },
-        body: JSON.stringify({ model: this.model, messages, stream: true, tools }),
+        body: JSON.stringify({ model: this.model, messages, stream: true, tools, ...(this.reasoningEffort ? { reasoning_effort: this.reasoningEffort } : {}) }),
         signal,
       });
     } catch (error) {
