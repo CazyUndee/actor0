@@ -148,11 +148,45 @@ export function providerLabel(provider: NamedProvider): string {
 
 /** "Pro " when the plan is known, "" when it is not — so the label still reads. */
 function planSuffix(plan: string | undefined): string {
-  return plan ? `${titleCase(plan)} ` : "";
+  return plan ? `${titlePlan(plan)} ` : "";
 }
 
-function titleCase(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
+/**
+ * A subscription plan as a readable name.
+ *
+ * Covers the values both providers actually report — Claude's max/pro/team/
+ * enterprise and ChatGPT's free/go/plus/pro/prolite/team/business/enterprise.
+ * Note: ChatGPT's Pro price tiers ($100/$200/$500) all report as plain `pro`
+ * in the OAuth token; the multiplier is not in the token, so it is not guessed
+ * here — every Pro reads "Pro".
+ */
+function titlePlan(plan: string): string {
+  switch (plan) {
+    case "pro":
+      return "Pro";
+    case "prolite":
+      return "Pro Lite";
+    case "plus":
+      return "Plus";
+    case "go":
+      return "Go";
+    case "free":
+      return "Free";
+    case "max":
+      return "Max";
+    case "team":
+      return "Team";
+    case "enterprise":
+      return "Enterprise";
+    case "business":
+      return "Business";
+    case "self_serve_business_prolite":
+      return "Business Pro Lite";
+    case "self_serve_business_usage_based":
+      return "Business (usage-based)";
+    default:
+      return plan.charAt(0).toUpperCase() + plan.slice(1);
+  }
 }
 
 /** Anthropic by API key: Direct, a cloud, or the raw host. */

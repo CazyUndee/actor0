@@ -29,6 +29,8 @@ test("Codex OAuth reads as a subscription with its plan", () => {
   assert.equal(providerLabel(with_(base)), "Codex - subscription");
   assert.equal(providerLabel(with_({ ...base, oauth: { accessToken: "AT", plan: "plus" } })), "Codex - Plus subscription");
   assert.equal(providerLabel(with_({ ...base, oauth: { accessToken: "AT", plan: "pro" } })), "Codex - Pro subscription");
+  assert.equal(providerLabel(with_({ ...base, oauth: { accessToken: "AT", plan: "prolite" } })), "Codex - Pro Lite subscription");
+  assert.equal(providerLabel(with_({ ...base, oauth: { accessToken: "AT", plan: "team" } })), "Codex - Team subscription");
 });
 
 test("Anthropic by API key reads as Direct, a cloud, or the host", () => {
