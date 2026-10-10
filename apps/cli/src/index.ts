@@ -25,9 +25,12 @@ Usage
   actor0 --version       print the version
   actor0 --help          print this
 
-The endpoint is fixed and needs no API key, so there is nothing to configure
-but the model. ACTOR0_MODEL overrides the model for one run. Config lives in
-$XDG_CONFIG_HOME/actor0; sessions in $XDG_DATA_HOME/actor0.
+Bring your own provider (BYOK). On first run the CLI walks you through
+adding one — sign in with Claude or ChatGPT, or paste an API key for any
+OpenAI-compatible or Anthropic endpoint. Manage them any time with /provider or
+/setup. For one run, ACTOR0_BASE_URL / ACTOR0_API_KEY / ACTOR0_MODEL override
+the endpoint. Config lives in $XDG_CONFIG_HOME/actor0; sessions in
+$XDG_DATA_HOME/actor0.
 `;
 
 async function readVersion(): Promise<string> {
