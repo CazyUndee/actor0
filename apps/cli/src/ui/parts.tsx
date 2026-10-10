@@ -641,6 +641,20 @@ export function DiffBlock({ lines }: { lines: DiffLine[] }) {
   );
 }
 
+/**
+ * A tool response under a `⎿` gutter, the way Claude Code marks output that
+ * belongs to the call above it. The marker is dim so the content carries the
+ * weight; the block is indented two columns so it sits under the tool name.
+ */
+export function ResponseBlock({ text, columns }: { text: string; columns: number }) {
+  return (
+    <Box marginLeft={2} flexDirection="column">
+      <Text color={color.dim}>{"⎿"}</Text>
+      <Lines text={text} color={color.dim} columns={columns - 2} />
+    </Box>
+  );
+}
+
 export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: number }) {
   switch (entry.kind) {
     case "user":
@@ -734,19 +748,17 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
         <Box marginTop={1} flexDirection="column">
           <Box>
             <Text color={tone}>{toolGlyph[status]} </Text>
-            <Text color={color.muted}>{label}</Text>
+            <Text color={color.text} bold>
+              {label}
+            </Text>
             {entry.target ? <Text color={color.dim}> {entry.target}</Text> : null}
           </Box>
-          {/* Indented, because a failure is often several lines and a
-              left-flush block of stderr under the command is hard to tell from
-              the next entry. `flexDirection` is required, not decoration: a Box
-              defaults to row, which laid the lines of a multi-line failure out
-              side by side as one run-on sentence. */}
-          {detail ? (
-            <Box marginLeft={2} flexDirection="column">
-              <Lines text={detail} color={color.dim} columns={columns - 2} />
-            </Box>
-          ) : null}
+          {/* Output under a `⎿` gutter, the way Claude Code marks a tool
+              response — the block reads as belonging to the call above it, not
+              as free-floating text. `flexDirection` is required, not
+              decoration: a Box defaults to row, which laid the lines of a
+              multi-line failure out side by side as one run-on sentence. */}
+          {detail ? <ResponseBlock text={detail} columns={columns - 2} /> : null}
         </Box>
       );
     }
