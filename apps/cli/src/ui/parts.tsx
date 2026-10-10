@@ -604,7 +604,7 @@ export function toolRowFailed(entry: Entry): boolean {
  * title. So the title is simply the first line when it reads like one — short,
  * and not a sentence that runs on — and everything after it is the body.
  */
-function reasonText(text: string): { title: string; body: string } {
+export function reasonText(text: string): { title: string; body: string } {
   const lines = text
     .split("\n")
     .map((line) => stripReasoningMarkup(line))
@@ -849,16 +849,16 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
  * wipes the scrollback to repaint — the one outcome this function exists to
  * prevent, and a single unbroken paragraph away.
  */
-export function fitTail(text: string, rows: number, columns: number): string {
-  if (rows <= 0) return "";
-  // Flattened to physical lines first, because the budget is in rendered rows
-  // and a row is not the same thing as a line of input. Prose is wrapped — and
-  // so becomes exactly as many rows as it takes — while a line of code is one
-  // row no matter how long it is, because `Lines` does not wrap code.
-  //
-  // Wrapping first and counting afterwards used to be the whole implementation,
-  // and it put code and prose through the same arithmetic. The fences are
-  // carried in the segments, so rejoining the tail cannot lose one.
+/**
+ * Flatten markdown into the physical terminal rows it renders to.
+ *
+ * This is the shared primitive under `fitTail` and the transcript scroll window:
+ * prose is wrapped (and so becomes exactly as many rows as it takes), a code
+ * line is one row however long it is, and a table is laid out to the terminal.
+ * The budget of `fitTail` is in these rows, so this has to be the same
+ * arithmetic, not a second guess at it.
+ */
+export function flattenText(text: string, columns: number): string[] {
   const physical: string[] = [];
   for (const segment of segments(text)) {
     if (segment.kind === "text") {
@@ -872,7 +872,20 @@ export function fitTail(text: string, rows: number, columns: number): string {
     physical.push(segment.open, ...segment.body);
     if (segment.close) physical.push(segment.close);
   }
-  return physical.slice(-rows).join("\n");
+  return physical;
+}
+
+export function fitTail(text: string, rows: number, columns: number): string {
+  if (rows <= 0) return "";
+  // Flattened to physical lines first, because the budget is in rendered rows
+  // and a row is not the same thing as a line of input. Prose is wrapped — and
+  // so becomes exactly as many rows as it takes — while a line of code is one
+  // row no matter how long it is, because `Lines` does not wrap code.
+  //
+  // Wrapping first and counting afterwards used to be the whole implementation,
+  // and it put code and prose through the same arithmetic. The fences are
+  // carried in the segments, so rejoining the tail cannot lose one.
+  return flattenText(text, columns).slice(-rows).join("\n");
 }
 
 /** The volatile region: in-flight reasoning, streamed text, and activity. */

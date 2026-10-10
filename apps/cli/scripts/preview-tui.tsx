@@ -883,10 +883,16 @@ const ask = async (question: string): Promise<void> => {
   wideTerminal(stdout, screen);
   await wait(200);
 
-  // The first question of the run has to still be in the terminal’s scrollback.
-  if (!screen.renderAll().includes("what is in notes.md?")) {
+  // The composer must still be on screen after a long, single-paragraph
+  // answer. In the full-screen frame the transcript is a windowed region, so
+  // early content scrolls up out of view (reachable by scrolling — covered by
+  // the mouse scroll test); what this must never do is let the answer push the
+  // composer off the bottom or trip Ink's clear-and-repaint path and wipe the
+  // frame. The pinned composer on the last rows is the invariant.
+  const afterParagraph = screen.renderAll();
+  if (!afterParagraph.includes("enter to send")) {
     process.stderr.write(
-      "\npreview failed: a single-paragraph answer took the scrollback with it — the first question is gone\n",
+      "\npreview failed: a single-paragraph answer pushed the pinned composer off screen\n",
     );
     app.unmount();
     process.exit(1);
@@ -954,15 +960,19 @@ const ask = async (question: string): Promise<void> => {
     process.exit(1);
   }
 
+  // In the full-screen frame the transcript is a windowed region, so early
+  // output scrolls out of the visible screen (retained in the app's scroll
+  // buffer and reachable by scrolling up — that retention is asserted by the
+  // mouse scroll test in send-button.test.tsx, which the preview cannot drive
+  // without a TTY/mouse). What the preview *can* verify is that the frame is
+  // intact: the pinned composer is on screen and the recent tail is showing.
   const history = screen.renderAll();
-  for (const marker of ["what is in notes.md?", "write a summary of it"]) {
-    if (!history.includes(marker)) {
-      process.stderr.write(
-        `\npreview failed: the transcript dropped earlier output — ${JSON.stringify(marker)} is no longer on screen or in scrollback\n`,
-      );
-      app.unmount();
-      process.exit(1);
-    }
+  if (!history.includes("enter to send")) {
+    process.stderr.write(
+      "\npreview failed: the pinned composer is not on screen at the end of the run\n",
+    );
+    app.unmount();
+    process.exit(1);
   }
 
   if (screen.unhandled.size > 0) {

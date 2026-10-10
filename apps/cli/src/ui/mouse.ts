@@ -53,16 +53,20 @@ const MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
 const PARTIAL_CSI = /\x1b\[[0-9;<>?]*$/;
 
 /**
- * Split one stdin chunk into what Ink should see and what is a click.
+ * Split one stdin chunk into what Ink should see, where a click landed, and
+ * whether the wheel turned.
  *
- * Complete SGR mouse reports are lifted out (their left-button releases become
- * clicks) and removed from the keystroke text; the leftover is what Ink gets.
- * A trailing incomplete CSI is returned as `hold` (not forwarded) so a sequence
- * split across chunks reassembles instead of leaking half an escape into the
- * composer. A bare ESC has no `[`, so the Escape key is never held.
+ * Complete SGR mouse reports are lifted out entirely (so none of them is typed
+ * into the composer): a left-button release (`m`, b===0) becomes a click;
+ * wheel-up (`M`, b===64) and wheel-down (`M`, b===65) accumulate into `scroll`
+ * (positive is up, in notches). The leftover text is what Ink gets. A trailing
+ * incomplete CSI is returned as `hold` (not forwarded) so a sequence split
+ * across chunks reassembles instead of leaking half an escape into the composer.
+ * A bare ESC has no `[`, so the Escape key is never held.
  */
-export function filterMouseChunk(input: string): { inkText: string; clicks: MouseClick[]; hold: string } {
+export function filterMouseChunk(input: string): { inkText: string; clicks: MouseClick[]; scroll: number; hold: string } {
   const clicks: MouseClick[] = [];
+  let scroll = 0;
   let text = "";
   let last = 0;
   MOUSE_RE.lastIndex = 0;
@@ -70,15 +74,16 @@ export function filterMouseChunk(input: string): { inkText: string; clicks: Mous
   while ((m = MOUSE_RE.exec(input))) {
     text += input.slice(last, m.index);
     last = m.index + m[0].length;
-    // Act on the left button's release (`m`), not the press: a drag that begins
-    // on the button but ends elsewhere must not submit. b===0 is left.
-    if (m[4] === "m" && Number(m[1]) === 0) clicks.push({ x: Number(m[2]), y: Number(m[3]) });
+    const button = Number(m[1]);
+    if (m[4] === "m" && button === 0) clicks.push({ x: Number(m[2]), y: Number(m[3]) });
+    else if (m[4] === "M" && button === 64) scroll += 1;
+    else if (m[4] === "M" && button === 65) scroll -= 1;
   }
   const rest = input.slice(last);
   const partial = PARTIAL_CSI.exec(rest);
   const hold = partial ? partial[0] : "";
   text += partial ? rest.slice(0, partial.index) : rest;
-  return { inkText: text, clicks, hold };
+  return { inkText: text, clicks, scroll, hold };
 }
 
 export type MouseStreams = {
@@ -91,8 +96,10 @@ export type MouseStreams = {
 export const mouseLink: {
   screen: ScreenModel | null;
   onClick: ((c: MouseClick) => void) | null;
+  /** Wheel notches; +1 is up, -1 is down, per event. */
+  onScroll: ((notches: number) => void) | null;
   columns: number;
-} = { screen: null, onClick: null, columns: 80 };
+} = { screen: null, onClick: null, onScroll: null, columns: 80 };
 
 let realStdout: NodeJS.WriteStream | null = null;
 let tracking = false;
@@ -152,9 +159,10 @@ export function installMouse(stdin: NodeJS.ReadStream, stdout: NodeJS.WriteStrea
   let residual = "";
   const onData = (chunk: Buffer | string): void => {
     residual += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    const { inkText, clicks, hold } = filterMouseChunk(residual);
+    const { inkText, clicks, scroll, hold } = filterMouseChunk(residual);
     residual = hold;
     for (const click of clicks) mouseLink.onClick?.(click);
+    if (scroll !== 0) mouseLink.onScroll?.(scroll);
     // Forward to Ink only when it is actually reading — i.e. it registered a
     // 'readable' listener, which it does only on a TTY in raw mode. On a pipe
     // Ink ignores input, and buffering it would grow a slice nobody drains.

@@ -88,6 +88,12 @@ test("the send button is exactly four rows above the frame's last row, measured 
     assert.ok(sendRow >= 0, "the composer's send row rendered");
     assert.ok(last >= 0, "the frame had content");
     assert.equal(last - sendRow, 4, "send button is four rows above the frame's last row (the footer)");
+    // The composer is clamped to the bottom: the frame's last row is the
+    // terminal's last row, so the status bar sits on the final line and the
+    // scroll window fills everything above it. This is the pin the wheel
+    // scroll relies on — a composer that drifted with the transcript could not
+    // be hit by a fixed offset.
+    assert.equal(last, 23, "the footer is on the terminal's last row — the composer is bottom-pinned");
   } finally {
     if (prev === undefined) delete process.env.ACTOR0_CONFIG_DIR;
     else process.env.ACTOR0_CONFIG_DIR = prev;

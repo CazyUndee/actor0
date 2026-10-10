@@ -21,9 +21,19 @@ test("middle and right button releases are not clicks", () => {
   assert.deepEqual(filterMouseChunk(`${ESC}[<2;12;40m`).clicks, [], "right button");
 });
 
-test("the wheel and drag reports are ignored", () => {
+test("the wheel and drag reports are ignored as clicks", () => {
   assert.deepEqual(filterMouseChunk(`${ESC}[<64;12;40m`).clicks, [], "wheel up");
   assert.deepEqual(filterMouseChunk(`${ESC}[<32;12;40M`).clicks, [], "drag motion");
+});
+
+test("the wheel reports a scroll delta and is stripped from the keystrokes", () => {
+  const up = filterMouseChunk(`${ESC}[<64;1;1M`);
+  assert.equal(up.scroll, 1, "wheel up is +1 notch");
+  assert.equal(up.inkText, "", "wheel bytes are not typed into the composer");
+  const down = filterMouseChunk(`${ESC}[<65;1;1M`);
+  assert.equal(down.scroll, -1, "wheel down is -1 notch");
+  // Several wheel turns in one chunk accumulate.
+  assert.equal(filterMouseChunk(`${ESC}[<64;1;1M${ESC}[<64;1;1M${ESC}[<65;1;1M`).scroll, 1);
 });
 
 test("keystrokes around a click survive; only the mouse bytes are removed", () => {

@@ -96,3 +96,84 @@ test("a click on the send button submits; a click elsewhere and keyboard input t
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * The composer is clamped to the bottom and the wheel scrolls only the
+ * transcript above it. Builds a real transcript through the send button, then
+ * scrolls up hard and checks two invariants that are the whole feature: the
+ * composer's rows do not move, and the transcript window's contents do.
+ */
+test("wheel scroll moves the transcript window but never the pinned composer", async () => {
+  const prev = process.env.ACTOR0_CONFIG_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "actor0-scroll-"));
+  process.env.ACTOR0_CONFIG_DIR = dir;
+
+  const realStdin = new EventEmitter();
+  Object.assign(realStdin, {
+    isTTY: true, setRawMode() { return realStdin; }, setEncoding() { return realStdin; },
+    ref() { return realStdin; }, unref() { return realStdin; }, read() { return null; },
+    pause() { return realStdin; }, resume() { return realStdin; },
+  });
+  const realStdout = new PassThrough();
+  Object.assign(realStdout, { isTTY: true, columns: 80, rows: 24 });
+  const mouse = installMouse(
+    realStdin as unknown as NodeJS.ReadStream,
+    realStdout as unknown as NodeJS.WriteStream,
+  );
+
+  let answer = "";
+  const transport: ModelClient = {
+    async *stream() {
+      for (const ch of answer) yield { type: "token", delta: ch } as never;
+      yield { type: "done", text: answer, complete: true } as never;
+    },
+  };
+  const config = addProvider(withModel({ model: "m", models: ["m"] }, "m"), {
+    name: "claude", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "oauth",
+    model: "claude-opus-4-6", oauth: { accessToken: "t", plan: "max" },
+  });
+  const instance = render(createElement(App, { cwd: process.cwd(), config, transport }), {
+    stdin: mouse.stdin, stdout: mouse.stdout, exitOnCtrlC: false, patchConsole: false,
+  });
+
+  const screen = mouseLink.screen!;
+  const sendClick = async (): Promise<void> => {
+    const y = screen.lastContentRow() - SEND_ROWS_ABOVE_FOOTER + 1;
+    const x = mouseLink.columns - 3;
+    realStdin.emit("data", `${ESC}[<0;${x};${y}m`);
+  };
+
+  try {
+    await tick(400);
+    // Build a transcript taller than the 24-row terminal, via the send button.
+    for (let n = 1; n <= 6; n++) {
+      answer = `answer ${n}: ${"word ".repeat(40)}`;
+      realStdin.emit("data", `q${n}`);
+      await tick(40);
+      await sendClick();
+      await tick(140);
+    }
+
+    const sendRowBefore = screen.lines().findIndex((l) => l.includes("enter to send"));
+    const footerBefore = screen.lastContentRow();
+    const topBefore = screen.lines().filter((l) => l.trim()).slice(0, 2).join("\n");
+
+    for (let i = 0; i < 25; i++) { realStdin.emit("data", `${ESC}[<64;1;1M`); await tick(4); }
+    await tick(150);
+
+    const sendRowAfter = screen.lines().findIndex((l) => l.includes("enter to send"));
+    const footerAfter = screen.lastContentRow();
+    const topAfter = screen.lines().filter((l) => l.trim()).slice(0, 2).join("\n");
+
+    assert.ok(sendRowBefore >= 0, "the composer rendered");
+    assert.equal(sendRowAfter, sendRowBefore, "the composer's send row did not move under scroll");
+    assert.equal(footerAfter, footerBefore, "the footer stayed on the terminal's last row");
+    assert.notEqual(topAfter, topBefore, "the transcript window scrolled to show earlier content");
+  } finally {
+    instance.unmount();
+    mouse.dispose();
+    if (prev === undefined) delete process.env.ACTOR0_CONFIG_DIR;
+    else process.env.ACTOR0_CONFIG_DIR = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

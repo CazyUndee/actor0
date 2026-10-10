@@ -73,17 +73,18 @@ export function TextInput({ value, onChange, onSubmit, isActive = true, placehol
 /**
  * The composer box's height for a given draft, in rows.
  *
- * A floor of five keeps the empty composer feeling like a composer rather than
- * a bare input; it grows with pasted newlines so multi-line input is not
- * clipped, capped so a runaway paste cannot push the frame over the terminal
- * (the live region gives up the same rows — see App — so total height is fixed).
+ * Two content rows — the input and the hints/send row — between the borders, so
+ * the box is as small as it can be while still reading as a box. It grows with
+ * pasted newlines so multi-line input is not clipped, capped so a runaway paste
+ * cannot push the frame over the terminal (the scroll window above gives up the
+ * same rows — see App — so total height is fixed).
  */
 export function composerHeight(value: string): number {
   const lines = Math.min(6, Math.max(1, value.split("\n").length));
-  return Math.max(5, lines + 3);
+  return lines + 3;
 }
 
-/** The main composer: a 3-line box, input top-left, send button bottom-right. */
+/** The main composer: a compact box, input on top, send button bottom-right. */
 export function Composer({
   value,
   onChange,

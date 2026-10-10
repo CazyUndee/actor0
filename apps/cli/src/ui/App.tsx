@@ -1,5 +1,5 @@
 import { Box, Text, useApp, useInput } from "ink";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage, ModelClient } from "@actor0/harness";
 import {
   addProvider,
@@ -35,8 +35,9 @@ import { contextWindowTokens } from "@actor0/harness";
 import { parseSlash, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { createToolHost } from "../tools.js";
-import { Banner, LiveView, StatusBar, Transcript, bannerActivity, useTerminalSize } from "./parts.js";
+import { StatusBar, bannerActivity, useTerminalSize } from "./parts.js";
 import { Composer, composerHeight } from "./prompts.js";
+import { bannerRows, entryRows, liveRows, windowRows } from "./scroll.js";
 import { AddProvider } from "./AddProvider.js";
 import { UsagePanel } from "./UsagePanel.js";
 import { ModelPicker } from "./ModelPicker.js";
@@ -106,6 +107,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // Context tokens in the latest request (the input the model just saw), for the
   // status line's "Context N% used". Zero until the first turn.
   const [contextTokens, setContextTokens] = useState(0);
+  // Transcript scroll. Rows scrolled up from the bottom; 0 means "following" the
+  // newest output. The composer is pinned to the bottom of the frame, so this
+  // only ever moves the transcript window above it — see the render below.
+  const [scrollOffset, setScrollOffset] = useState(0);
 
   // Session state lives in refs: it changes on every turn but must never
   // trigger a re-render, because nothing on screen depends on it.
@@ -313,11 +318,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         // Clear the composer first. A command that leaves its own text behind
         // turns the next keystroke into `/helpwhatever`.
         setDraft("");
+        setScrollOffset(0); // a command is the user acting now — jump to the bottom
         runCommand(command);
         return;
       }
 
       setDraft("");
+      setScrollOffset(0); // the user's own turn is at the bottom — follow it
       setHistory((prev) => [input, ...prev.filter((item) => item !== input)].slice(0, 50));
       setConversation((state) => withUserInput(state, input));
       setBusy(true);
@@ -543,6 +550,22 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       mouseLink.onClick = null;
     };
   }, [mode, slashEngaged, busy, submit]);
+
+  // Wheel scrolls the transcript only. It runs whenever the mouse is live
+  // (chat mode), regardless of the draft, and only ever moves `scrollOffset`;
+  // the composer below the window never moves. One notch is three rows.
+  useEffect(() => {
+    if (mode !== "chat") {
+      mouseLink.onScroll = null;
+      return;
+    }
+    mouseLink.onScroll = (notches) => {
+      setScrollOffset((o) => Math.max(0, o + notches * 3));
+    };
+    return () => {
+      mouseLink.onScroll = null;
+    };
+  }, [mode]);
   const slashSel = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
   useInput((input, key) => {
     // While a `/` command is being typed, the popup owns the keys — Codex-style:
@@ -598,11 +621,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   }, { isActive: true });
 
   const { columns, rows } = useTerminalSize();
-  // Live text, the blocked banner, the 5-row composer (bordered box) and the
-  // two-line footer all have to fit in the terminal at the same time. The
-  // composer grew from a single line to a 3-content-row box, so this budget
-  // grew with it.
-  const CHROME_ROWS = 12;
 
   // The footer must describe the key that is actually live. While an approval
   // dialog is open, Esc is *not* cancelling the turn — the dialog is denying the
@@ -616,62 +634,70 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     : mode !== "chat"
       ? "Ctrl+D quits"
       : "/help for commands · Ctrl+D quits";
+
+  // The pinned composer and the status bar are the bottom of the frame; the
+  // transcript is everything above them. `viewport` is the exact number of rows
+  // the scroll window may use, so the composer sits on the terminal's last rows
+  // and never drifts with the transcript. The status bar is three rows (its
+  // top margin plus two lines); the composer's height follows the draft.
+  const statusRows = 3;
+  const blockedRows = conversation.blocked ? 1 : 0;
+  const composerH = composerHeight(draft);
+  const menuOpen = mode !== "chat";
+  // In chat the composer is pinned exactly. A modal (menu/add/picker) is short
+  // and transient, so it is given room and the transcript above it scrolls to
+  // fill the rest — the modal is the thing the user is acting on.
+  const bottomRows = menuOpen
+    ? Math.min(Math.max(composerH, 6), Math.max(6, rows - 8)) + statusRows + blockedRows
+    : composerH + statusRows + blockedRows;
+  const viewport = Math.max(3, rows - bottomRows);
+
+  // Committed entries are flattened to rows once per commit (not per token), so
+  // streaming never re-walks the whole transcript. The opening card and the
+  // in-flight region are rebuilt each frame — the card to move its activity
+  // line, the live rows for the spinner.
+  const entryRowList = useMemo(
+    () => conversation.entries.flatMap((entry) => entryRows(entry, columns)),
+    [conversation.entries, columns],
+  );
+  const live = menuOpen ? [] : liveRows(conversation.live, frame, elapsed, columns, viewport, Boolean(conversation.blocked));
+  const content = [
+    ...bannerRows({
+      title: "actor0",
+      version,
+      model: provider?.model ?? config.model,
+      endpoint,
+      directory: cwd,
+      activity: bannerActivity(conversation.live),
+      hint: "/provider to switch",
+      width: columns,
+    }),
+    ...entryRowList,
+    ...live,
+  ];
+  const visible = windowRows(content, viewport, scrollOffset);
   return (
-    // The top margin is the gap between the scrollback and the part of the UI
-    // that still moves. `<Static>` is positioned absolutely, so this is the only
-    // thing separating the last transcript entry from the composer — without it
-    // the input line is glued to the answer above it. Every entry carries its
-    // own `marginTop`, so this single row is the same rhythm the transcript
-    // already uses internally.
-    <Box flexDirection="column" marginTop={1}>
-      <Transcript
-        entries={conversation.entries}
-        columns={columns}
-        banner={
-          <Banner
-            title="actor0"
-            version={version}
-            model={provider?.model ?? config.model}
-            endpoint={endpoint}
-            directory={cwd}
-            activity={bannerActivity(conversation.live)}
-            hint="/provider to switch"
-            columns={columns}
-          />
-        }
-      />
-
-      {/* The only part of the tree that still moves. Its text is trimmed to the
-          rows the chrome leaves free — see `fitTail` — because Ink's `Box` has
-          no `maxHeight`, and without that trim a streaming answer grows until
-          the frame is taller than the terminal.
-
-          That is not a cosmetic concern. A frame as tall as the terminal is the
-          condition under which Ink abandons its normal path and does
-          `clearTerminal` followed by a full repaint on every frame that
-          produces output, which is precisely what destroyed the terminal's
-          scrollback and left earlier messages unreachable. Keeping the frame
-          shorter than the terminal is what makes Ink write each committed entry
-          once and let it scroll into the scrollback, where the wheel can reach
-          it. It is also why the root Box carries no `height` of its own. */}
-      <Box flexDirection="column" overflow="hidden">
-        <LiveView
-          live={conversation.live}
-          frame={frame}
-          elapsed={elapsed}
-          rows={Math.max(1, rows - CHROME_ROWS - Math.max(0, composerHeight(draft) - 5))}
-          columns={columns}
-        />
-
-        {conversation.blocked ? (
-          <Box marginTop={1}>
-            <Text color={color.warning} wrap="truncate-end">
-              the agent needs you: {conversation.blocked.message}
-            </Text>
-            <Text color={color.dim}> reply to continue, or /clear to start over</Text>
-          </Box>
-        ) : null}
+    // A full-height column: the scroll window on top, then whatever owns the
+    // bottom of the screen, then the status bar. Because the frame is exactly
+    // `rows` tall and the bottom children are laid out last, the composer (or
+    // an open modal) is pinned to the terminal's final rows and the transcript
+    // scrolls above it — the wheel moves only the window.
+    <Box flexDirection="column" height={rows} width={columns}>
+      <Box flexDirection="column" height={viewport} overflow="hidden" flexShrink={0}>
+        {visible.map((node, index) => (
+          // eslint-disable-next-line react/no-array-index-key -- windowed transcript rows are positional and stable within a frame
+          <Fragment key={index}>{node}</Fragment>
+        ))}
       </Box>
+
+      {conversation.blocked ? (
+        <Box marginTop={1}>
+          <Text color={color.warning} wrap="truncate-end">
+            the agent needs you: {conversation.blocked.message}
+          </Text>
+          <Text color={color.dim}> reply to continue, or /clear to start over</Text>
+        </Box>
+      ) : null}
 
       {mode === "menu" ? (
         <ProviderMenu
