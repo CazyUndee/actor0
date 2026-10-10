@@ -16,7 +16,7 @@
  * Run: npm run preview -w @actor0/cli
  */
 import { PassThrough } from "node:stream";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createElement } from "react";
@@ -533,6 +533,26 @@ const askedFor = (input: string, n: number): Promise<void> =>
   waitFor(() => (roundsAsked.get(input) ?? 0) >= n);
 
 async function main(): Promise<void> {
+  // Isolate the data and config dirs, not just the workspace. Without this the
+  // preview writes every scripted turn to the real ~/.local/share/actor0 usage
+  // log and session store — a preview run should look at the app, not leave
+  // fake turns and sessions on the user's disk. Saved and restored around the
+  // run so an outer shell's own settings are untouched.
+  const prevData = process.env.ACTOR0_DATA_DIR;
+  const prevConfig = process.env.ACTOR0_CONFIG_DIR;
+  const previewData = mkdtempSync(join(tmpdir(), "actor0-preview-data-"));
+  const previewConfig = mkdtempSync(join(tmpdir(), "actor0-preview-config-"));
+  process.env.ACTOR0_DATA_DIR = previewData;
+  process.env.ACTOR0_CONFIG_DIR = previewConfig;
+  const restoreDirs = () => {
+    if (prevData === undefined) delete process.env.ACTOR0_DATA_DIR;
+    else process.env.ACTOR0_DATA_DIR = prevData;
+    if (prevConfig === undefined) delete process.env.ACTOR0_CONFIG_DIR;
+    else process.env.ACTOR0_CONFIG_DIR = prevConfig;
+    rmSync(previewData, { recursive: true, force: true });
+    rmSync(previewConfig, { recursive: true, force: true });
+  };
+
   const workspace = mkdtempSync(join(tmpdir(), "actor0-preview-"));
   writeFileSync(join(workspace, "notes.md"), "# Notes\n\nThe CLI consumes the harness.\n");
 
@@ -1064,6 +1084,7 @@ const ask = async (question: string): Promise<void> => {
   await show("33 · Esc hid it; editing the token reopened it");
 
   app.unmount();
+  restoreDirs();
   process.exit(0);
 }
 
