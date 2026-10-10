@@ -5,6 +5,7 @@ import { ConfigError, loadConfig } from "./config.js";
 import { FlagError, parseFlags, resolveCwd } from "./flags.js";
 import { latestSession, loadSession } from "./session.js";
 import { App } from "./ui/App.js";
+import { installMouse } from "./ui/mouse.js";
 
 /**
  * Entry point.
@@ -118,6 +119,10 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Wrap the real streams so a click on the send button submits the draft:
+  // stdout feeds a screen model that locates the button, and stdin has mouse
+  // reports stripped off before Ink reads it (see ui/mouse.ts).
+  const mouse = installMouse(process.stdin, process.stdout);
   const instance = render(
     createElement(App, {
       cwd,
@@ -136,9 +141,10 @@ async function main(): Promise<void> {
     }),
     // Ctrl+C is handled in the app: it cancels a running turn first and only
     // exits when there is nothing to cancel.
-    { exitOnCtrlC: false },
+    { exitOnCtrlC: false, stdin: mouse.stdin, stdout: mouse.stdout },
   );
 
+  mouse.dispose();
   await instance.waitUntilExit();
 }
 

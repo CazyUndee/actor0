@@ -45,6 +45,7 @@ import { ProviderMenu } from "./ProviderMenu.js";
 import { SlashPopup } from "./SlashPopup.js";
 import { providerLabel } from "../provider-presets.js";
 import { matchSlashCommands } from "../slash.js";
+import { disableMouse, enableMouse, mouseLink, SEND_ROWS_ABOVE_FOOTER, SEND_X_MARGIN } from "./mouse.js";
 
 /**
  * The root component, and the only place the CLI holds state.
@@ -112,6 +113,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const sessionIdRef = useRef<string>(resumed?.id ?? newSessionId());
   const abortRef = useRef<AbortController | null>(null);
   const conversationRef = useRef(conversation);
+  // Latest draft, readable from the mouse-click handler without re-subscribing
+  // it on every keystroke.
+  const draftRef = useRef(draft);
   conversationRef.current = conversation;
 
   // What the transcript would show if the turn ended right now: the last
@@ -503,6 +507,42 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const slashToken = /^\/([a-z]*)$/i.exec(draft)?.[1];
   const slashEngaged = mode === "chat" && slashToken !== undefined && slashDismissed !== slashToken;
   const slashMatches = slashEngaged ? matchSlashCommands(slashToken!) : [];
+  // Kept current so the mouse handler below always sees the fresh draft.
+  draftRef.current = draft;
+
+  // Real mouse-to-send. Click reporting is on only in the chat composer — a
+  // menu or picker replaced it, so there is no send button to hit there, and
+  // terminal mouse mode is worth keeping off when it has nothing to do.
+  useEffect(() => {
+    if (mode === "chat") enableMouse();
+    else disableMouse();
+    return () => disableMouse();
+  }, [mode]);
+
+  // Send when a left-click lands squarely on the composer's send button — the
+  // same `submit` Enter uses. The button's row is not a constant (it drifts with
+  // the scrollback), so it is read from the screen model that Ink's own output
+  // feeds; see ui/mouse.ts. Every guard is a miss-safe: a click that is not on
+  // the button, or with nothing to send, simply does nothing.
+  useEffect(() => {
+    mouseLink.onClick = ({ x, y }) => {
+      if (mode !== "chat" || slashEngaged || busy) return;
+      const value = draftRef.current;
+      if (!value.trim()) return;
+      const screen = mouseLink.screen;
+      if (!screen) return;
+      const lastContent = screen.lastContentRow();
+      if (lastContent < 0) return;
+      const sendRow = lastContent - SEND_ROWS_ABOVE_FOOTER;
+      if (sendRow < 0) return;
+      if (y !== sendRow + 1) return; // mouse rows are 1-based; screen rows are 0-based
+      if (x < mouseLink.columns - SEND_X_MARGIN) return; // the button is right-aligned
+      submit(value);
+    };
+    return () => {
+      mouseLink.onClick = null;
+    };
+  }, [mode, slashEngaged, busy, submit]);
   const slashSel = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
   useInput((input, key) => {
     // While a `/` command is being typed, the popup owns the keys — Codex-style:
