@@ -152,8 +152,9 @@ export function Composer({
           placeholder={busy ? "working — Esc to cancel" : "ask something…"}
         />
       </Box>
-      {/* Send button, pinned to the bottom-right of the box. */}
-      <Box justifyContent="flex-end">
+      {/* Bottom row: key hints on the left, send button on the right. */}
+      <Box justifyContent="space-between">
+        <Text color={color.dim}>{busy ? "esc to cancel" : "enter to send · / for commands · ↑ history"}</Text>
         <Text
           backgroundColor={canSend ? color.accent : undefined}
           color={canSend ? color.accentText : color.dim}
