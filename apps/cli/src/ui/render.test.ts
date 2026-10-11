@@ -92,3 +92,13 @@ test("a prompt taller than the box scrolls and counts what is above", () => {
   assert.ok(/↑ \d+ more lines?/.test(out), "the scrolled-off lines are counted");
   assert.ok(built.rows.length <= 6, "the box never exceeds its max height");
 });
+
+test("streaming reasoning is a titled multi-row card, not one line", () => {
+  const reasoning = "First I weigh separate chaining, then open addressing, then the load factor and resizing cost, which is a fair amount of text.";
+  const rows = liveLines({ text: "", reasoning }, 0, 0, COLS, 20);
+  const out = text(rows);
+  assert.ok(out.includes("∴ thinking"), "the streaming reasoning is a titled card");
+  assert.ok(rows.length > 3, `it streams onto several rows (${rows.length})`);
+  // Readable contrast: the body is the muted tone, not the near-invisible dim.
+  assert.ok(rows.some((r) => r.some((s) => s.color !== undefined && s.text.trim().length > 0)), "the reasoning has visible text");
+});

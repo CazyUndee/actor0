@@ -9,6 +9,7 @@ import { render } from "ink";
 import type { ModelClient } from "@actor0/harness";
 import { App } from "./App.js";
 import { addProvider, withModel, type CliConfig } from "../config.js";
+import { detectEnvironment } from "../environment.js";
 import type { Screen } from "./term.js";
 
 const tick = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
@@ -157,6 +158,10 @@ test("Enter submits: a turn runs with the typed text", async () => {
 });
 
 test("the wheel scrolls the transcript but leaves the composer's prompt in place", async () => {
+  // Warm the shell probe up front (and await it), so no turn has to spawn it —
+  // otherwise the first turn's spawn is a timing dependency that flakes under
+  // parallel load. This is the load flake AGENTS.md warns about.
+  await detectEnvironment(process.cwd());
   const dummy: ModelClient = {
     async *stream() { yield { type: "done", text: "", complete: true } as never; },
   };

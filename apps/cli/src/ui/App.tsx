@@ -46,6 +46,7 @@ import { contextWindowTokens } from "@actor0/harness";
 import { parseSlash, matchSlashCommands, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { createToolHost } from "../tools.js";
+import { createTaskDelegate } from "../subagent.js";
 import { Screen } from "./term.js";
 import { parseInput, type InputEvent } from "./input.js";
 import {
@@ -178,7 +179,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [manageProvider, setManageProvider] = useState<string | null>(null);
   const [manageCursor, setManageCursor] = useState(0);
   const [manageConfirm, setManageConfirm] = useState(false);
-  const [expandReasoning, setExpandReasoning] = useState(false);
+  const [expandReasoning, setExpandReasoning] = useState(true);
   const [modelCursor, setModelCursor] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
   const [thinkingCursor, setThinkingCursor] = useState(0);
@@ -204,7 +205,18 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     liveRef.current = messages;
   };
 
-  const toolHost = useMemo(() => createToolHost({ cwd }), [cwd]);
+  const taskDelegateHost = (activeProvider: ResolvedProvider): ReturnType<typeof createToolHost> =>
+    // Sub-agents run through the same provider and endpoint as the parent
+    // turn (or the injected test transport), so delegation never needs its
+    // own credential path.
+    createToolHost({
+      cwd,
+      taskDelegate: createTaskDelegate({
+        provider: activeProvider,
+        cwd,
+        ...(transport ? { client: transport } : {}),
+      }),
+    });
 
   const resolved = useMemo(() => {
     try {
@@ -395,7 +407,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           ...(transport ? { client: transport } : {}),
           messages: messagesRef.current,
           input,
-          toolHost,
+          toolHost: taskDelegateHost(activeProvider),
           signal: controller.signal,
           cwd,
           ...(config.systemPrompt ? { systemPrompt: config.systemPrompt } : {}),

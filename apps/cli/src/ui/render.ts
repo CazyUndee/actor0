@@ -4,7 +4,7 @@ import { HELP_TEXT } from "../slash.js";
 import { color } from "../theme.js";
 import { parseDiffBlock } from "../diff.js";
 import { formatTokens } from "../usage.js";
-import { flattenText, proseWidth, reasonText, toolRowFailed } from "./parts.js";
+import { flattenText, proseWidth, toolRowFailed } from "./parts.js";
 import { renderMarkdown } from "./markdown.js";
 
 /** A clear, human name for a tool — "Bash", not the cryptic "$". */
@@ -205,24 +205,20 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false):
     }
 
     case "reasoning": {
-      const { title, body } = reasonText(entry.text);
-      const label = `∴ ${title || "thinking"}`;
-      // Collapsed by default: a one-line preview with an expand hint, so the
-      // model's raw chain-of-thought does not flood the transcript.
-      if (!expandReasoning) {
-        const flat = body.replace(/\s+/g, " ").trim();
-        const room = Math.max(10, cols - label.length - 14);
-        const cut = flat.slice(0, room);
-        const row: Seg[] = [
-          { text: label, color: color.dim },
-          { text: `  ${cut}${flat.length > cut.length ? "…" : ""}`, color: color.dim, dim: true },
-          { text: "  ⌃r", color: color.dim, dim: true },
-        ];
-        return [blank(), ...box([row], cols, { border: color.dim })];
-      }
-      const rows: Seg[][] = [plain(label, color.dim)];
-      if (body) for (const line of flattenText(body, proseWidth(cols - 6))) rows.push(plain(line, color.muted, true));
-      return [blank(), ...box(rows, cols, { border: color.dim })];
+      // A titled card that shows the reasoning as real rows — not a single
+      // collapsed line — in a dimmer tone than an answer so it reads as
+      // thinking. Expanded by default; Ctrl+R collapses it to a one-line preview
+      // for when the chain-of-thought is long and noisy.
+      const rows: Seg[][] = expandReasoning
+        ? flattenText(entry.text, proseWidth(cols - 6)).map((l) => plain(l, color.muted))
+       : (() => {
+            const flat = entry.text.replace(/\s+/g, " ").trim();
+            const room = Math.max(20, cols - 22);
+            const cut = flat.length > room ? `${flat.slice(0, room)}…` : flat;
+            return [[{ text: cut, color: color.muted }, { text: "  ⌃r expand", color: color.dim }]];
+          })();
+      if (rows.length === 0) rows.push(plain("…", color.muted));
+      return [blank(), ...box(rows, cols, { border: color.dim, title: "∴ thinking" })];
     }
 
     case "plan": {
@@ -242,19 +238,19 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false):
       const head: Seg[] = [
         { text: `${failed ? "✗" : "✓"} `, color: tone },
         { text: toolDisplayName(entry.name), color: color.text, bold: true },
-        ...(entry.target ? [{ text: `  ${entry.target}`, color: color.dim } as Seg] : []),
+        ...(entry.target ? [{ text: `  ${entry.target}`, color: color.muted } as Seg] : []),
       ];
       const rows: Seg[][] = [head];
       if (entry.name === "edit" && !failed) {
         for (const d of parseDiffBlock(entry.output)) {
           const sign = d.kind === "add" ? "+ " : d.kind === "remove" ? "- " : "  ";
-          const t = d.kind === "add" ? color.success : d.kind === "remove" ? color.error : color.dim;
+          const t = d.kind === "add" ? color.success : d.kind === "remove" ? color.error : color.muted;
           rows.push(plain(`  ${sign}${d.text.replace(/\t/g, "    ")}`, t));
         }
       } else {
-        // Output reads as an indented, dimmed block under the header — line
-        // structure preserved, long output cut with a count, no cryptic marker.
-        for (const line of toolOutputLines(failed ? "error" : "ok", entry.output, cols - 6)) rows.push(plain(`  ${line}`, color.dim, true));
+        // Output reads as an indented block under the header, in the muted tone
+        // — `dim` was nearly invisible on the filled background.
+        for (const line of toolOutputLines(failed ? "error" : "ok", entry.output, cols - 6)) rows.push(plain(`  ${line}`, color.muted));
       }
       // A grey, highlighted rounded rectangle — the tool call reads as its own
       // block rather than more transcript chatter.
@@ -300,7 +296,7 @@ export function helpBox(cols: number): Seg[][] {
 }
 
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
-export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = false): Seg[][] {
+export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true): Seg[][] {
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
   if (!busy) return [];
   const spin = waitingOnUser ? "⏸" : "◐◓◑◒"[frame % 4];
@@ -309,15 +305,24 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
   else if (live.tool) out.push([{ text: `${spin} `, color: color.accent }, { text: `${toolDisplayName(live.tool.name)}${live.tool.target ? `  ${live.tool.target}` : ""}`, color: color.muted }]);
   else if (live.status) out.push([{ text: `${spin} `, color: color.accent }, { text: live.status, color: color.muted }]);
   if (live.reasoning.trim()) {
+    // Stream it as a titled card that grows row by row, the same shape as the
+    // committed block — the reasoning is visible while it is generated, not a
+    // single line. Ctrl+R collapses to a preview.
     if (expandReasoning) {
-      out.push(plain("∴ thinking", color.dim));
-      for (const l of flattenText(live.reasoning.trimEnd(), proseWidth(cols - 2)).slice(-budget)) out.push(plain(`  ${l}`, color.muted, true));
+      const lines = flattenText(live.reasoning.trimEnd(), proseWidth(cols - 6));
+      const room = Math.max(1, budget - 5); // card borders + the answer box below
+      const dropped = Math.max(0, lines.length - room);
+      const rows: Seg[][] = [];
+      if (dropped > 0) rows.push(plain(`↑ ${dropped} more line${dropped === 1 ? "" : "s"}`, color.muted, true));
+      for (const l of dropped > 0 ? lines.slice(lines.length - room) : lines) rows.push(plain(l, color.muted));
+      out.push(blank());
+      out.push(...box(rows, cols, { border: color.dim, title: "∴ thinking" }));
     } else {
-      // Collapsed: the latest thought, tail-trimmed to one line.
       const flat = live.reasoning.replace(/\s+/g, " ").trim();
-      const room = Math.max(20, cols - 20);
+      const room = Math.max(20, cols - 22);
       const cut = flat.length > room ? `…${flat.slice(-room)}` : flat;
-      out.push([{ text: "∴ thinking ", color: color.dim }, { text: cut, color: color.dim, dim: true }, { text: "  ⌃r", color: color.dim, dim: true }]);
+      out.push(blank());
+      out.push(...box([[{ text: cut, color: color.muted }, { text: "  ⌃r expand", color: color.dim }]], cols, { border: color.dim, title: "∴ thinking" }));
     }
   }
   // The streamed answer is boxed from the first token, identical to the
