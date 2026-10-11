@@ -48,6 +48,14 @@ test("reasoning expands to the full body when asked", () => {
   assert.ok(expanded.includes("weigh them"), "the full body is shown when expanded");
 });
 
+test("a plan shows its title once and renders its body as markdown", () => {
+  const entry: Entry = { kind: "plan", title: "My Plan", plan: "## My Plan\n\n- step one\n- step two" };
+  const out = text(entryLines(entry, COLS));
+  assert.equal((out.match(/My Plan/g) ?? []).length, 1, "the title is not repeated from the body's leading heading");
+  assert.ok(out.includes("◆ My Plan"), "the title is marked");
+  assert.ok(out.includes("step one") && out.includes("step two"), "the body renders as a list");
+});
+
 test("streamed text is boxed from the first token", () => {
   const rows = liveLines({ text: "hello world", reasoning: "" }, 0, 0, COLS, 20);
   const out = text(rows);

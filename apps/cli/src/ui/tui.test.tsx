@@ -167,22 +167,26 @@ test("Enter submits: a turn runs with the typed text", async () => {
 });
 
 test("the wheel scrolls the transcript but leaves the composer's prompt in place", async () => {
-  const transport: ModelClient = {
-    async *stream() {
-      yield { type: "token", delta: "ok" } as never;
-      yield { type: "done", text: "ok", complete: true } as never;
-    },
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
   };
-  const { screen, stdin, unmount } = await mount({ transport });
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
   try {
-    // Build a transcript taller than the viewport, then start a new draft and scroll.
-    stdin.write("one");
-    await tick(9000); // the first turn spawns a shell for the environment probe
-    for (const word of ["two", "three", "four", "five", "six"]) {
+    // Run several turns to build a transcript taller than the viewport. Wait
+    // for each to settle by polling the composer back to idle, not a fixed
+    // delay: the first turn spawns the environment probe, so under parallel
+    // load a fixed wait lets the next submit be refused as busy and the
+    // transcript never grows tall enough to scroll (a load flake).
+    for (const word of ["one", "two", "three", "four", "five", "six"]) {
       stdin.write(word);
       await tick(60);
       stdin.write("\r");
-      await tick(400);
+      // The composer's own glyph is "·" while a turn runs and "❯" when idle.
+      for (let i = 0; i < 40; i += 1) {
+        await tick(200);
+        const composer = screen.last.join("\n").split("\n").slice(-4).join("\n");
+        if (composer.includes("❯")) break;
+      }
     }
     stdin.write("draft text");
     await tick(250);

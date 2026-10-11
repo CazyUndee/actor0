@@ -5,6 +5,7 @@ import { color } from "../theme.js";
 import { parseDiffBlock } from "../diff.js";
 import { formatTokens } from "../usage.js";
 import { flattenText, proseWidth, reasonText, toolRowFailed } from "./parts.js";
+import { renderMarkdown } from "./markdown.js";
 
 /** A clear, human name for a tool — "Bash", not the cryptic "$". */
 function toolDisplayName(name: string): string {
@@ -198,8 +199,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false):
       ];
 
     case "assistant": {
-      const lines = flattenText(entry.text, proseWidth(cols - 4));
-      const rows = lines.map((l) => plain(l));
+      const rows = renderMarkdown(entry.text, cols - 4);
       if (entry.partial) rows.push(plain("… response ended before completion", color.warning));
       return [blank(), ...box(rows, cols, { border: color.dim })];
     }
@@ -225,8 +225,16 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false):
       return [blank(), ...box(rows, cols, { border: color.dim })];
     }
 
-    case "plan":
-      return [blank(), plain(entry.title, color.info), ...flattenText(entry.plan, proseWidth(cols)).map((l) => plain(l, color.muted))];
+    case "plan": {
+      // The title is the plan's own heading; the body is markdown, rendered the
+      // same way an answer is. The model often repeats the title as a leading
+      // heading in the body — drop it, or the heading shows twice.
+      const lines = entry.plan.split("\n");
+      const first = lines.findIndex((l) => l.trim() !== "");
+      const h = first >= 0 ? /^#{1,6}\s+(.*)$/.exec(lines[first]!.trim()) : null;
+      const body = h && h![1]!.trim() === entry.title.trim() ? lines.filter((_, i) => i !== first).join("\n") : entry.plan;
+      return [blank(), plain(`◆ ${entry.title}`, color.info, true), ...renderMarkdown(body, cols - 4)];
+    }
 
     case "tool": {
       const failed = toolRowFailed(entry);
@@ -317,14 +325,12 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
   // snap when it lands. When it outgrows the viewport the older lines are
   // counted at the top of the box, not silently dropped.
   if (live.text) {
-    const lines = flattenText(live.text, proseWidth(cols - 4));
+    const all = renderMarkdown(live.text, cols - 4);
     // Leave room for the leading blank, a collapsed reasoning line, the box's
     // two borders and the count, so the box and its indicator both fit.
     const room = Math.max(1, budget - 5);
-    const dropped = Math.max(0, lines.length - room);
-    const rows: Seg[][] = [];
-    if (dropped > 0) rows.push(plain(`↑ ${dropped} more line${dropped === 1 ? "" : "s"}`, color.dim, true));
-    for (const l of dropped > 0 ? lines.slice(lines.length - room) : lines) rows.push(plain(l));
+    const dropped = Math.max(0, all.length - room);
+    const rows = dropped > 0 ? [plain(`↑ ${dropped} more line${dropped === 1 ? "" : "s"}`, color.dim, true), ...all.slice(all.length - room)] : all;
     out.push(blank());
     out.push(...box(rows, cols, { border: color.dim }));
   }
