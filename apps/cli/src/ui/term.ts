@@ -47,14 +47,19 @@ export class Screen {
    * Write a full grid of `rows` lines, top to bottom, in place. Home, then each
    * line cleared and written — the alternate screen never scrolls, so this only
    * ever repaints the visible frame and the composer row is stable.
+   *
+   * Lines are written whole, never sliced by length: they are coloured strings,
+   * so `length` counts the ANSI escapes (zero width on screen) and slicing by it
+   * would cut the right edge off mid-escape — a missing border, a teleporting
+   * cursor, garbage. Each line is built to exactly `cols` visible columns, so it
+   * fills the cleared row and never wraps.
    */
   render(rows: string[]): void {
     this.begin();
     this.stream.write("\x1b[H");
     for (let i = 0; i < this.rows; i += 1) {
       this.stream.write("\x1b[2K");
-      const line = rows[i] ?? "";
-      this.stream.write(line.length > this.cols ? line.slice(0, this.cols) : line);
+      this.stream.write(rows[i] ?? "");
       this.stream.write(i < this.rows - 1 ? "\r\n" : "");
     }
   }

@@ -230,6 +230,21 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     void detectEnvironment(cwd);
   }, [cwd]);
 
+  // Redraw at the new size on resize. The render effect only runs on a state
+  // change, and a resize is not one, so without this the old-size grid is left
+  // on a resized terminal and everything after it is misaligned.
+  const [, forceRedraw] = useState(0);
+  useEffect(() => {
+    const onResize = (): void => {
+      screen.setSize(process.stdout.rows ?? 24, process.stdout.columns ?? 80);
+      forceRedraw((n) => n + 1);
+    };
+    process.stdout.on("resize", onResize);
+    return () => {
+      process.stdout.off("resize", onResize);
+    };
+  }, [screen]);
+
   // Spinner + elapsed clock.
   useEffect(() => {
     if (!busy) {
@@ -856,6 +871,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const headerInfo = [provider?.model ?? config.model, endpoint, branch ? `⎇ ${branch}` : undefined, context?.text, tokensToday > 0 ? `≡ ${formatTokens(tokensToday)} today` : undefined].filter((p): p is string => Boolean(p)).join(" · ");
     const live = menuOpen ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked));
     const transcript = windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
+    // Pad the transcript to its full height so the composer below it is pushed
+    // to the bottom of the frame — an empty transcript must not leave the
+    // composer floating up under the header.
+    while (transcript.length < transcriptV) transcript.push([{ text: " ".repeat(innerW), dim: true }]);
 
     // Assemble the inner column, then frame it.
     const inner: Seg[][] = [

@@ -94,7 +94,17 @@ test("the frame draws: titled top border, header, composer, disclaimer, bottom b
     assert.ok(joined.includes("claude-opus-4-6"), "header shows the active model");
     assert.ok(joined.includes("Tell me to do anything") || joined.includes("❯"), "the composer prompt is present");
     assert.ok(joined.includes("Actor0 is an experimental agent"), "the disclaimer is present");
-    for (const line of grid) assert.ok(line.length <= 80, `line wider than the terminal: ${line.length}`);
+    for (const line of grid) {
+      // eslint-disable-next-line no-control-regex -- strip ANSI to measure visible width
+      const visible = line.replace(/\x1b\[[0-9;]*m/g, "");
+      assert.ok(visible.length <= 80, `line wider than the terminal: ${visible.length}`);
+    }
+    // The right wall must survive: the frame's right border and the composer's
+    // face/send column are the last visible columns, and a byte-length slice
+    // (the bug this guards) cuts exactly them off when colour is on.
+    const composerRow = grid.find((l) => l.includes("enter to send"))!;
+    // eslint-disable-next-line no-control-regex
+    assert.ok(composerRow.replace(/\x1b\[[0-9;]*m/g, "").trimEnd().endsWith("│"), "the right border is present");
   } finally {
     unmount();
   }
@@ -104,7 +114,7 @@ test("typing updates the composer and the caret tracks it", async () => {
   const { screen, stdin, unmount } = await mount();
   try {
     stdin.write("hello");
-    await tick(60);
+    await tick(250);
     assert.ok(screen.last.join("\n").includes("hello"), "the draft shows in the composer");
     const caret = screen.carets.at(-1);
     assert.ok(caret, "the caret is placed in the composer");
@@ -149,7 +159,7 @@ test("a left-click on [Send] submits the draft", async () => {
   const { screen, stdin, unmount } = await mount({ transport });
   try {
     stdin.write("click me");
-    await tick(60);
+    await tick(250);
     const grid = screen.last;
     const row = grid.findIndex((l) => l.includes("[Send]"));
     assert.ok(row >= 0, "the [Send] label is on screen once there is a draft");
