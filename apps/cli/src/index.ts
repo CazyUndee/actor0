@@ -31,8 +31,14 @@ adding one — sign in with Claude or ChatGPT, or paste an API key for any
 OpenAI-compatible or Anthropic endpoint. Manage them any time with /provider or
 /setup. For one run, ACTOR0_BASE_URL / ACTOR0_API_KEY / ACTOR0_MODEL override
 the endpoint. Config lives in $XDG_CONFIG_HOME/actor0; sessions in
-$XDG_DATA_HOME/actor0.
+$XDG_DATA_HOME/actor0. Set ACTOR0_DISABLE_MOUSE=1 to turn off mouse capture
+(keeps keyboard scroll, restores terminal-native copy-paste).
 `;
+
+/** An env flag is set when it is present and not "0"/"false"/"". */
+function truthy(value: string | undefined): boolean {
+  return value !== undefined && value !== "" && value !== "0" && value.toLowerCase() !== "false";
+}
 
 async function readVersion(): Promise<string> {
   const { readFileSync } = await import("node:fs");
@@ -122,21 +128,34 @@ async function main(): Promise<void> {
   // Our own renderer owns the terminal. Ink is used only to host React's state
   // and effects, and is handed streams it writes nothing to — the App returns
   // null, so Ink draws nothing and never fights the frame (see ui/App.tsx).
-  const screen = new Screen(process.stdout);
+  // Mouse capture is opt-out (it breaks terminal-native copy-paste); keyboard
+  // scroll — PgUp/PgDn, the arrows — works either way.
+  const screen = new Screen(process.stdout, { mouse: !truthy(process.env.ACTOR0_DISABLE_MOUSE) });
   const { PassThrough } = await import("node:stream");
   const sink = new PassThrough();
   sink.resume();
   const instanceRef: { current: ReturnType<typeof render> | undefined } = { current: undefined };
-  const exit = (): void => {
+  const restoreTerminal = (): void => {
     screen.dispose();
     try {
       process.stdin.setRawMode?.(false);
     } catch {
       // not a TTY — nothing to restore
     }
+  };
+  const exit = (): void => {
+    restoreTerminal();
     instanceRef.current?.unmount();
     process.exit(0);
   };
+  // A `kill`, a crash, or a closed terminal must not leave the user stranded in
+  // the alt screen with the mouse captured — restore it on the way down.
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(sig, () => {
+      restoreTerminal();
+      process.exit(sig === "SIGINT" ? 130 : 143);
+    });
+  }
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
   process.stdin.setEncoding("utf8");
   instanceRef.current = render(

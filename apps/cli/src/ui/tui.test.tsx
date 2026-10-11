@@ -250,7 +250,7 @@ test("up-arrow edits the text instead of recalling history", async () => {
   }
 });
 
-test("the provider menu lists human-readable providers and an add entry", async () => {
+test("the provider menu is a panel with human-readable labels and an add entry", async () => {
   const dummy: ModelClient = {
     async *stream() { yield { type: "done", text: "", complete: true } as never; },
   };
@@ -261,8 +261,12 @@ test("the provider menu lists human-readable providers and an add entry", async 
     stdin.write("\r");
     await tick(150);
     const menu = screen.last.join("\n");
-    assert.ok(menu.includes("Anthropic API - Direct"), "the provider menu shows the human-readable provider label");
-    assert.ok(menu.includes("add a new provider"), "the menu offers an explicit add-provider entry, not a hidden key");
+    assert.ok(menu.includes("Providers"), "the menu is a titled panel");
+    assert.ok(menu.includes("Anthropic API - Direct"), "the provider shows its human-readable label");
+    assert.ok(menu.includes("Add provider"), "the panel offers an explicit add-provider entry");
+    assert.ok(menu.includes("→ Manage"), "the panel advertises Right-arrow to manage");
+    assert.ok(menu.includes("●"), "the focused row's bullet is filled");
+    assert.ok(!menu.includes("❯"), "no caret pushes the rows in");
   } finally {
     unmount();
   }
@@ -298,7 +302,7 @@ test("the model picker windows a long list and filters it as you type", async ()
   }
 });
 
-test("the provider menu's add entry opens the add flow on enter", async () => {
+test("the provider panel's add entry opens the add flow on enter", async () => {
   const dummy: ModelClient = {
     async *stream() { yield { type: "done", text: "", complete: true } as never; },
   };
@@ -308,21 +312,17 @@ test("the provider menu's add entry opens the add flow on enter", async () => {
     await tick(60);
     stdin.write("\r");
     await tick(120);
-    // The list is: provider, "manage models…", "add a new provider…".
-    stdin.write("\x1b[B"); // manage models
-    await tick(40);
-    stdin.write("\x1b[B"); // add a new provider
+    stdin.write("\x1b[B"); // down onto 'Add provider'
     await tick(80);
     stdin.write("\r");
     await tick(120);
-    const add = screen.last.join("\n");
-    assert.ok(add.includes("add a provider"), "enter on the add entry opened the add-provider flow");
+    assert.ok(screen.last.join("\n").includes("add a provider"), "enter on the add entry opened the add-provider flow");
   } finally {
     unmount();
   }
 });
 
-test("the provider menu offers manage-models and filters as you type", async () => {
+test("right arrow opens the manage screen for the highlighted provider", async () => {
   const dummy: ModelClient = {
     async *stream() { yield { type: "done", text: "", complete: true } as never; },
   };
@@ -332,22 +332,24 @@ test("the provider menu offers manage-models and filters as you type", async () 
     await tick(60);
     stdin.write("\r");
     await tick(120);
-    const menu = screen.last.join("\n");
-    assert.ok(menu.includes("manage models"), "the menu offers to manage an existing provider's models");
-    assert.ok(menu.includes("add a new provider"), "the menu offers to add a provider");
-    assert.ok(menu.includes("●") && menu.includes("○"), "rows are bullets (filled/open), not a caret");
-    assert.ok(!menu.includes("❯"), "no caret pushes the rows in");
-    // Typing filters the provider list.
-    stdin.write("anthropic");
+    // Typing filters the provider list, like every other menu.
+    stdin.write("claude");
     await tick(100);
-    const filtered = screen.last.join("\n");
-    assert.ok(filtered.includes("search anthropic"), "the search line shows the query");
+    assert.ok(screen.last.join("\n").includes("search claude"), "the provider panel filters as you type");
+    stdin.write("\x7f"); // backspace clears the filter
+    await tick(60);
+    stdin.write("\x1b[C"); // right arrow → manage the highlighted provider
+    await tick(100);
+    const manage = screen.last.join("\n");
+    assert.ok(manage.includes("Manage provider"), "right arrow opens the manage screen");
+    assert.ok(manage.includes("Change model") && manage.includes("Test connection") && manage.includes("Remove provider"), "the manage screen lists its actions");
+    assert.ok(manage.includes("Endpoint"), "the manage screen shows the provider's details");
   } finally {
     unmount();
   }
 });
 
-test("manage models enters the add flow for the active provider", async () => {
+test("the manage screen's edit action re-discovers the provider's models", async () => {
   const dummy: ModelClient = {
     async *stream() { yield { type: "done", text: "", complete: true } as never; },
   };
@@ -357,14 +359,16 @@ test("manage models enters the add flow for the active provider", async () => {
     await tick(60);
     stdin.write("\r");
     await tick(120);
-    stdin.write("\x1b[B"); // onto 'manage models for claude…'
+    stdin.write("\x1b[C"); // manage
+    await tick(100);
+    stdin.write("\x1b[B"); // down to 'Edit provider'
     await tick(60);
     stdin.write("\r");
-    await tick(60);
-    // The flow opens (mode switches to add) — the provider menu is replaced by
-    // the listing phase, whether or not the network fetch then succeeds.
+    await tick(80);
+    // It leaves the manage screen and enters the model-listing flow, whether or
+    // not the network fetch then succeeds.
     const frame = screen.last.join("\n");
-    assert.ok(frame.includes("listing") || !frame.includes("providers"), "manage models leaves the provider menu and enters the flow");
+    assert.ok(frame.includes("listing") || !frame.includes("Manage provider"), "edit provider enters the flow");
   } finally {
     unmount();
   }

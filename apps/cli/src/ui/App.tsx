@@ -52,7 +52,9 @@ import {
   entryLines,
   liveLines,
   composerRows,
-  providerMenuRows,
+  providerPanelRows,
+  managePanelRows,
+  panel,
   modelPickerRows,
   thinkingPickerRows,
   usagePanelRows,
@@ -109,7 +111,7 @@ export type AppProps = {
   onExit: () => void;
 };
 
-type Mode = "chat" | "menu" | "add" | "usage" | "model" | "thinking";
+type Mode = "chat" | "menu" | "manage" | "add" | "usage" | "model" | "thinking";
 
 type AddPhase =
   | { kind: "kind" }
@@ -158,6 +160,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // the same shape: a cursor over its (filtered) items and a search query.
   const [menuIndex, setMenuIndex] = useState(0);
   const [providerQuery, setProviderQuery] = useState("");
+  const [manageProvider, setManageProvider] = useState<string | null>(null);
+  const [manageCursor, setManageCursor] = useState(0);
+  const [manageConfirm, setManageConfirm] = useState(false);
   const [modelCursor, setModelCursor] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
   const [thinkingCursor, setThinkingCursor] = useState(0);
@@ -482,20 +487,20 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
    * more to add — the same multi-select as the add flow, but it grows the
    * existing provider instead of registering a new one.
    */
-  const manageModels = (): void => {
-    const active = activeNamedProvider(config);
-    if (!active) {
-      notice("warn", "no active provider — switch to one, or add a new one");
+  const manageModels = (name?: string): void => {
+    const target = name ? namedProviders(config).find((p) => p.name === name) : activeNamedProvider(config);
+    if (!target) {
+      notice("warn", "no such provider — switch to one, or add a new one");
       return;
     }
-    const label = providerLabel(active);
+    const label = providerLabel(target);
     setAdd({ kind: "working", label, note: `listing ${label} models…` });
     setMode("add");
-    void fetchModelInfos(active as never)
+    void fetchModelInfos(target as never)
       .then((infos) => {
         const windows: Record<string, number> = {};
         for (const info of infos) if (info.contextWindow !== undefined) windows[info.id] = info.contextWindow;
-        setAdd({ kind: "models", label, base: active as never, models: infos.map((i) => i.id), cursor: 0, chosen: new Set(), windows, query: "", existingProvider: active.name });
+        setAdd({ kind: "models", label, base: target as never, models: infos.map((i) => i.id), cursor: 0, chosen: new Set(), windows, query: "", existingProvider: target.name });
       })
       .catch((error: Error) => {
         notice("error", `couldn't list ${label} models: ${error.message}`);
@@ -673,6 +678,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
     if (mode === "chat") return chatKey(key);
     if (mode === "menu") return menuKey(key);
+    if (mode === "manage") return manageKey(key);
     if (mode === "model") return modelKey(key);
     if (mode === "thinking") return thinkingKey(key);
     if (mode === "usage") return usageKey(key);
@@ -727,9 +733,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   const menuKey = (key: string): void => {
     const providers = filteredProviders;
-    // The list is the (filtered) providers plus two trailing entries: manage
-    // models, and add a new provider.
-    const itemCount = providers.length + 2;
+    // The list is the (filtered) providers plus a trailing "Add provider" entry.
+    const itemCount = providers.length + 1;
     if (key === "up" || key === "k") return setMenuIndex((i) => wrap(i, itemCount, -1));
     if (key === "down" || key === "j") return setMenuIndex((i) => wrap(i, itemCount, 1));
     if (key === "escape") {
@@ -746,9 +751,18 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       setMenuIndex(0);
       return;
     }
+    // Right arrow opens the highlighted provider's manage screen.
+    if ((key === "right" || key === "l") && menuIndex < providers.length) {
+      const target = providers[menuIndex];
+      if (target) {
+        setManageProvider(target.name);
+        setManageCursor(0);
+        setMode("manage");
+      }
+      return;
+    }
     if (key === "return") {
-      if (menuIndex === providers.length) return manageModels();
-      if (menuIndex === providers.length + 1) {
+      if (menuIndex === providers.length) {
         setOnboarding(false);
         setAdd({ kind: "kind" });
         setAddKindCursor(0);
@@ -777,6 +791,66 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         setMenuIndex(0);
       }
     }
+  };
+
+  // The manage screen for one provider: its details, then four actions.
+  const MANAGE_ACTIONS = 4;
+  const manageKey = (key: string): void => {
+    const provider = namedProviders(config).find((p) => p.name === manageProvider);
+    if (!provider) {
+      setMode("menu");
+      return;
+    }
+    if (key === "escape") {
+      if (manageConfirm) return setManageConfirm(false);
+      setMode("menu");
+      return;
+    }
+    if (key === "up" || key === "k") {
+      setManageConfirm(false);
+      return setManageCursor((c) => wrap(c, MANAGE_ACTIONS, -1));
+    }
+    if (key === "down" || key === "j") {
+      setManageConfirm(false);
+      return setManageCursor((c) => wrap(c, MANAGE_ACTIONS, 1));
+    }
+    if (key !== "return") return;
+    if (manageCursor === 0) {
+      // Change model: make this provider active, then open the picker.
+      const next = setActiveProvider(config, provider.name);
+      setConfig(next);
+      saveConfig(next);
+      setModelCursor(Math.max(0, next.models.indexOf(provider.model ?? next.model)));
+      setModelQuery("");
+      setMode("model");
+      return;
+    }
+    if (manageCursor === 1) return manageModels(provider.name);
+    if (manageCursor === 2) {
+      // Test connection: resolve this provider and verify it answers.
+      notice("info", `testing ${providerLabel(provider)}…`);
+      let resolved: ReturnType<typeof resolveProvider>;
+      try {
+        resolved = resolveProvider({ ...config, activeProvider: provider.name });
+      } catch (error) {
+        notice("error", `${provider.name}: ${(error as Error).message}`);
+        return;
+      }
+      void verifyProvider(resolved).then((result) => {
+        if (result.ok) notice("info", `${provider.name} works.`);
+        else if (result.retriable) notice("warn", `${provider.name}: couldn't reach it (network) — ${result.message}`);
+        else notice("error", `${provider.name} didn't answer: ${result.message}`);
+      });
+      return;
+    }
+    // Remove provider: the first enter arms it, the second removes.
+    if (!manageConfirm) return setManageConfirm(true);
+    const next = removeProvider(config, provider.name);
+    setConfig(next);
+    saveConfig(next);
+    notice("info", `removed ${provider.name}`);
+    setManageConfirm(false);
+    setMode("menu");
   };
 
   const modelKey = (key: string): void => {
@@ -1022,17 +1096,19 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const transcript = windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
     while (transcript.length < transcriptV) transcript.push([{ text: " ".repeat(innerW), dim: true }]);
 
-    const inner: Seg[][] = [
-      ...top,
-      ...blockedRow,
-      ...transcript,
-      ...slashPopup,
-      ...composer,
-      disclaimerRow,
-    ];
+    // Panel menus (provider list, manage) are top-aligned modals: the top area,
+    // a blank line, the panel, then blank space down to the disclaimer. The
+    // flat pickers (model, thinking, add) stay anchored above the composer.
+    const panelMenu = mode === "menu" || mode === "manage";
+    const blankRow: Seg[] = [{ text: " ".repeat(innerW), dim: true }];
+    const inner: Seg[][] = panelMenu
+      ? [...top, ...blockedRow, blankRow, ...composer]
+      : [...top, ...blockedRow, ...transcript, ...slashPopup, ...composer];
     const innerPainted = inner.map((r) => paint(fitWidth(r, innerW)));
     const contentH = rows - 2;
-    while (innerPainted.length < contentH) innerPainted.push(paint([{ text: " ".repeat(innerW), dim: true }]));
+    // The disclaimer owns the last row; fill everything above it.
+    while (innerPainted.length < contentH - 1) innerPainted.push(paint(blankRow));
+    innerPainted.push(paint(fitWidth(disclaimerRow, innerW)));
     const grid: string[] = [topFrameBorder("actor0", version, cols)];
     for (const line of innerPainted.slice(0, contentH)) grid.push(`│ ${line} │`);
     grid.push(bottomFrameBorder(cols));
@@ -1049,12 +1125,18 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   };
 
   function menuRows(height: number): Seg[][] {
+    const innerW = frameInnerWidth(screen.size.cols);
     switch (mode) {
       case "menu": {
         const providers = filteredProviders.map((p) => ({ name: p.name, label: providerLabel(p), active: p.name === config.activeProvider }));
-        // The cursor may sit on either trailing entry (manage models / add).
-        const manageTarget = activeNamedProvider(config)?.name;
-        return providerMenuRows(providers, Math.min(menuIndex, providers.length + 1), height, providerQuery, manageTarget);
+        // The cursor may sit on the trailing "Add provider" entry.
+        return panel("Providers", providerPanelRows(providers, Math.min(menuIndex, providers.length), providerQuery), innerW);
+      }
+      case "manage": {
+        const p = namedProviders(config).find((x) => x.name === manageProvider);
+        if (!p) return [];
+        const auth = p.auth === "oauth" ? `Subscription${p.oauth?.plan ? ` · ${p.oauth.plan}` : ""}` : "API key";
+        return panel("Manage provider", managePanelRows({ name: p.name, label: providerLabel(p), model: p.model ?? "", endpoint: p.baseUrl, auth }, manageConfirm ? 3 : manageCursor), innerW);
       }
       case "model":
         return modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery);

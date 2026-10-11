@@ -104,21 +104,26 @@ async function main(): Promise<void> {
   await type("/provider");
   await type("\r");
   await show("5 · the provider menu");
-  stdin.write("\x1b"); // escape
+  stdin.write("\x1b[C"); // right arrow → manage the highlighted provider
+  await tick(80);
+  await show("6 · manage provider");
+  stdin.write("\x1b"); // escape back
+  await tick(50);
+  stdin.write("\x1b"); // close the menu
   await tick(50);
   await type("/model");
   await type("\r");
-  await show("6 · the model picker (windowed)");
+  await show("7 · the model picker (windowed)");
   await type("claude");
   await tick(50);
-  await show("7 · the model picker (search 'claude')");
+  await show("8 · the model picker (search 'claude')");
   stdin.write("\x1b");
   await tick(50);
   stdin.write("\x1b");
   await tick(50);
   await type("/usage");
   await type("\r");
-  await show("8 · the usage panel");
+  await show("9 · the usage panel");
 
   instance.unmount();
   if (prev === undefined) delete process.env.ACTOR0_CONFIG_DIR;

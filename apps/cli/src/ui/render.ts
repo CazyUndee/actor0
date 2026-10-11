@@ -79,6 +79,76 @@ export function box(rows: Seg[][], cols: number, opts: { border?: string; bg?: s
   ];
 }
 
+/**
+ * A menu as a bordered panel, inset from the frame's walls and centred — the
+ * modal look the provider and manage screens use, as opposed to the flat
+ * picker lists. `title` is set into the top border.
+ */
+export function panel(title: string, rows: Seg[][], innerW: number): Seg[][] {
+  const boxW = Math.max(24, innerW - 4);
+  const inset = Math.max(0, Math.floor((innerW - boxW) / 2));
+  const boxed = box(rows, boxW, { border: color.border, title });
+  return boxed.map((r) => fitWidth([{ text: " ".repeat(inset), dim: true }, ...r], innerW));
+}
+
+/** A full-width rule, for separating sections inside a panel. */
+function rule(): Seg[] {
+  return [{ text: "─".repeat(200), color: color.dim }];
+}
+
+/** The provider list, as a modal panel: search, two-line entries, add, hint. */
+export function providerPanelRows(providers: { name: string; label: string; active: boolean }[], cursor: number, query: string): Seg[][] {
+  const rows: Seg[][] = [];
+  rows.push(query ? [{ text: `search ${query}`, color: color.text }, { text: "▏", color: color.accent }] : [{ text: "search providers…", color: color.dim }]);
+  rows.push(blank());
+  providers.forEach((p, i) => {
+    const focused = i === cursor;
+    rows.push([
+      { text: focused ? "●" : "○", color: focused ? color.accent : color.dim },
+      { text: "  " },
+      { text: p.name, color: focused ? color.accent : color.text, bold: focused },
+      ...(p.active ? [{ text: "   ACTIVE", color: color.accent } as Seg] : []),
+    ]);
+    rows.push([{ text: "   " }, { text: p.label, color: color.dim }]);
+  });
+  if (providers.length === 0) rows.push([{ text: "no providers yet — add one below", color: color.dim }]);
+  rows.push(blank());
+  rows.push(rule());
+  rows.push([{ text: "＋  ", color: color.accent }, { text: "Add provider", color: cursor === providers.length ? color.accent : color.text, bold: cursor === providers.length }]);
+  rows.push(blank());
+  rows.push([{ text: "↵ Select   → Manage   d Remove   Esc Close", color: color.dim }]);
+  return rows;
+}
+
+/** The manage screen for one provider: its details, then actions. */
+export function managePanelRows(
+  provider: { name: string; label: string; model: string; endpoint: string; auth: string },
+  cursor: number,
+): Seg[][] {
+  const rows: Seg[][] = [];
+  rows.push([{ text: provider.name, color: color.accent, bold: true }]);
+  rows.push([{ text: provider.label, color: color.dim }]);
+  rows.push(blank());
+  const col = 22;
+  const detail = (label: string, value: string): Seg[] => [
+    { text: label.padEnd(col), color: color.dim },
+    { text: value, color: color.text },
+  ];
+  rows.push(detail("Model", provider.model || "(none)"));
+  rows.push(detail("Endpoint", provider.endpoint));
+  rows.push(detail("Authentication", provider.auth));
+  rows.push(blank());
+  rows.push(rule());
+  const actions = ["Change model", "Edit provider", "Test connection", "Remove provider"];
+  actions.forEach((a, i) => {
+    const focused = i === cursor;
+    rows.push([{ text: focused ? "●" : "○", color: focused ? color.accent : color.dim }, { text: "  " }, { text: a, color: focused ? color.accent : color.text, bold: focused }]);
+  });
+  rows.push(blank());
+  rows.push([{ text: "↑↓ Navigate   ↵ Open   Esc Back", color: color.dim }]);
+  return rows;
+}
+
 /** One committed transcript entry, as rows of segments (each row ≤ `cols`). */
 export function entryLines(entry: Entry, cols: number): Seg[][] {
   switch (entry.kind) {
@@ -324,15 +394,6 @@ export function pickerRows(opts: {
   if (end < n) out.push(plain(`  ↓ ${n - end} more`, color.dim));
   out.push(plain(opts.hint, color.dim));
   return out;
-}
-
-export function providerMenuRows(providers: { name: string; label: string; active: boolean }[], cursor: number, height: number, query?: string, manageTarget?: string): Seg[][] {
-  const items: PickerItem[] = providers.map((p, i) => ({ label: p.name, detail: p.active ? `${p.label} (active)` : p.label, selected: i === cursor }));
-  // Two explicit trailing entries rather than hidden keys: manage the models of
-  // an already-configured provider, or add a brand-new one.
-  items.push({ label: `manage models${manageTarget ? ` for ${manageTarget}` : ""}…`, selected: cursor === providers.length });
-  items.push({ label: "add a new provider…", selected: cursor === providers.length + 1 });
-  return pickerRows({ title: "providers", items, cursor, hint: "type to filter · ↑/↓ move · enter select · d remove · esc close", height, query });
 }
 
 export function modelPickerRows(models: string[], cursor: number, height: number, query?: string): Seg[][] {

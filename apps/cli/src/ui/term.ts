@@ -20,11 +20,15 @@ export class Screen {
   private rows = 24;
   private cols = 80;
   private live = false;
+  private mouse: boolean;
 
-  constructor(stream: NodeJS.WriteStream = process.stdout) {
+  constructor(stream: NodeJS.WriteStream = process.stdout, opts: { mouse?: boolean } = {}) {
     this.stream = stream;
     this.cols = stream.columns ?? 80;
     this.rows = stream.rows ?? 24;
+    // Mouse capture is what breaks terminal-native copy-paste, so it is
+    // opt-out (ACTOR0_DISABLE_MOUSE) — keyboard scroll always works regardless.
+    this.mouse = opts.mouse ?? true;
   }
 
   get size(): { rows: number; cols: number } {
@@ -36,7 +40,7 @@ export class Screen {
     this.cols = cols;
   }
 
-  /** Enter the alternate screen, hide the caret, and turn on the mouse. */
+  /** Enter the alternate screen, hide the caret, and (optionally) the mouse. */
   begin(): void {
     if (this.live) return;
     this.live = true;
@@ -44,7 +48,8 @@ export class Screen {
     // in SGR mode (1000h + 1006h) so the wheel can scroll and clicks register.
     // Without this the terminal emits none of the sequences input.ts parses, so
     // the wheel is dead in a real terminal even though the tests inject them.
-    this.stream.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h");
+    this.stream.write("\x1b[?1049h\x1b[?25l");
+    if (this.mouse) this.stream.write("\x1b[?1000h\x1b[?1006h");
   }
 
   /**
@@ -84,6 +89,7 @@ export class Screen {
   dispose(): void {
     if (!this.live) return;
     this.live = false;
-    this.stream.write("\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l");
+    if (this.mouse) this.stream.write("\x1b[?1000l\x1b[?1006l");
+    this.stream.write("\x1b[?25h\x1b[?1049l");
   }
 }
