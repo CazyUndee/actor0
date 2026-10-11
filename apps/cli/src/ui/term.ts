@@ -36,11 +36,15 @@ export class Screen {
     this.cols = cols;
   }
 
-  /** Enter the alternate screen and hide the caret — we draw our own. */
+  /** Enter the alternate screen, hide the caret, and turn on the mouse. */
   begin(): void {
     if (this.live) return;
     this.live = true;
-    this.stream.write("\x1b[?1049h\x1b[?25l");
+    // Alt screen; hide the caret we draw ourselves; and enable mouse reporting
+    // in SGR mode (1000h + 1006h) so the wheel can scroll and clicks register.
+    // Without this the terminal emits none of the sequences input.ts parses, so
+    // the wheel is dead in a real terminal even though the tests inject them.
+    this.stream.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h");
   }
 
   /**
@@ -80,6 +84,6 @@ export class Screen {
   dispose(): void {
     if (!this.live) return;
     this.live = false;
-    this.stream.write("\x1b[?25h\x1b[?1049l");
+    this.stream.write("\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l");
   }
 }

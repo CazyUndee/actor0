@@ -490,6 +490,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
     const label = providerLabel(active);
     setAdd({ kind: "working", label, note: `listing ${label} models…` });
+    setMode("add");
     void fetchModelInfos(active as never)
       .then((infos) => {
         const windows: Record<string, number> = {};

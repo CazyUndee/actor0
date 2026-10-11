@@ -46,3 +46,18 @@ test("caret is clamped to the screen and shows the cursor", () => {
   assert.ok(chunks.join("").includes("\x1b[4;10H"), "the caret is clamped to the last cell");
   assert.ok(chunks.join("").includes("\x1b[?25h"), "the caret is made visible");
 });
+
+test("begin turns on SGR mouse reporting and dispose turns it off", () => {
+  const { chunks, stream } = recorder();
+  const screen = new Screen(stream);
+  screen.begin();
+  const on = chunks.join("");
+  // Without these the terminal emits no mouse events, so the wheel never
+  // scrolls in a real terminal — the tests inject the bytes and miss this.
+  assert.ok(on.includes("\x1b[?1000h"), "mouse tracking is enabled");
+  assert.ok(on.includes("\x1b[?1006h"), "SGR extended coordinates are enabled");
+  chunks.length = 0;
+  screen.dispose();
+  const off = chunks.join("");
+  assert.ok(off.includes("\x1b[?1000l") && off.includes("\x1b[?1006l"), "mouse tracking is disabled on exit");
+});

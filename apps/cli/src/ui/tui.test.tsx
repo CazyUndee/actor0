@@ -347,6 +347,29 @@ test("the provider menu offers manage-models and filters as you type", async () 
   }
 });
 
+test("manage models enters the add flow for the active provider", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy, cfg: manyModels() });
+  try {
+    stdin.write("/provider");
+    await tick(60);
+    stdin.write("\r");
+    await tick(120);
+    stdin.write("\x1b[B"); // onto 'manage models for claude…'
+    await tick(60);
+    stdin.write("\r");
+    await tick(60);
+    // The flow opens (mode switches to add) — the provider menu is replaced by
+    // the listing phase, whether or not the network fetch then succeeds.
+    const frame = screen.last.join("\n");
+    assert.ok(frame.includes("listing") || !frame.includes("providers"), "manage models leaves the provider menu and enters the flow");
+  } finally {
+    unmount();
+  }
+});
+
 test("Ctrl+D quits", async () => {
   let exited = false;
   const { stdin, unmount } = await mount({ onExit: () => { exited = true; } });
