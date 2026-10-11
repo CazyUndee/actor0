@@ -312,7 +312,22 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
       out.push([{ text: "∴ thinking ", color: color.dim }, { text: cut, color: color.dim, dim: true }, { text: "  ⌃r", color: color.dim, dim: true }]);
     }
   }
-  if (live.text) for (const l of flattenText(live.text, proseWidth(cols)).slice(-budget)) out.push(plain(l));
+  // The streamed answer is boxed from the first token, identical to the
+  // committed entry, so the border is there while it generates and there is no
+  // snap when it lands. When it outgrows the viewport the older lines are
+  // counted at the top of the box, not silently dropped.
+  if (live.text) {
+    const lines = flattenText(live.text, proseWidth(cols - 4));
+    // Leave room for the leading blank, a collapsed reasoning line, the box's
+    // two borders and the count, so the box and its indicator both fit.
+    const room = Math.max(1, budget - 5);
+    const dropped = Math.max(0, lines.length - room);
+    const rows: Seg[][] = [];
+    if (dropped > 0) rows.push(plain(`↑ ${dropped} more line${dropped === 1 ? "" : "s"}`, color.dim, true));
+    for (const l of dropped > 0 ? lines.slice(lines.length - room) : lines) rows.push(plain(l));
+    out.push(blank());
+    out.push(...box(rows, cols, { border: color.dim }));
+  }
   return out;
 }
 

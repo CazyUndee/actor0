@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { entryLines } from "./render.js";
+import { entryLines, liveLines } from "./render.js";
 import type { Entry } from "../conversation.js";
 
 /** Join rendered rows to plain text (no colour), for assertions. */
@@ -46,4 +46,19 @@ test("reasoning expands to the full body when asked", () => {
   const entry: Entry = { kind: "reasoning", text: "First I need to consider the options carefully and weigh them." };
   const expanded = text(entryLines(entry, COLS, true));
   assert.ok(expanded.includes("weigh them"), "the full body is shown when expanded");
+});
+
+test("streamed text is boxed from the first token", () => {
+  const rows = liveLines({ text: "hello world", reasoning: "" }, 0, 0, COLS, 20);
+  const out = text(rows);
+  assert.ok(out.includes("╭") && out.includes("╰"), "the live text has a border while it streams");
+  assert.ok(out.includes("hello world"), "the streamed text is shown");
+});
+
+test("long streamed text is counted at the top, not silently cut", () => {
+  const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
+  const rows = liveLines({ text: long, reasoning: "" }, 0, 0, COLS, 10);
+  const out = text(rows);
+  assert.ok(/↑ \d+ more lines?/.test(out), "the lines scrolled off the top are counted");
+  assert.ok(out.includes("word59"), "the latest text is still shown");
 });
