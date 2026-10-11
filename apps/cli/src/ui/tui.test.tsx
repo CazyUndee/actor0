@@ -63,7 +63,13 @@ function manyModels(): CliConfig {
 async function mount(opts: { transport?: ModelClient; onExit?: () => void; cfg?: CliConfig } = {}): Promise<{ screen: FakeScreen; stdin: PassThrough; unmount: () => void; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), "actor0-tui-"));
   const prev = process.env.ACTOR0_CONFIG_DIR;
+  const prevData = process.env.ACTOR0_DATA_DIR;
   process.env.ACTOR0_CONFIG_DIR = dir;
+  // Sessions live in the *data* dir, not the config dir — isolating only the
+  // config dir let a test's turns save into the user's real sessions, which
+  // then resumed into a real conversation (the model saw "one two three four
+  // five six" from the wheel-scroll test). Point the data dir at the temp too.
+  process.env.ACTOR0_DATA_DIR = join(dir, "data");
   const screen = new FakeScreen();
   const stdin = fakeStdin();
   const sink = new PassThrough();
@@ -88,6 +94,8 @@ async function mount(opts: { transport?: ModelClient; onExit?: () => void; cfg?:
       instance.unmount();
       if (prev === undefined) delete process.env.ACTOR0_CONFIG_DIR;
       else process.env.ACTOR0_CONFIG_DIR = prev;
+      if (prevData === undefined) delete process.env.ACTOR0_DATA_DIR;
+      else process.env.ACTOR0_DATA_DIR = prevData;
       rmSync(dir, { recursive: true, force: true });
     },
     dir,

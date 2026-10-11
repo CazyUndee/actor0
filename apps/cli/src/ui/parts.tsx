@@ -5,8 +5,32 @@ import { stripReasoningMarkup } from "@actor0/harness";
 import type { Entry, Live } from "../conversation.js";
 import { HELP_TEXT } from "../slash.js";
 import { color, SPINNER_FRAMES, toolGlyph } from "../theme.js";
-import { exitedNonZero, toolLabel } from "../tools.js";
 import { parseDiffBlock, type DiffLine } from "../diff.js";
+
+// Inlined from ../tools.js (exitedNonZero, toolLabel) rather than imported: an
+// import would load tools.ts, whose module top level spawns a shell (the shell
+// tool's description calls resolveShell()) — and this module is on the boot
+// path via render.ts. Keeping the boot off tools.ts keeps that spawn off the
+// first frame. These two are tiny and stable.
+function exitedNonZero(output: string): boolean {
+  const match = /\n\nCommand exited with code (\d+|unknown)$/.exec(output.trimEnd());
+  if (!match) return false;
+  return match[1] !== "0";
+}
+function toolLabel(name: string): string {
+  switch (name) {
+    case "read":
+      return "read";
+    case "write":
+      return "write";
+    case "edit":
+      return "edit";
+    case "shell":
+      return "$";
+    default:
+      return name;
+  }
+}
 
 /**
  * Presentational components.

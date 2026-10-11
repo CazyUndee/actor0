@@ -27,28 +27,25 @@ import {
   withUserInput,
   type ConversationState,
 } from "../conversation.js";
-import {
-  cancelledTurnMessages,
-  describeRecovery,
-  describeStop,
-  describeTruncation,
-  failedTurnMessages,
-  forStorage,
-  runTurn,
-  verifyProvider,
-} from "../turn.js";
 import { newSessionId, saveSession } from "../session.js";
 import { refreshProvider } from "../sign-in.js";
 import { recordAudit, recordUsage, formatTokens, contextBar, readUsage, startOfDay, startOfWeek, startOfMonth, usageSince, usageByModel } from "../usage.js";
 import { gitBranch } from "../git.js";
-import { detectEnvironment } from "../environment.js";
 import { contextWindowTokens } from "@actor0/harness";
 import { parseSlash, matchSlashCommands, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
-import { createToolHost } from "../tools.js";
-import { createTaskDelegate } from "../subagent.js";
 import { Screen } from "./term.js";
 import { parseInput, type InputEvent } from "./input.js";
+
+// The turn machinery is loaded lazily (bundled as turn.mjs) so the boot never
+// loads tools.ts, whose module top level spawns a shell to detect it. Loaded
+// once, on the first thing that needs a turn or a tool host.
+type Turn = typeof import("./turn-entry.js");
+let turnMod: Turn | undefined;
+const loadTurn = async (): Promise<Turn> => {
+  if (!turnMod) turnMod = await import("./turn-entry.js");
+  return turnMod;
+};
 import {
   entryLines,
   liveLines,
@@ -205,13 +202,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     liveRef.current = messages;
   };
 
-  const taskDelegateHost = (activeProvider: ResolvedProvider): ReturnType<typeof createToolHost> =>
-    // Sub-agents run through the same provider and endpoint as the parent
-    // turn (or the injected test transport), so delegation never needs its
-    // own credential path.
-    createToolHost({
+  // Sub-agents run through the same provider and endpoint as the parent turn
+  // (or the injected test transport), so delegation never needs its own
+  // credential path. turnMod is loaded by loadTurn before this is called.
+  const taskDelegateHost = (activeProvider: ResolvedProvider): ReturnType<Awaited<ReturnType<typeof loadTurn>>["createToolHost"]> =>
+    turnMod!.createToolHost({
       cwd,
-      taskDelegate: createTaskDelegate({
+      taskDelegate: turnMod!.createTaskDelegate({
         provider: activeProvider,
         cwd,
         ...(transport ? { client: transport } : {}),
@@ -257,14 +254,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
   }, [provider, resolved.error]);
 
-  // Warm the environment probe at startup. Its first call spawns a shell, and
-  // every turn's system prompt needs it — so pay that once, here, during load,
-  // instead of on the first message the user sends (which otherwise stalls for
-  // seconds before a single token appears). Fire-and-forget: the result is
-  // cached for the turn that eventually needs it.
-  useEffect(() => {
-    void detectEnvironment(cwd);
-  }, [cwd]);
+  // NOTE: the environment probe (detectEnvironment) is deliberately NOT
+  // warmed here. It runs several synchronous shell spawns that measured ~80%
+  // of the whole boot, blocking the first frame — the CLI felt frozen before
+  // it drew. It is paid lazily now, on the first turn that builds the system
+  // prompt (turn.ts), where a few seconds is an expected wait for a response
+  // rather than a stall before the composer appears.
 
   // Redraw at the new size on resize. The render effect only runs on a state
   // change, and a resize is not one, so without this the old-size grid is left
@@ -402,7 +397,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
             saveConfig(refreshed.config);
           }
         }
-        const { result, recovery } = await runTurn({
+        const T = await loadTurn();
+        const { result, recovery } = await T.runTurn({
           model: activeProvider,
           ...(transport ? { client: transport } : {}),
           messages: messagesRef.current,
@@ -421,11 +417,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
               return next;
             }),
         });
-        messagesRef.current = forStorage(result.messages);
+        messagesRef.current = T.forStorage(result.messages);
         updateLive(messagesRef.current);
-        if (result.blocked) notice("warn", describeStop(conversationRef.current.blocked?.reason));
-        if (result.truncated) notice("warn", describeTruncation());
-        if (recovery) notice("warn", describeRecovery(recovery));
+        if (result.blocked) notice("warn", T.describeStop(conversationRef.current.blocked?.reason));
+        if (result.truncated) notice("warn", T.describeTruncation());
+        if (recovery) notice("warn", T.describeRecovery(recovery));
         const total = totalUsage(result.usage);
         recordUsage(provider.model, total);
         recordAudit(provider.model, result.audit);
@@ -437,7 +433,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           setConfig(next);
           saveConfig(next);
         }
-        const recovered = cancelledTurnMessages(error) ?? failedTurnMessages(error);
+        const recovered = (await loadTurn()).cancelledTurnMessages(error) ?? (await loadTurn()).failedTurnMessages(error);
         if (recovered) {
           messagesRef.current = recovered;
           updateLive(recovered);
@@ -577,7 +573,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       return;
     }
     notice("info", `verifying ${name}…`);
-    void verifyProvider(resolvedProvider).then((result) => {
+    void loadTurn().then((T) => T.verifyProvider(resolvedProvider)).then((result) => {
       if (result.ok) notice("info", `ready — ${name} works. Ask anything, or /provider to manage providers.`);
       else if (result.retriable) notice("warn", `added ${name}, but couldn't verify it (network) — it may still work.`);
       else notice("warn", `added ${name}, but it didn't answer: ${result.message}`);
@@ -872,7 +868,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         notice("error", `${provider.name}: ${(error as Error).message}`);
         return;
       }
-      void verifyProvider(resolved).then((result) => {
+      void loadTurn().then((T) => T.verifyProvider(resolved)).then((result) => {
         if (result.ok) notice("info", `${provider.name} works.`);
         else if (result.retriable) notice("warn", `${provider.name}: couldn't reach it (network) — ${result.message}`);
         else notice("error", `${provider.name} didn't answer: ${result.message}`);

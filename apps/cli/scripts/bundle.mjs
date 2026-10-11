@@ -62,20 +62,23 @@ const banner = {
 const define = { "process.env.NODE_ENV": '"production"' };
 
 rmSync("dist/tui.mjs", { force: true });
+rmSync("dist/turn.mjs", { force: true });
 
-// Rewrite the entry's `import("./ui/tui-bootstrap.js")` to a runtime
-// `import("./tui.mjs")` left out of the cli bundle. (esbuild's `alias` only
-// takes package names, not relative paths, so this is a plugin.)
-const externalizeTui = {
-  name: "externalize-tui",
+// Two rewrite plugins. esbuild's `alias` only takes package names, not
+// relative paths, so a dynamic `import("./ui/x.js")` is rewritten to a runtime
+// `import("./y.mjs")` and left out of the bundle by these. Each applies to the
+// one build whose entry imports that module — never to the module's own build.
+const externalize = (from, to) => ({
+  name: `externalize-${to}`,
   setup(build) {
-    build.onResolve({ filter: /tui-bootstrap\.js$/ }, () => ({ path: "./tui.mjs", external: true }));
+    build.onResolve({ filter: from }, () => ({ path: to, external: true }));
   },
-};
+});
 
-// 1) the TUI, as one file. `index.ts` reaches it through a dynamic import that
-//    the cli build rewrites to this path, so it is resolved at runtime, not
-//    bundled into the entry.
+// 1) the TUI, as one file. Its App dynamic-imports the turn machinery, which is
+//    externalised out of it, so the boot never loads tools.ts and its
+//    module-level shell spawn. (tui-bootstrap is this bundle's entry, so it is
+//    never externalised here.)
 await build({
   entryPoints: ["dist/ui/tui-bootstrap.js"],
   bundle: true,
@@ -85,11 +88,25 @@ await build({
   outfile: "dist/tui.mjs",
   banner,
   define,
+  plugins: [stubDevtools, externalize(/turn-entry\.js$/, "./turn.mjs")],
+});
+
+// 2) the turn machinery (turn.ts + tools.ts + subagent.ts), as one file, loaded
+//    on the first turn. Its module-load shell spawn happens there, not at boot.
+await build({
+  entryPoints: ["dist/ui/turn-entry.js"],
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node20",
+  outfile: "dist/turn.mjs",
+  banner,
+  define,
   plugins: [stubDevtools],
 });
 
-// 2) the entry. The TUI import is rewritten to `./tui.mjs` and marked external,
-//    so it is left as a runtime `import("./tui.mjs")` the entry hits only on the
+// 3) the entry. Its TUI import is rewritten to `./tui.mjs` and marked external,
+//    so it is a runtime `import("./tui.mjs")` the entry hits only on the
 //    interactive path.
 await build({
   entryPoints: ["dist/index.js"],
@@ -100,5 +117,5 @@ await build({
   outfile: "dist/cli.mjs",
   banner,
   define,
-  plugins: [stubDevtools, externalizeTui],
+  plugins: [stubDevtools, externalize(/tui-bootstrap\.js$/, "./tui.mjs")],
 });
