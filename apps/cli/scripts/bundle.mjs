@@ -54,6 +54,13 @@ const banner = {
   js: 'import { createRequire as __actor0CreateRequire } from "module";\nconst require = __actor0CreateRequire(import.meta.url);',
 };
 
+// Force production. react-reconciler ships dev (750KB, with checks) and production
+// (407KB) builds and picks on `process.env.NODE_ENV`; without this the bundle
+// carries *both* and runs the dev one — a third of tui.mjs and the slower path.
+// Defining it at build time dead-code-eliminates the dev branch everywhere (react
+// too), so only the production build is bundled and run.
+const define = { "process.env.NODE_ENV": '"production"' };
+
 rmSync("dist/tui.mjs", { force: true });
 
 // Rewrite the entry's `import("./ui/tui-bootstrap.js")` to a runtime
@@ -77,6 +84,7 @@ await build({
   target: "node20",
   outfile: "dist/tui.mjs",
   banner,
+  define,
   plugins: [stubDevtools],
 });
 
@@ -91,5 +99,6 @@ await build({
   target: "node20",
   outfile: "dist/cli.mjs",
   banner,
+  define,
   plugins: [stubDevtools, externalizeTui],
 });
