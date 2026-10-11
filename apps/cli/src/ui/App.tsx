@@ -1081,7 +1081,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // ---- build the screen and draw it ----
   const entryRowList = useMemo(() => conversation.entries.flatMap((entry) => entryLines(entry, frameInnerWidth(screen.size.cols), expandReasoning)), [conversation.entries, screen.size.cols, expandReasoning]);
 
-  const buildGrid = (): { grid: string[]; caret?: { row: number; col: number } } => {
+  const buildGrid = (): { grid: string[] } => {
     const cols = screen.size.cols;
     const rows = screen.size.rows;
     const innerW = frameInnerWidth(cols);
@@ -1090,7 +1090,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // The composer (or an open menu) is pinned to the bottom; the transcript
     // window fills the space above it.
     let composer: Seg[][];
-    let caretPos: { row: number; col: number } | undefined;
     // Rows a menu may occupy: the frame minus both borders, the top area, the
     // disclaimer and a sliver of transcript. Long lists window to this height.
     const menuHeight = Math.max(6, rows - 2 - 3 - 1 - 3);
@@ -1100,9 +1099,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (menuOpen) {
       composer = menuRows(menuHeight);
     } else {
-      const built = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH });
-      composer = built.rows;
-      caretPos = { row: built.inputRow, col: built.inputCol };
+      composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH }).rows;
     }
     const slashPopup = !menuOpen && slashEngaged && slashMatches.length > 0 ? slashPopupRows(slashMatches.map((c) => ({ name: c.name, description: c.description })), slashSel) : [];
     const blockedRow = conversation.blocked ? [[{ text: `the agent needs you: ${conversation.blocked.message} — reply to continue, or /clear`, color: color.warning }]] : [];
@@ -1140,14 +1137,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     for (const line of innerPainted.slice(0, contentH)) grid.push(`│ ${line} │`);
     grid.push(bottomFrameBorder(cols));
 
-    // Caret: absolute row = 1 (top border) + the composer's input row within the
-    // inner column. The composer is fixed at the bottom, so this is stable while
-    // typing (the transcript length only changes on a commit or a scroll).
-    if (caretPos) {
-      const composerTop = top.length + blockedRow.length + transcript.length + slashPopup.length;
-      const absRow = 2 + composerTop + caretPos.row;
-      return { grid, caret: { row: absRow, col: 2 + caretPos.col } };
-    }
     return { grid };
   };
 
@@ -1201,11 +1190,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   // Draw on every state change. A full-screen grid is small; rewriting it each
   // frame is cheap and — unlike re-reconciling an Ink tree — never drops a byte.
+  // The blinking terminal caret is never shown: the composer draws its own
+  // block cursor into the grid, so the app owns the whole frame like a GUI.
   useEffect(() => {
-    const { grid, caret } = buildGrid();
+    const { grid } = buildGrid();
     screen.render(grid);
-    if (caret && mode === "chat") screen.caret(caret.row, caret.col);
-    else screen.hideCaret();
+    screen.hideCaret();
   });
 
   // Restore the terminal on unmount.

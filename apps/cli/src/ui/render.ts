@@ -447,12 +447,23 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
 
   const rows: Seg[][] = [plain(`╭${"─".repeat(inner)}╮`, color.dim)];
   if (above > 0) rows.push([{ text: "│", color: color.dim }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.dim }]);
-  for (const row of visible) {
-    const content: Seg[] = row.first
-      ? [{ text: glyph, color: opts.busy ? color.dim : color.accent, bold: true }, { text: row.text, color: color.text }]
-      : [{ text: row.text, color: color.text }];
+  visible.forEach((row, vi) => {
+    const isCaretRow = startIdx + vi === caretRow;
+    const content: Seg[] = [];
+    if (row.first) content.push({ text: glyph, color: opts.busy ? color.dim : color.accent, bold: true });
+    if (isCaretRow) {
+      // A GUI-style block cursor drawn into the grid: the character under the
+      // caret (or a space at the end) is reverse-filled, so there is no blinking
+      // terminal caret at all.
+      const at = caretCol < row.text.length ? row.text[caretCol]! : " ";
+      content.push({ text: row.text.slice(0, caretCol), color: color.text });
+      content.push({ text: at, color: color.surface, bg: color.text });
+      if (caretCol < row.text.length) content.push({ text: row.text.slice(caretCol + 1), color: color.text });
+    } else {
+      content.push({ text: row.text, color: color.text });
+    }
     rows.push([{ text: "│", color: color.dim }, ...fitWidth(content, inner), { text: "│", color: color.dim }]);
-  }
+  });
   rows.push(plain(`╰${"─".repeat(inner)}╯`, color.dim));
 
   // inputRow is the caret's row within `rows` (rows[0] is the top border);

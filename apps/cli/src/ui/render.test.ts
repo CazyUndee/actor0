@@ -79,7 +79,10 @@ test("a long prompt wraps into visible rows and keeps the caret on the right cha
   assert.ok(rows.join("\n").includes("hash map works"), "the full prompt is visible, not truncated");
   // The caret at the end lands on the last content row, just past the last char.
   const caretRow = built.rows[built.inputRow]!.map((s) => s.text).join("");
-  assert.equal(caretRow[built.inputCol - 2], "s", `the caret is on the last char (saw '${caretRow[built.inputCol - 2]}')`);
+  assert.equal(caretRow[built.inputCol - 2], "s", `the char before the caret is the last typed char (saw '${caretRow[built.inputCol - 2]}')`);
+  // A GUI block cursor: a filled (background) cell at the caret column.
+  const caretSegs = built.rows[built.inputRow]!;
+  assert.ok(caretSegs.some((s) => s.bg !== undefined), "a filled block cursor is drawn on the caret row");
 });
 
 test("a prompt taller than the box scrolls and counts what is above", () => {

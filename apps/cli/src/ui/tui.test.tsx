@@ -120,25 +120,15 @@ test("the frame draws: titled top border, header, composer, disclaimer, bottom b
   }
 });
 
-test("typing updates the composer and the caret tracks it", async () => {
+test("typing updates the composer", async () => {
   const { screen, stdin, unmount } = await mount();
   try {
     stdin.write("hello");
     await tick(250);
-    assert.ok(screen.last.join("\n").includes("hello"), "the draft shows in the composer");
-    const caret = screen.carets.at(-1);
-    assert.ok(caret, "the caret is placed in the composer");
-    assert.ok(caret!.col > 3 && caret!.col <= 12, `caret near the end of 'hello' (col ${caret!.col})`);
-    // The caret must be on the input row, not the composer's top border — the
-    // off-by-one that put it there made it look pinned to the box edge.
-    const inputRow = screen.last.findIndex((l) => l.includes("❯"));
-    assert.equal(caret!.row, inputRow + 1, `caret on the input row (row ${caret!.row}, input at ${inputRow + 1})`);
-    // The caret sits *on* the character it precedes: the visible row at the
-    // caret's column is the last typed char, and the col right after it is
-    // where the next char will land — not one behind and not on the border.
-    // eslint-disable-next-line no-control-regex
-    const row = screen.last[caret!.row - 1]!.replace(/\x1b\[[0-9;]*m/g, "");
-    assert.equal(row[caret!.col - 2], "o", `the char before the caret is 'o' (saw '${row[caret!.col - 2]}')`);
+    // The draft shows in the composer, in order — the reordering-under-batch bug
+    // is what this guards. (The block cursor itself is pinned in render.test.ts,
+    // where the background fill survives; tests run with colour off.)
+    assert.ok(screen.last.join("\n").includes("❯ hello"), "the draft shows in the composer, in order");
   } finally {
     unmount();
   }
@@ -218,7 +208,7 @@ test("typing a slash command edits the draft and opens the menu in place", async
   }
 });
 
-test("the caret row is stable while typing on one line", async () => {
+test("the draft keeps its order under fast batched input", async () => {
   const dummy: ModelClient = {
     async *stream() { yield { type: "done", text: "", complete: true } as never; },
   };
@@ -230,9 +220,10 @@ test("the caret row is stable while typing on one line", async () => {
     await tick(40);
     stdin.write("c");
     await tick(150);
-    const rows = screen.carets.map((c) => c.row);
-    assert.ok(rows.length >= 3, "a caret event fired for each character");
-    assert.equal(new Set(rows).size, 1, `the caret row did not jump: ${JSON.stringify(rows)}`);
+    // The batched keystrokes must not reorder — the stale-closure-caret bug that
+    // turned "great" into "rgeat". The block cursor is drawn in the grid now,
+    // so we assert the composed text rather than a terminal caret position.
+    assert.ok(screen.last.join("\n").includes("❯ abc"), "the draft reads abc, in order");
   } finally {
     unmount();
   }
@@ -378,7 +369,7 @@ test("the manage screen's edit action re-discovers the provider's models", async
   }
 });
 
-test("a long wrapped prompt keeps the caret on the last visible char", async () => {
+test("a long prompt wraps into the composer, in order", async () => {
   const { screen, stdin, unmount } = await mount();
   try {
     const long = "explain in great detail how a hash map works internally including collisions and resizing behavior";
@@ -387,12 +378,13 @@ test("a long wrapped prompt keeps the caret on the last visible char", async () 
       await tick(2);
     }
     await tick(200);
-    const caret = screen.carets.at(-1);
-    assert.ok(caret, "the caret is placed");
-    // eslint-disable-next-line no-control-regex -- strip ANSI to measure the visible column
-    const row = screen.last[caret!.row - 1]!.replace(/\x1b\[[0-9;]*m/g, "");
-    assert.ok(row.includes("│"), `the caret is on a composer row (row ${caret!.row})`);
-    assert.equal(row[caret!.col - 2], "r", `the char before the caret is the last typed char (saw '${row[caret!.col - 2]}')`);
+    // The composer grows to hold the wrapped prompt (its top border, content
+    // rows and bottom border all present), the text is in order, and the tail
+    // is visible — the block cursor is pinned in render.test.ts.
+    const j = screen.last.join("\n");
+    assert.ok(j.includes("hash map works"), "the wrapped prompt is fully visible");
+    assert.ok(j.includes("resizing behavior"), "the tail of the prompt is on screen");
+    assert.ok(j.includes("❯ explain in great detail"), "the prompt reads in order");
   } finally {
     unmount();
   }
