@@ -64,6 +64,7 @@ import {
   addModelsRows,
   addManualRows,
   stateFace,
+  topArea,
   windowRows,
   frameInnerWidth,
   topFrameBorder,
@@ -142,8 +143,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [caret, setCaret] = useState(0);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
-  const [history, setHistory] = useState<string[]>([]);
-  const [histIndex, setHistIndex] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -173,8 +172,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const conversationRef = useRef(conversation);
   conversationRef.current = conversation;
   const openedOnboarding = useRef(false);
-  // Where the send button landed this frame, for a mouse click to hit.
-  const sendPos = useRef<{ row: number; col: number } | null>(null);
 
   const updateLive = (messages: ChatMessage[]): void => {
     liveRef.current = messages;
@@ -337,12 +334,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
     setDraft("");
     setCaret(0);
-    setHistIndex(null);
     setScrollOffset(0);
     if (finishedTimer.current) clearTimeout(finishedTimer.current);
     finishedTimer.current = null;
     setJustFinished(false);
-    setHistory((prev) => [input, ...prev.filter((item) => item !== input)].slice(0, 50));
     setConversation((state) => withUserInput(state, input));
     setBusy(true);
     if (!provider) {
@@ -510,7 +505,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (event.type === "text") {
       setDraft((d) => d.slice(0, caret) + event.text + d.slice(caret));
       setCaret((c) => c + event.text.length);
-      setHistIndex(null);
       return true;
     }
     if (event.type !== "key") return false;
@@ -572,8 +566,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const dispatch = (event: InputEvent): void => {
     if (event.type === "mouse") return handleMouse(event);
     if (event.type === "text") {
-      if (mode === "chat" && !slashEngaged) editDraft(event);
+      // Always edit the draft in chat, even while the slash menu is open —
+      // the menu filters on the draft, so blocking input here is what made
+      // typing "/hel" print nothing and never update the list.
+      if (mode === "chat") editDraft(event);
       else if (mode === "add") handleAddText(event.text);
+      // In any other mode a bare character is a command key (a/d/k/j in a
+      // menu), not text to type — routing it here is what made the vim keys
+      // and the add/remove letters dead in every menu.
+      else for (const ch of event.text) handleKey(ch);
       return;
     }
     handleKey(event.key);
@@ -584,12 +585,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode !== "chat") return;
     if (event.button === "wheel-up") return setScrollOffset((o) => o + 3);
     if (event.button === "wheel-down") return setScrollOffset((o) => Math.max(0, o - 3));
-    if (event.button === "left" && event.release) {
-      const pos = sendPos.current;
-      if (!pos) return;
-      if (busy || slashEngaged || !draft.trim()) return;
-      if (event.y === pos.row && event.x >= pos.col && event.x <= pos.col + 5) submit(draft);
-    }
   };
 
   const handleKey = (key: string): void => {
@@ -608,6 +603,20 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode === "thinking") return thinkingKey(key);
     if (mode === "usage") return usageKey(key);
     if (mode === "add") return addKeyHandler(key);
+  };
+
+  // Move the caret up/down between lines of the draft, clamping the column to
+  // the target line's length.
+  const moveCaretVertical = (delta: number): void => {
+    const lines = draft.split("\n");
+    const before = draft.slice(0, Math.min(caret, draft.length));
+    const line = before.split("\n").length - 1;
+    const col = before.length - before.lastIndexOf("\n") - 1;
+    const target = line + delta;
+    if (target < 0 || target >= lines.length) return;
+    let idx = 0;
+    for (let i = 0; i < target; i += 1) idx += lines[i]!.length + 1;
+    setCaret(idx + Math.min(col, lines[target]!.length));
   };
 
   const chatKey = (key: string): void => {
@@ -634,28 +643,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       return;
     }
     if (key === "return") return submit(draft);
-    if (key === "up") {
-      if (history.length === 0) return;
-      const next = histIndex === null ? 0 : Math.min(histIndex + 1, history.length - 1);
-      setHistIndex(next);
-      setDraft(history[next] ?? "");
-      setCaret((history[next] ?? "").length);
-      return;
-    }
-    if (key === "down") {
-      if (histIndex === null) return;
-      const next = histIndex - 1;
-      if (next < 0) {
-        setHistIndex(null);
-        setDraft("");
-        setCaret(0);
-      } else {
-        setHistIndex(next);
-        setDraft(history[next] ?? "");
-        setCaret((history[next] ?? "").length);
-      }
-      return;
-    }
+    // Up/down move the caret between lines of a multi-line draft — never load
+    // past prompts, which made editing impossible (the draft was replaced).
+    if (key === "up" || key === "down") return moveCaretVertical(key === "up" ? -1 : 1);
     if (key === "pageup") return setScrollOffset((o) => o + 5);
     if (key === "pagedown") return setScrollOffset((o) => Math.max(0, o - 5));
     editDraft({ type: "key", key: key as never });
@@ -858,63 +848,49 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (menuOpen) {
       composer = menuRows();
     } else {
-      const canSend = !busy && draft.trim().length > 0;
-      const built = composerRows({ cols: innerW, draft, caret, face, canSend, busy });
+      const built = composerRows({ cols: innerW, draft, caret, busy });
       composer = built.rows;
       caretPos = { row: built.inputRow, col: built.inputCol };
     }
     const slashPopup = !menuOpen && slashEngaged && slashMatches.length > 0 ? slashPopupRows(slashMatches.map((c) => ({ name: c.name, description: c.description })), slashSel) : [];
     const blockedRow = conversation.blocked ? [[{ text: `the agent needs you: ${conversation.blocked.message} — reply to continue, or /clear`, color: color.warning }]] : [];
 
-    const transcriptV = Math.max(3, rows - composer.length - slashPopup.length - blockedRow.length - 4);
+    // Human-readable header: the provider label, the model, branch, context, session.
+    const headerInfo = [endpoint, provider?.model ?? config.model, branch ? `⎇ ${branch}` : undefined, context?.text, tokensToday > 0 ? `≡ ${formatTokens(tokensToday)} today` : undefined]
+      .filter((p): p is string => Boolean(p))
+      .join("   ");
+    const top = topArea(cols, headerInfo, face);
 
-    const headerInfo = [provider?.model ?? config.model, endpoint, branch ? `⎇ ${branch}` : undefined, context?.text, tokensToday > 0 ? `≡ ${formatTokens(tokensToday)} today` : undefined].filter((p): p is string => Boolean(p)).join(" · ");
+    const disclaimer = "Actor0 is an experimental agent and may make mistakes.";
+    const dPad = Math.max(0, Math.floor((frameInnerWidth(cols) - disclaimer.length) / 2));
+    const disclaimerRow: Seg[] = [{ text: " ".repeat(dPad) + disclaimer, color: color.dim }];
+
+    const chromeH = top.length + blockedRow.length + slashPopup.length + composer.length + 1;
+    const transcriptV = Math.max(3, rows - 2 - chromeH);
     const live = menuOpen ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked));
     const transcript = windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
-    // Pad the transcript to its full height so the composer below it is pushed
-    // to the bottom of the frame — an empty transcript must not leave the
-    // composer floating up under the header.
     while (transcript.length < transcriptV) transcript.push([{ text: " ".repeat(innerW), dim: true }]);
 
-    // Assemble the inner column, then frame it.
     const inner: Seg[][] = [
-      [{ text: headerInfo || "no provider configured — run /setup", color: color.muted }],
+      ...top,
       ...blockedRow,
-      ...slashPopup,
       ...transcript,
+      ...slashPopup,
       ...composer,
-      [{ text: "Actor0 is an experimental agent and may make mistakes.", color: color.dim }],
+      disclaimerRow,
     ];
-    // Pad the inner column so the frame is exactly `rows` tall and the bottom
-    // border sits on the last row — the composer is the row just above it.
     const innerPainted = inner.map((r) => paint(fitWidth(r, innerW)));
-    const contentH = rows - 2; // between the two borders
+    const contentH = rows - 2;
     while (innerPainted.length < contentH) innerPainted.push(paint([{ text: " ".repeat(innerW), dim: true }]));
     const grid: string[] = [topFrameBorder("actor0", version, cols)];
     for (const line of innerPainted.slice(0, contentH)) grid.push(`│ ${line} │`);
     grid.push(bottomFrameBorder(cols));
-    // The send button's on-screen position, in *visible* columns — mouse
-    // coordinates ignore the ANSI the painted grid carries, so this is measured
-    // off the unpainted rows, not the strings we write. A click can hit it.
-    const sendInner = inner.findIndex((r) => r.some((s) => s.text.includes("[Send]")));
-    if (sendInner >= 0) {
-      let col = 0;
-      for (const s of inner[sendInner]!) {
-        const at = s.text.indexOf("[Send]");
-        if (at >= 0) {
-          col += at;
-          break;
-        }
-        col += s.text.length;
-      }
-      sendPos.current = { row: sendInner + 2, col: col + 3 };
-    } else {
-      sendPos.current = null;
-    }
-    // Caret: absolute row = 1 (top border) + index of composer's input row within inner + 1.
+
+    // Caret: absolute row = 1 (top border) + the composer's input row within the
+    // inner column. The composer is fixed at the bottom, so this is stable while
+    // typing (the transcript length only changes on a commit or a scroll).
     if (caretPos) {
-      const headerLen = 1 + blockedRow.length + slashPopup.length;
-      const composerTop = headerLen + transcript.length;
+      const composerTop = top.length + blockedRow.length + transcript.length + slashPopup.length;
       const absRow = 2 + composerTop + caretPos.row;
       return { grid, caret: { row: absRow, col: 2 + caretPos.col } };
     }

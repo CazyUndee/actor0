@@ -99,10 +99,10 @@ test("the frame draws: titled top border, header, composer, disclaimer, bottom b
       const visible = line.replace(/\x1b\[[0-9;]*m/g, "");
       assert.ok(visible.length <= 80, `line wider than the terminal: ${visible.length}`);
     }
-    // The right wall must survive: the frame's right border and the composer's
-    // face/send column are the last visible columns, and a byte-length slice
-    // (the bug this guards) cuts exactly them off when colour is on.
-    const composerRow = grid.find((l) => l.includes("enter to send"))!;
+    // The right wall must survive: the frame's right border is the last
+    // visible column, and a byte-length slice (the bug this guards) cuts it
+    // off when colour is on. Take the line carrying the top border.
+    const composerRow = grid.find((l) => l.includes("experimental agent"))!;
     // eslint-disable-next-line no-control-regex
     assert.ok(composerRow.replace(/\x1b\[[0-9;]*m/g, "").trimEnd().endsWith("│"), "the right border is present");
   } finally {
@@ -118,11 +118,17 @@ test("typing updates the composer and the caret tracks it", async () => {
     assert.ok(screen.last.join("\n").includes("hello"), "the draft shows in the composer");
     const caret = screen.carets.at(-1);
     assert.ok(caret, "the caret is placed in the composer");
-    assert.ok(caret!.col > 3 && caret!.col <= 10, `caret near the end of 'hello' (col ${caret!.col})`);
+    assert.ok(caret!.col > 3 && caret!.col <= 12, `caret near the end of 'hello' (col ${caret!.col})`);
     // The caret must be on the input row, not the composer's top border — the
     // off-by-one that put it there made it look pinned to the box edge.
     const inputRow = screen.last.findIndex((l) => l.includes("❯"));
     assert.equal(caret!.row, inputRow + 1, `caret on the input row (row ${caret!.row}, input at ${inputRow + 1})`);
+    // The caret sits *on* the character it precedes: the visible row at the
+    // caret's column is the last typed char, and the col right after it is
+    // where the next char will land — not one behind and not on the border.
+    // eslint-disable-next-line no-control-regex
+    const row = screen.last[caret!.row - 1]!.replace(/\x1b\[[0-9;]*m/g, "");
+    assert.equal(row[caret!.col - 2], "o", `the char before the caret is 'o' (saw '${row[caret!.col - 2]}')`);
   } finally {
     unmount();
   }
@@ -150,28 +156,107 @@ test("Enter submits: a turn runs with the typed text", async () => {
   }
 });
 
-test("a left-click on [Send] submits the draft", async () => {
-  let asked = "";
+test("the wheel scrolls the transcript but leaves the composer's prompt in place", async () => {
   const transport: ModelClient = {
-    async *stream(messages) {
-      const last = [...messages].reverse().find((m) => m.role === "user");
-      asked = typeof last?.content === "string" ? last.content : "";
+    async *stream() {
       yield { type: "token", delta: "ok" } as never;
       yield { type: "done", text: "ok", complete: true } as never;
     },
   };
   const { screen, stdin, unmount } = await mount({ transport });
   try {
-    stdin.write("click me");
-    await tick(250);
-    const grid = screen.last;
-    const row = grid.findIndex((l) => l.includes("[Send]"));
-    assert.ok(row >= 0, "the [Send] label is on screen once there is a draft");
-    // eslint-disable-next-line no-control-regex -- strip ANSI to measure the visible column
-    const col = grid[row]!.replace(/\x1b\[[0-9;]*m/g, "").indexOf("[Send]"); // visible column
-    stdin.write(`\x1b[<0;${col + 1};${row + 1}m`); // 1-based SGR release
+    // Build a transcript taller than the viewport, then start a new draft and scroll.
+    stdin.write("one");
     await tick(9000); // the first turn spawns a shell for the environment probe
-    assert.equal(asked, "click me", "the click ran the turn");
+    for (const word of ["two", "three", "four", "five", "six"]) {
+      stdin.write(word);
+      await tick(60);
+      stdin.write("\r");
+      await tick(400);
+    }
+    stdin.write("draft text");
+    await tick(250);
+    const beforeScroll = screen.last.join("\n");
+    assert.ok(beforeScroll.includes("draft text"), "the draft is in the composer");
+    for (let i = 0; i < 10; i += 1) stdin.write("\x1b[<64;1;1M"); // wheel up
+    await tick(150);
+    const afterScroll = screen.last.join("\n");
+    assert.ok(afterScroll.includes("draft text"), "the composer's prompt survives scrolling");
+    assert.notEqual(afterScroll, beforeScroll, "the transcript window scrolled");
+  } finally {
+    unmount();
+  }
+});
+
+test("typing a slash command edits the draft and opens the menu in place", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
+  try {
+    stdin.write("/h");
+    await tick(250);
+    const joined = screen.last.join("\n");
+    assert.ok(joined.includes("/h"), "the typed slash text is in the composer");
+    assert.ok(joined.includes("help") && joined.includes("show commands"), "the slash menu opened and lists the help command");
+  } finally {
+    unmount();
+  }
+});
+
+test("the caret row is stable while typing on one line", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
+  try {
+    stdin.write("a");
+    await tick(40);
+    stdin.write("b");
+    await tick(40);
+    stdin.write("c");
+    await tick(150);
+    const rows = screen.carets.map((c) => c.row);
+    assert.ok(rows.length >= 3, "a caret event fired for each character");
+    assert.equal(new Set(rows).size, 1, `the caret row did not jump: ${JSON.stringify(rows)}`);
+  } finally {
+    unmount();
+  }
+});
+
+test("up-arrow edits the text instead of recalling history", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
+  try {
+    stdin.write("my draft");
+    await tick(150);
+    stdin.write("\x1b[A"); // up arrow
+    await tick(150);
+    assert.ok(screen.last.join("\n").includes("my draft"), "the draft is unchanged by an up-arrow with no prior input");
+  } finally {
+    unmount();
+  }
+});
+
+test("the provider menu lists human-readable providers and opens the add flow on 'a'", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
+  try {
+    stdin.write("/provider");
+    await tick(60);
+    stdin.write("\r");
+    await tick(150);
+    const menu = screen.last.join("\n");
+    assert.ok(menu.includes("Anthropic API - Direct"), "the provider menu shows the human-readable provider label");
+    stdin.write("a");
+    await tick(150);
+    const add = screen.last.join("\n");
+    assert.ok(add.includes("add a provider"), "pressing 'a' opens the add-provider flow");
+    assert.ok(add.includes("Claude (Anthropic)") && add.includes("ChatGPT (OpenAI)"), "the add flow lists human-readable provider kinds");
   } finally {
     unmount();
   }

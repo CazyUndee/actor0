@@ -26,6 +26,10 @@ export const color = {
   warning: cronix.color.warningText,
   error: cronix.color.errorText,
   info: cronix.color.infoText,
+  /** Filled background for highlighted blocks (tool calls). */
+  surface: cronix.color.surface2,
+  /** The frame's border grey. */
+  border: cronix.color.border,
 } as const;
 
 export const space = cronix.space;

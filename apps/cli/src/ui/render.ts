@@ -16,7 +16,7 @@ import { flattenText, proseWidth, reasonText, toolDetail, toolRowFailed } from "
  * padding and truncation are measured against — the arithmetic that is silent
  * when it is wrong, kept in one place.
  */
-export type Seg = { text: string; color?: string; bold?: boolean; dim?: boolean };
+export type Seg = { text: string; color?: string; bold?: boolean; dim?: boolean; bg?: string };
 
 export function segWidth(segs: Seg[]): number {
   return segs.reduce((n, s) => n + s.text.length, 0);
@@ -27,6 +27,7 @@ export function paint(segs: Seg[]): string {
   return segs
     .map((s) => {
       let fn = s.color ? chalk.hex(s.color) : chalk;
+      if (s.bg) fn = fn.bgHex(s.bg);
       if (s.dim) fn = fn.dim;
       if (s.bold) fn = fn.bold;
       return fn(s.text);
@@ -55,6 +56,29 @@ export function fitWidth(segs: Seg[], width: number): Seg[] {
 const plain = (text: string, tone?: string, dim?: boolean): Seg[] => [{ text, ...(tone ? { color: tone } : {}), ...(dim ? { dim: true } : {}) }];
 const blank = (): Seg[] => [{ text: " " }];
 
+/**
+ * Wrap content rows in a rounded rectangle, `cols` wide, with an optional title
+ * set into the top border. Every content row is padded to the inner width, so
+ * the right border always lines up. `border` colours the frame; `bg` fills the
+ * content rows.
+ */
+export function box(rows: Seg[][], cols: number, opts: { border?: string; bg?: string; title?: string } = {}): Seg[][] {
+  const inner = Math.max(4, cols - 2);
+  const b = (s: string): Seg => ({ text: s, color: opts.border });
+  const fill = (content: Seg[]): Seg[] => [
+    b("│"),
+    ...(opts.bg ? content.map((s) => ({ ...s, bg: opts.bg })) : content),
+    b("│"),
+  ];
+  const topTitle = opts.title ? `─ ${opts.title} ` : "";
+  const topDashes = Math.max(0, inner - topTitle.length);
+  return [
+    [b(`╭${topTitle}${"─".repeat(topDashes)}╮`)],
+    ...rows.map((r) => fill(fitWidth(r, inner))),
+    [b(`╰${"─".repeat(inner)}╯`)],
+  ];
+}
+
 /** One committed transcript entry, as rows of segments (each row ≤ `cols`). */
 export function entryLines(entry: Entry, cols: number): Seg[][] {
   switch (entry.kind) {
@@ -68,17 +92,17 @@ export function entryLines(entry: Entry, cols: number): Seg[][] {
       ];
 
     case "assistant": {
-      const out: Seg[][] = [blank()];
-      for (const line of flattenText(entry.text, proseWidth(cols))) out.push(plain(line));
-      if (entry.partial) out.push(plain("… response ended before completion", color.warning));
-      return out;
+      const lines = flattenText(entry.text, proseWidth(cols - 4));
+      const rows = lines.map((l) => plain(l));
+      if (entry.partial) rows.push(plain("… response ended before completion", color.warning));
+      return [blank(), ...box(rows, cols, { border: color.dim })];
     }
 
     case "reasoning": {
       const { title, body } = reasonText(entry.text);
-      const out: Seg[][] = [blank(), plain(`∴ Thinking${title ? ` · ${title}` : ""}`, color.dim)];
-      if (body) for (const line of flattenText(body, proseWidth(cols - 2))) out.push(plain(`  ${line}`, color.muted, true));
-      return out;
+      const rows: Seg[][] = [plain(`∴ ${title || "thinking"}`, color.dim)];
+      if (body) for (const line of flattenText(body, proseWidth(cols - 6))) rows.push(plain(line, color.muted, true));
+      return [blank(), ...box(rows, cols, { border: color.dim })];
     }
 
     case "plan":
@@ -87,35 +111,37 @@ export function entryLines(entry: Entry, cols: number): Seg[][] {
     case "tool": {
       const failed = toolRowFailed(entry);
       const tone = failed ? color.error : color.success;
-      const out: Seg[][] = [
-        blank(),
-        [
-          { text: `${failed ? "✗" : "✓"} `, color: tone },
-          { text: toolLabel(entry.name), color: color.text, bold: true },
-          ...(entry.target ? [{ text: ` ${entry.target}`, color: color.dim } as Seg] : []),
-        ],
+      const head: Seg[] = [
+        { text: `${failed ? "✗" : "✓"} `, color: tone },
+        { text: toolLabel(entry.name), color: color.text, bold: true },
+        ...(entry.target ? [{ text: ` ${entry.target}`, color: color.dim } as Seg] : []),
       ];
+      const rows: Seg[][] = [head];
       if (entry.name === "edit" && !failed) {
         for (const d of parseDiffBlock(entry.output)) {
           const sign = d.kind === "add" ? "+ " : d.kind === "remove" ? "- " : "  ";
           const t = d.kind === "add" ? color.success : d.kind === "remove" ? color.error : color.dim;
-          out.push(plain(`  ${sign}${d.text.replace(/\t/g, "    ")}`, t));
+          rows.push(plain(`  ${sign}${d.text.replace(/\t/g, "    ")}`, t));
         }
-        return out;
+      } else {
+        const detail = toolDetail(failed ? "error" : "ok", entry.output);
+        if (detail) {
+          rows.push(plain("⎿", color.dim));
+          for (const line of flattenText(detail, proseWidth(cols - 6))) rows.push(plain(line, color.dim, true));
+        }
       }
-      const detail = toolDetail(failed ? "error" : "ok", entry.output);
-      if (detail) {
-        out.push(plain("  ⎿", color.dim));
-        for (const line of flattenText(detail, proseWidth(cols - 2))) out.push(plain(`  ${line}`, color.dim, true));
-      }
-      return out;
+      // A grey, highlighted rounded rectangle — the tool call reads as its own
+      // block rather than more transcript chatter.
+      return [blank(), ...box(rows, cols, { border: color.muted, bg: color.surface })];
     }
 
     case "notice": {
-      const tone = entry.tone === "error" ? color.error : entry.tone === "warn" ? color.warning : color.info;
-      const label = entry.tone === "error" ? "error" : entry.tone === "warn" ? "warning" : "·";
-      const body = entry.tone === "error" ? flattenText(entry.text, proseWidth(cols)) : [entry.text];
-      return [blank(), ...body.map((l) => [{ text: label, color: tone }, { text: ` ${l}`, color: color.muted }])];
+      const isError = entry.tone === "error";
+      const tone = isError ? color.error : entry.tone === "warn" ? color.warning : color.info;
+      const body = isError ? flattenText(entry.text, proseWidth(cols - 4)) : [entry.text];
+      const rows = body.map((l) => [{ text: isError ? "" : "· ", color: tone }, { text: l, color: isError ? color.error : color.muted }]);
+      // A real error (not a failed tool) gets a red highlighted box.
+      return isError ? [blank(), ...box(rows, cols, { border: color.error })] : [blank(), ...rows];
     }
 
     case "help": {
@@ -224,48 +250,31 @@ export function frameLine(text: string, columns: number): string {
 
 /* ---- the composer and every menu, as rows of segments ---- */
 
-/** The composer box: draft on the left, status face and [Send] on the right. */
-export function composerRows(opts: { cols: number; draft: string; caret: number; face: Face; canSend: boolean; busy: boolean }): { rows: Seg[][]; inputRow: number; inputCol: number } {
+/** The composer: a compact rounded box around the draft. Grows with the draft. */
+export function composerRows(opts: { cols: number; draft: string; caret: number; busy: boolean }): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const width = Math.max(20, opts.cols);
   const inner = width - 2;
   const draftLines = opts.draft.split("\n");
-  const hint = opts.busy ? "esc to cancel" : "enter to send · / for commands · ↑ history";
-  const leftRows = Math.max(1, draftLines.length) + 1; // draft lines + hint
-  const contentH = Math.max(leftRows, 4); // right column is face (3) + send (1)
-  const faceW = 5;
-  const promptW = Math.max(8, inner - faceW - 1);
   const glyph = opts.busy ? "· " : "❯ ";
+  const contentH = Math.max(1, draftLines.length);
   const cut = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
-
-  // A tight 3×3 face box: ╭───╮ / │face│ / ╰───╯, the face flush to the sides.
-  const face = faceChar(opts.face);
-  const faceBoxRows = [
-    plain("╭───╮", color.dim),
-    [{ text: "│", color: color.dim }, { text: face, color: color.accent, bold: true }, { text: "│", color: color.dim }],
-    plain("╰───╯", color.dim),
-  ];
-
-  // Caret: which draft line and column it sits on.
-  const before = opts.draft.slice(0, Math.min(opts.caret, opts.draft.length));
-  const caretLine = before.split("\n").length - 1;
-  const caretCol = before.length - before.lastIndexOf("\n") - 1;
 
   const rows: Seg[][] = [plain(`╭${"─".repeat(inner)}╮`, color.dim)];
   for (let r = 0; r < contentH; r += 1) {
-    let left: Seg[];
-    if (r < draftLines.length) {
-      left = r === 0 ? [{ text: glyph, color: opts.busy ? color.dim : color.accent, bold: true }, { text: cut(draftLines[r]!, promptW - glyph.length), color: color.text }] : plain(cut(draftLines[r]!, promptW));
-    } else if (r === draftLines.length) {
-      left = plain(cut(hint, promptW), color.dim);
-    } else {
-      left = plain("", color.dim);
-    }
-    const leftFit = fitWidth(left, promptW);
-    const right = r < 3 ? faceBoxRows[r]! : opts.canSend ? [{ text: "[Send]", color: color.accentText, bold: true }] : plain("      ");
-    rows.push([{ text: "│", color: color.dim }, ...leftFit, { text: " " }, ...right, { text: "│", color: color.dim }]);
+    const content: Seg[] =
+      r === 0
+        ? [{ text: glyph, color: opts.busy ? color.dim : color.accent, bold: true }, { text: cut(draftLines[r]!, inner - glyph.length), color: color.text }]
+        : plain(cut(draftLines[r]!, inner));
+    rows.push([{ text: "│", color: color.dim }, ...fitWidth(content, inner), { text: "│", color: color.dim }]);
   }
   rows.push(plain(`╰${"─".repeat(inner)}╯`, color.dim));
-  return { rows, inputRow: 1 + caretLine, inputCol: 1 + glyph.length + caretCol };
+
+  const before = opts.draft.slice(0, Math.min(opts.caret, opts.draft.length));
+  const caretLine = before.split("\n").length - 1;
+  const caretCol = before.length - before.lastIndexOf("\n") - 1;
+  // inputCol is the composer-row column just after the caret's character: the
+  // left │ (1) + the prompt start, then the glyph and the characters before it.
+  return { rows, inputRow: 1 + caretLine, inputCol: 2 + glyph.length + caretCol };
 }
 
 /** A generic selectable list, used by the provider and model pickers. */
@@ -375,4 +384,38 @@ export function addManualRows(label: string, manual: string): { rows: Seg[][]; i
     inputRow: 2,
     inputCol: 3,
   };
+}
+
+/** The 3×3 status face box: ╭───╮ / │face│ / ╰───╯. */
+export function faceBox(face: Face): Seg[][] {
+  const f = FACE[face];
+  return [
+    plain("╭───╮", color.dim),
+    [{ text: "│", color: color.dim }, { text: f, color: color.accent, bold: true }, { text: "│", color: color.dim }],
+    plain("╰───╯", color.dim),
+  ];
+}
+
+/**
+ * The top of the screen: the status bar in its own rounded rectangle on the
+ * left, the mascot at the top-right. The mascot's right edge is one column from
+ * the wall and one from the status bar, which itself stops a few columns short
+ * of the wall to leave room.
+ */
+export function topArea(cols: number, headerInfo: string, face: Face): Seg[][] {
+  const inner = frameInnerWidth(cols);
+  const mascot = faceBox(face);
+  const mascotW = 5;
+  const statusW = Math.max(16, inner - mascotW - 2);
+  const status = box(
+    [[{ text: headerInfo || "no provider configured — /setup", color: color.muted }]],
+    statusW,
+    { border: color.border },
+  );
+  const gap = Math.max(1, inner - statusW - mascotW - 1);
+  const rows: Seg[][] = [];
+  for (let r = 0; r < 3; r += 1) {
+    rows.push([...status[r]!, { text: " ".repeat(gap) }, ...mascot[r]!, { text: " " }]);
+  }
+  return rows;
 }
