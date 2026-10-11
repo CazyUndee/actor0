@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { release as osRelease } from "node:os";
 import { join } from "node:path";
 import { resolveShell, type ResolvedShell } from "./tools.js";
+import { getCachedEnvironment, setCachedEnvironment, clearCachedEnvironment } from "./ui/env-cache.js";
 
 /**
  * What this machine actually is.
@@ -157,11 +158,12 @@ function releaseString(): string | undefined {
   return typeof release === "string" && release.trim() ? release.trim() : undefined;
 }
 
-let cached: Environment | undefined;
-
-/** The machine's facts, measured once per process. */
-export function detectEnvironment(cwd: string = process.cwd()): Environment {
-  if (cached) return cached;
+/**
+ * The machine's facts, measured once per process. Spawns shells — this is the
+ * expensive call, so the app runs it off the main thread (warmEnvironment)
+ * rather than on the first turn, where it would block the first token.
+ */
+export function measureEnvironment(cwd: string = process.cwd()): Environment {
   const shell = resolveShell();
   const found = probeCommands(shell, PROBED_COMMANDS);
   const present = PROBED_COMMANDS.filter((name) => found.has(name));
@@ -176,13 +178,33 @@ export function detectEnvironment(cwd: string = process.cwd()): Environment {
     absent: [...absent],
     ...(testCommand ? { testCommand } : {}),
   };
-  cached = measured;
+  setCachedEnvironment(measured);
   return measured;
+}
+
+/**
+ * The environment for a system prompt: the warmed measurement if there is one,
+ * otherwise a minimal box with no inventory. It never spawns, so a cold first
+ * turn is not blocked — the model is told the platform and shell and that the
+ * command inventory is unknown, rather than waiting seconds to probe it.
+ */
+export function detectEnvironment(cwd: string = process.cwd()): Environment {
+  const warm = getCachedEnvironment();
+  if (warm) return warm;
+  // testCommand is a file read, not a probe, so it is safe to include here.
+  const testCommand = detectTestCommand(cwd);
+  return {
+    platform: process.platform,
+    shell: resolveShell(),
+    present: [],
+    absent: [],
+    ...(testCommand ? { testCommand } : {}),
+  };
 }
 
 /** Drops the measurement. For tests, and for a host that changes machine. */
 export function resetEnvironmentCache(): void {
-  cached = undefined;
+  clearCachedEnvironment();
 }
 
 /**

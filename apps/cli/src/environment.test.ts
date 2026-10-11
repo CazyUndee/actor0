@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectEnvironment, formatEnvironment, PROBED_COMMANDS, resetEnvironmentCache } from "./environment.js";
+import { detectEnvironment, measureEnvironment, formatEnvironment, PROBED_COMMANDS, resetEnvironmentCache } from "./environment.js";
 import { resolveShell } from "./tools.js";
 import { defaultSystemPrompt, withProjectContext } from "./turn.js";
 
@@ -11,7 +11,7 @@ const scratch = (): string => mkdtempSync(join(tmpdir(), "actor0-env-"));
 
 test("the inventory is a measurement, and the two halves do not overlap", () => {
   resetEnvironmentCache();
-  const found = detectEnvironment(scratch());
+  const found = measureEnvironment(scratch());
   const overlap = found.present.filter((name) => found.absent.includes(name));
   assert.deepEqual(overlap, [], `a command cannot be both installed and not: ${overlap.join(", ")}`);
   assert.equal(
@@ -27,7 +27,7 @@ test("the block says what is not installed, because that is the half the model g
   // is not enough — the absent list is the half that changes the behaviour,
   // and it is the half a model cannot derive for itself at any effort level.
   resetEnvironmentCache();
-  const block = formatEnvironment(detectEnvironment(scratch()));
+  const block = formatEnvironment(measureEnvironment(scratch()));
   assert.match(block, /not installed:/, "the absent list is the point of the block");
   assert.match(block, /installed:/);
   assert.match(block, /Measured on this machine/);
@@ -57,35 +57,49 @@ test("a test command is stated only when the project declares one", () => {
   // like a finding.
   resetEnvironmentCache();
   const bare = scratch();
-  assert.equal(detectEnvironment(bare).testCommand, undefined, "no manifest, no claim");
+  assert.equal(measureEnvironment(bare).testCommand, undefined, "no manifest, no claim");
 
   resetEnvironmentCache();
   const node = scratch();
   writeFileSync(join(node, "package.json"), JSON.stringify({ name: "x", scripts: { build: "tsc" } }));
-  assert.equal(detectEnvironment(node).testCommand, undefined, "a package.json with no test script is not a test runner");
+  assert.equal(measureEnvironment(node).testCommand, undefined, "a package.json with no test script is not a test runner");
 
   resetEnvironmentCache();
   const withTests = scratch();
   writeFileSync(join(withTests, "package.json"), JSON.stringify({ name: "x", scripts: { test: "node --test" } }));
-  assert.equal(detectEnvironment(withTests).testCommand, "npm test");
+  assert.equal(measureEnvironment(withTests).testCommand, "npm test");
 
   resetEnvironmentCache();
   const rust = scratch();
   writeFileSync(join(rust, "Cargo.toml"), "[package]\nname='x'\n");
-  assert.equal(detectEnvironment(rust).testCommand, "cargo test");
+  assert.equal(measureEnvironment(rust).testCommand, "cargo test");
 });
 
 test("the block is facts, and never advice", () => {
   // Advice here would compete with the prompt's own for attention, and the
   // reason this block works at all is that it is not advice. It is the one
   // thing the model could not have known, handed over.
-  const block = formatEnvironment(detectEnvironment(scratch()));
+  const block = formatEnvironment(measureEnvironment(scratch()));
   assert.ok(!/you should|try to|remember to|make sure to/i.test(block), `the block gave an instruction: ${block}`);
+});
+
+test("detectEnvironment is a cache read, and never spawns on a cold cache", () => {
+  // The whole point of the split: the first turn must not block on the probe.
+  // Cold, detectEnvironment returns a minimal, spawn-free box; warm, the
+  // measurement.
+  resetEnvironmentCache();
+  const cold = detectEnvironment(scratch());
+  assert.deepEqual(cold.present, [], "a cold cache reports no inventory");
+  assert.deepEqual(cold.absent, [], "nor an absence");
+  const cwd = scratch();
+  const warm = measureEnvironment(cwd);
+  assert.equal(detectEnvironment(cwd), warm, "once warmed, detectEnvironment returns the measurement");
 });
 
 test("the prompt tells the model the block is a measurement, and that it beats a guess", () => {
   resetEnvironmentCache();
   const cwd = scratch();
+  measureEnvironment(cwd); // warm the cache, as the worker does at boot
   const prompt = withProjectContext(defaultSystemPrompt(), cwd);
   assert.match(prompt, /<environment>/);
   assert.match(prompt, /measured on this machine, not assumed/i);
@@ -121,7 +135,7 @@ test("the release is a fact about the machine, not a stringified object", () => 
   // — a visibly wrong fact inside the one block whose entire value is that it
   // contains no wrong facts. Found by printing the block on a real machine,
   // which is the only way this class of bug shows up.
-  const block = formatEnvironment(detectEnvironment(scratch()));
+  const block = formatEnvironment(measureEnvironment(scratch()));
   assert.ok(!/\[object Object\]/.test(block), `the block stringified an object: ${block}`);
   const os = /operating system: (.+)/.exec(block)?.[1] ?? "";
   assert.ok(os.length > 0 && !os.includes("object"), `unusable OS line: ${os}`);

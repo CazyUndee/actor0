@@ -105,7 +105,22 @@ await build({
   plugins: [stubDevtools],
 });
 
-// 3) the entry. Its TUI import is rewritten to `./tui.mjs` and marked external,
+// 3) the environment worker. Spawned by the TUI at startup to measure the
+//    machine off the main thread, so the first turn's system prompt never waits
+//    on the shell spawns.
+await build({
+  entryPoints: ["dist/ui/env-worker.js"],
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node20",
+  outfile: "dist/env-worker.mjs",
+  banner,
+  define,
+  plugins: [stubDevtools],
+});
+
+// 4) the entry. Its TUI import is rewritten to `./tui.mjs` and marked external,
 //    so it is a runtime `import("./tui.mjs")` the entry hits only on the
 //    interactive path.
 await build({
