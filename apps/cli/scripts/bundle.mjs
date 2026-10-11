@@ -1,26 +1,23 @@
 import { build } from "esbuild";
-import { readdirSync, rmSync } from "node:fs";
-
-// Drop the previous build's split chunks (their names are content-hashed, so
-// they would otherwise pile up in dist/ across builds).
-for (const f of readdirSync("dist")) {
-  if (f.startsWith("chunk-") && f.endsWith(".mjs")) rmSync(`dist/${f}`, { force: true });
-}
+import { rmSync } from "node:fs";
 
 /**
- * Bundle the CLI, splitting the TUI out of the entry.
+ * Bundle the CLI into two files: a small `cli.mjs` entry and one `tui.mjs`.
  *
  * `tsc` emits one module per source file, and the CLI's dependency tree (ink
  * pulls in es-toolkit, ws and ~20 more, each split across many small files) is
  * read from disk on every start. On a slow or antivirus-scanned disk that added
  * ~4s to every launch — the whole app felt frozen before its first frame.
  *
- * Bundling collapses the tree, and `splitting` keeps the heavy TUI (ink, react,
- * the harness) in its own chunks that the entry loads only on the interactive
- * path — so `--version`/`--help`/`--sessions`/`-p` never pay for them. Measured:
- * `--version` ~2s → ~0.3s; the TUI's own boot is unchanged (it needs those
- * chunks either way). Kept as a separate script rather than inline flags because
- * the shebang and the long flag list do not survive shell quoting.
+ * Bundling collapses the tree. The TUI is bundled to its own `tui.mjs` and
+ * loaded through a dynamic import, so `--version`/`--help`/`--sessions`/`-p`
+ * never read it. Crucially the TUI stays a *single* file: esbuild's `splitting`
+ * would emit a chunk per module, and on an antivirus-scanned disk that is a scan
+ * per chunk — it measured ~10s against ~2s for one read. So: two single-file
+ * builds, not one split build.
+ *
+ * Kept as a separate script rather than inline flags because the shebang and
+ * the long flag list do not survive shell quoting.
  */
 
 // ink imports the optional, DEV-only `react-devtools-core` through a
@@ -41,47 +38,58 @@ const stubDevtools = {
   },
 };
 
+// ESM, and it has to be. The dependency tree is ESM now — `ink` 6 and
+// `yoga-layout` 3 both use top-level await — and esbuild cannot lower that to
+// CommonJS: it fails the build outright with "Top-level await is not available
+// in the configured target environment". But ESM breaks the *other* half of what
+// an earlier note here tried to solve. One of ink's CommonJS dependencies,
+// `signal-exit`, does a dynamic `require("assert")` of a Node builtin. esbuild
+// cannot see that at build time, so in ESM output the call is left pointing at
+// esbuild's `__require` shim — which throws `Dynamic require of "assert" is not
+// supported` the moment the bundle loads. The old note reached for CJS to dodge
+// this; that is no longer an available move, so the shim is disarmed instead. A
+// real `require` in the bundle scope routes the call to the genuine builtin.
+// Applied to both outputs, since signal-exit lives in tui.mjs.
+const banner = {
+  js: 'import { createRequire as __actor0CreateRequire } from "module";\nconst require = __actor0CreateRequire(import.meta.url);',
+};
+
+rmSync("dist/tui.mjs", { force: true });
+
+// Rewrite the entry's `import("./ui/tui-bootstrap.js")` to a runtime
+// `import("./tui.mjs")` left out of the cli bundle. (esbuild's `alias` only
+// takes package names, not relative paths, so this is a plugin.)
+const externalizeTui = {
+  name: "externalize-tui",
+  setup(build) {
+    build.onResolve({ filter: /tui-bootstrap\.js$/ }, () => ({ path: "./tui.mjs", external: true }));
+  },
+};
+
+// 1) the TUI, as one file. `index.ts` reaches it through a dynamic import that
+//    the cli build rewrites to this path, so it is resolved at runtime, not
+//    bundled into the entry.
+await build({
+  entryPoints: ["dist/ui/tui-bootstrap.js"],
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node20",
+  outfile: "dist/tui.mjs",
+  banner,
+  plugins: [stubDevtools],
+});
+
+// 2) the entry. The TUI import is rewritten to `./tui.mjs` and marked external,
+//    so it is left as a runtime `import("./tui.mjs")` the entry hits only on the
+//    interactive path.
 await build({
   entryPoints: ["dist/index.js"],
   bundle: true,
   platform: "node",
-  // ESM, and it has to be. The dependency tree is ESM now — `ink` 6 and
-  // `yoga-layout` 3 both use top-level await — and esbuild cannot lower that to
-  // CommonJS: it fails the build outright with "Top-level await is not
-  // available in the configured target environment". So `format: "cjs"` here
-  // does not produce a slower bundle, it produces no bundle at all.
-  //
-  // But ESM breaks the *other* half of what an earlier note here tried to
-  // solve. One of ink's CommonJS dependencies, `signal-exit`, does a dynamic
-  // `require("assert")` of a Node builtin. esbuild cannot see that at build
-  // time, so in ESM output the call is left pointing at esbuild's `__require`
-  // shim — which throws `Dynamic require of "assert" is not supported` the
-  // moment the bundle loads. The old note reached for CJS to dodge this; that
-  // is no longer an available move, so the shim is disarmed instead. Its own
-  // first check is `typeof require !== "undefined"`, so a real `require` in the
-  // bundle scope routes the call to the genuine builtin. This is esbuild's
-  // documented remedy for exactly this error.
   format: "esm",
   target: "node20",
-  // Split into chunks. Without this esbuild inlines the TUI's dynamic import and
-  // evaluates it at load, so `--version` still paid for the whole dependency
-  // tree. `splitting` makes `import("./ui/App.js")` a real separate file the
-  // entry loads only on the interactive path, so the fast paths stay fast.
-  splitting: true,
-  outdir: "dist",
-  entryNames: "cli",
-  chunkNames: "chunk-[hash]",
-  // Force the `.mjs` extension (esbuild would otherwise append `.js` to the
-  // entryNames), so the bin stays `./dist/cli.mjs` and every chunk is ESM.
-  outExtension: { ".js": ".mjs" },
-  // Injected after the entry's `#!` shebang, which esbuild keeps at line 1 — it
-  // hoists the hashbang above the banner rather than the other way round, so
-  // adding a shebang here would only duplicate it.
-  banner: {
-    js: 'import { createRequire as __actor0CreateRequire } from "module";\nconst require = __actor0CreateRequire(import.meta.url);',
-  },
-  // No shebang banner: the entry (dist/index.js) already begins with
-  // `#!/usr/bin/env node` and esbuild keeps it as line 1. Adding one here would
-  // duplicate it onto line 2, which ESM rejects.
-  plugins: [stubDevtools],
+  outfile: "dist/cli.mjs",
+  banner,
+  plugins: [stubDevtools, externalizeTui],
 });

@@ -36,11 +36,6 @@ $XDG_DATA_HOME/actor0. Set ACTOR0_DISABLE_MOUSE=1 to turn off mouse capture
 (keeps keyboard scroll, restores terminal-native copy-paste).
 `;
 
-/** An env flag is set when it is present and not "0"/"false"/"". */
-function truthy(value: string | undefined): boolean {
-  return value !== undefined && value !== "" && value !== "0" && value.toLowerCase() !== "false";
-}
-
 async function readVersion(): Promise<string> {
   const { readFileSync } = await import("node:fs");
   const { fileURLToPath } = await import("node:url");
@@ -129,74 +124,26 @@ async function main(): Promise<void> {
   }
 
   // The TUI — the only path that needs Ink, React, the harness and the renderer.
-  // Loaded here so `--version`/`--help`/`--sessions` never pay for them. Our own
-  // renderer owns the terminal; Ink is used only to host React's state and
-  // effects, and is handed streams it writes nothing to — the App returns null,
-  // so Ink draws nothing and never fights the frame (see ui/App.tsx). Mouse
-  // capture is opt-out (it breaks terminal-native copy-paste); keyboard scroll —
-  // PgUp/PgDn, the arrows — works either way.
-  const [{ App }, { Screen }, { render }, reactNs, { PassThrough }] = await Promise.all([
-    import("./ui/App.js"),
-    import("./ui/term.js"),
-    import("ink"),
-    import("react"),
-    import("node:stream"),
-  ]);
-  // React's CJS interop puts the object (with createElement) on `.default` in a
-  // dynamic import namespace, so the named `{ createElement }` is undefined there.
-  const createElement = (reactNs.default ?? reactNs).createElement as typeof import("react").createElement;
-  const screen = new Screen(process.stdout, { mouse: !truthy(process.env.ACTOR0_DISABLE_MOUSE) });
-  const sink = new PassThrough();
-  sink.resume();
-  const instanceRef: { current: ReturnType<typeof render> | undefined } = { current: undefined };
-  const restoreTerminal = (): void => {
-    screen.dispose();
-    try {
-      process.stdin.setRawMode?.(false);
-    } catch {
-      // not a TTY — nothing to restore
-    }
-  };
-  const exit = (): void => {
-    restoreTerminal();
-    instanceRef.current?.unmount();
-    process.exit(0);
-  };
-  // A `kill`, a crash, or a closed terminal must not leave the user stranded in
-  // the alt screen with the mouse captured — restore it on the way down.
-  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    process.on(sig, () => {
-      restoreTerminal();
-      process.exit(sig === "SIGINT" ? 130 : 143);
-    });
-  }
-  if (process.stdin.isTTY) process.stdin.setRawMode(true);
-  process.stdin.setEncoding("utf8");
-  instanceRef.current = render(
-    createElement(App, {
-      cwd,
-      config,
-      version: await readVersion(),
-      screen,
-      stdin: process.stdin,
-      onExit: exit,
-      ...(restored
-        ? {
-            resumed: {
-              id: restored.id,
-              createdAt: restored.createdAt,
-              updatedAt: restored.updatedAt,
-              messages: restored.messages,
-            },
-          }
-        : {}),
-    }),
-    // Ctrl+C is handled in the app: it cancels a running turn first and only
-    // exits when there is nothing to cancel.
-    { exitOnCtrlC: false, stdin: sink as never, stdout: sink as never, patchConsole: false },
-  );
-
-  await instanceRef.current!.waitUntilExit();
+  // Booted through its own module so the bundler can split it into one file the
+  // fast paths never load (see ui/tui-bootstrap.ts).
+  const { bootTui } = await import("./ui/tui-bootstrap.js");
+  const waitUntilExit = await bootTui({
+    cwd,
+    config,
+    version: await readVersion(),
+    stdin: process.stdin,
+    ...(restored
+      ? {
+          resumed: {
+            id: restored.id,
+            createdAt: restored.createdAt,
+            updatedAt: restored.updatedAt,
+            messages: restored.messages,
+          },
+        }
+      : {}),
+  });
+  await waitUntilExit();
 }
 
 main().catch((error: unknown) => {
