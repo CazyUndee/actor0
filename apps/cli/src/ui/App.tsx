@@ -142,8 +142,23 @@ function wrap(current: number, count: number, delta: number): number {
 export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", transport, screen, stdin, onExit }: AppProps) {
   const [config, setConfig] = useState<CliConfig>(initialConfig);
   const [conversation, setConversation] = useState<ConversationState>(() => initialConversation());
-  const [draft, setDraft] = useState("");
-  const [caret, setCaret] = useState(0);
+  // The draft is edited on every keystroke, and several keystrokes can land
+  // in one React batch before a re-render — so a closure `caret` is stale and
+  // insertions happen at the wrong offset, reordering characters (typing
+  // "great" came out "rgeat"). Refs are the source of truth during editing,
+  // updated synchronously; the mirrored state drives the render.
+  const [draft, setDraftState] = useState("");
+  const draftRef = useRef("");
+  const [caret, setCaretState] = useState(0);
+  const caretRef = useRef(0);
+  const setDraft = (d: string): void => {
+    draftRef.current = d;
+    setDraftState(d);
+  };
+  const setCaret = (c: number): void => {
+    caretRef.current = c;
+    setCaretState(c);
+  };
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -559,33 +574,37 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   // ---- draft editing (the composer input, ours) ----
   const editDraft = (event: InputEvent): boolean => {
+    // Read the refs, not the closure state: a batch of keystrokes reuses the
+    // closure caret and inserts at the wrong place (the reordering bug).
+    const at = caretRef.current;
+    const d = draftRef.current;
     if (event.type === "text") {
-      setDraft((d) => d.slice(0, caret) + event.text + d.slice(caret));
-      setCaret((c) => c + event.text.length);
+      setDraft(d.slice(0, at) + event.text + d.slice(at));
+      setCaret(at + event.text.length);
       return true;
     }
     if (event.type !== "key") return false;
     switch (event.key) {
       case "backspace":
-        if (caret > 0) {
-          setDraft((d) => d.slice(0, caret - 1) + d.slice(caret));
-          setCaret((c) => c - 1);
+        if (at > 0) {
+          setDraft(d.slice(0, at - 1) + d.slice(at));
+          setCaret(at - 1);
         }
         return true;
       case "delete":
-        setDraft((d) => d.slice(0, caret) + d.slice(caret + 1));
+        setDraft(d.slice(0, at) + d.slice(at + 1));
         return true;
       case "left":
-        setCaret((c) => Math.max(0, c - 1));
+        setCaret(Math.max(0, at - 1));
         return true;
       case "right":
-        setCaret((c) => Math.min(draft.length, c + 1));
+        setCaret(Math.min(d.length, at + 1));
         return true;
       case "home":
         setCaret(0);
         return true;
       case "end":
-        setCaret(draft.length);
+        setCaret(d.length);
         return true;
       case "ctrl-u":
         setDraft("");
@@ -691,6 +710,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // Move the caret up/down between lines of the draft, clamping the column to
   // the target line's length.
   const moveCaretVertical = (delta: number): void => {
+    const draft = draftRef.current;
+    const caret = caretRef.current;
     const lines = draft.split("\n");
     const before = draft.slice(0, Math.min(caret, draft.length));
     const line = before.split("\n").length - 1;
@@ -1073,10 +1094,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // Rows a menu may occupy: the frame minus both borders, the top area, the
     // disclaimer and a sliver of transcript. Long lists window to this height.
     const menuHeight = Math.max(6, rows - 2 - 3 - 1 - 3);
+    // The composer grows with a long draft, up to a bounded height so the
+    // transcript never disappears entirely; the rest scrolls within the box.
+    const composerMaxH = Math.max(3, Math.min(12, rows - 9));
     if (menuOpen) {
       composer = menuRows(menuHeight);
     } else {
-      const built = composerRows({ cols: innerW, draft, caret, busy });
+      const built = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH });
       composer = built.rows;
       caretPos = { row: built.inputRow, col: built.inputCol };
     }

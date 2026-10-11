@@ -378,6 +378,26 @@ test("the manage screen's edit action re-discovers the provider's models", async
   }
 });
 
+test("a long wrapped prompt keeps the caret on the last visible char", async () => {
+  const { screen, stdin, unmount } = await mount();
+  try {
+    const long = "explain in great detail how a hash map works internally including collisions and resizing behavior";
+    for (const ch of long) {
+      stdin.write(ch);
+      await tick(2);
+    }
+    await tick(200);
+    const caret = screen.carets.at(-1);
+    assert.ok(caret, "the caret is placed");
+    // eslint-disable-next-line no-control-regex -- strip ANSI to measure the visible column
+    const row = screen.last[caret!.row - 1]!.replace(/\x1b\[[0-9;]*m/g, "");
+    assert.ok(row.includes("│"), `the caret is on a composer row (row ${caret!.row})`);
+    assert.equal(row[caret!.col - 2], "r", `the char before the caret is the last typed char (saw '${row[caret!.col - 2]}')`);
+  } finally {
+    unmount();
+  }
+});
+
 test("Ctrl+D quits", async () => {
   let exited = false;
   const { stdin, unmount } = await mount({ onExit: () => { exited = true; } });

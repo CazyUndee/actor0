@@ -398,30 +398,68 @@ export function frameLine(text: string, columns: number): string {
 /* ---- the composer and every menu, as rows of segments ---- */
 
 /** The composer: a compact rounded box around the draft. Grows with the draft. */
-export function composerRows(opts: { cols: number; draft: string; caret: number; busy: boolean }): { rows: Seg[][]; inputRow: number; inputCol: number } {
+export function composerRows(opts: { cols: number; draft: string; caret: number; busy: boolean; maxHeight?: number }): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const width = Math.max(20, opts.cols);
   const inner = width - 2;
-  const draftLines = opts.draft.split("\n");
   const glyph = opts.busy ? "· " : "❯ ";
-  const contentH = Math.max(1, draftLines.length);
-  const cut = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
+  // The first visual row is narrower — the glyph sits in front of it.
+  const firstWidth = Math.max(8, inner - glyph.length);
+  const caret = Math.max(0, Math.min(opts.caret, opts.draft.length));
+
+  // Hard-wrap the draft into visual rows of fixed width, so a long line wraps
+  // and stays fully visible instead of truncating. Fixed-width slices also mean
+  // the caret's character offset maps exactly onto a row and column — no
+  // dropped break-space to account for. Each row remembers where it starts.
+  type Row = { text: string; start: number; first: boolean };
+  const logical = opts.draft.split("\n");
+  const all: Row[] = [];
+  let lineStart = 0;
+  for (let li = 0; li < logical.length; li += 1) {
+    const line = logical[li]!;
+    const lineWidth = li === 0 ? firstWidth : inner;
+    const n = Math.max(1, Math.ceil(line.length / lineWidth));
+    for (let wi = 0; wi < n; wi += 1) {
+      all.push({ text: line.slice(wi * lineWidth, wi * lineWidth + lineWidth), start: lineStart + wi * lineWidth, first: li === 0 && wi === 0 });
+    }
+    lineStart += line.length + 1;
+  }
+  if (all.length === 0) all.push({ text: "", start: 0, first: true });
+
+  // The caret's absolute visual row and its column within that row.
+  let caretRow = all.length - 1;
+  let caretCol = 0;
+  for (let i = 0; i < all.length; i += 1) {
+    const row = all[i]!;
+    if (caret >= row.start && caret <= row.start + row.text.length) {
+      caretRow = i;
+      caretCol = caret - row.start;
+      break;
+    }
+  }
+
+  // Cap the visible height and scroll so the caret stays on screen; a prompt
+  // taller than the box keeps its tail and counts what scrolled off the top.
+  const maxRows = Math.max(1, (opts.maxHeight ?? 8) - 3); // borders + optional count
+  let startIdx = 0;
+  if (all.length > maxRows) startIdx = Math.max(0, Math.min(caretRow - maxRows + 1, all.length - maxRows));
+  const visible = all.slice(startIdx, startIdx + maxRows);
+  const above = startIdx;
 
   const rows: Seg[][] = [plain(`╭${"─".repeat(inner)}╮`, color.dim)];
-  for (let r = 0; r < contentH; r += 1) {
-    const content: Seg[] =
-      r === 0
-        ? [{ text: glyph, color: opts.busy ? color.dim : color.accent, bold: true }, { text: cut(draftLines[r]!, inner - glyph.length), color: color.text }]
-        : plain(cut(draftLines[r]!, inner));
+  if (above > 0) rows.push([{ text: "│", color: color.dim }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.dim }]);
+  for (const row of visible) {
+    const content: Seg[] = row.first
+      ? [{ text: glyph, color: opts.busy ? color.dim : color.accent, bold: true }, { text: row.text, color: color.text }]
+      : [{ text: row.text, color: color.text }];
     rows.push([{ text: "│", color: color.dim }, ...fitWidth(content, inner), { text: "│", color: color.dim }]);
   }
   rows.push(plain(`╰${"─".repeat(inner)}╯`, color.dim));
 
-  const before = opts.draft.slice(0, Math.min(opts.caret, opts.draft.length));
-  const caretLine = before.split("\n").length - 1;
-  const caretCol = before.length - before.lastIndexOf("\n") - 1;
-  // inputCol is the composer-row column just after the caret's character: the
-  // left │ (1) + the prompt start, then the glyph and the characters before it.
-  return { rows, inputRow: 1 + caretLine, inputCol: 2 + glyph.length + caretCol };
+  // inputRow is the caret's row within `rows` (rows[0] is the top border);
+  // inputCol is the composer-box column just after its character.
+  const inputRow = 1 + (above > 0 ? 1 : 0) + (caretRow - startIdx);
+  const prefix = all[caretRow]!.first ? glyph.length : 0;
+  return { rows, inputRow, inputCol: 2 + prefix + caretCol };
 }
 
 export interface PickerItem {

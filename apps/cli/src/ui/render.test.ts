@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { entryLines, liveLines } from "./render.js";
+import { composerRows, entryLines, liveLines } from "./render.js";
 import type { Entry } from "../conversation.js";
 
 /** Join rendered rows to plain text (no colour), for assertions. */
@@ -69,4 +69,23 @@ test("long streamed text is counted at the top, not silently cut", () => {
   const out = text(rows);
   assert.ok(/↑ \d+ more lines?/.test(out), "the lines scrolled off the top are counted");
   assert.ok(out.includes("word59"), "the latest text is still shown");
+});
+
+test("a long prompt wraps into visible rows and keeps the caret on the right char", () => {
+  const draft = "please explain in great detail how a hash map works internally including collisions";
+  const built = composerRows({ cols: 40, draft, caret: draft.length, busy: false, maxHeight: 12 });
+  const rows = built.rows.map((r) => r.map((s) => s.text).join(""));
+  assert.ok(rows.length > 4, `the composer grew to hold the wrapped prompt (${rows.length} rows)`);
+  assert.ok(rows.join("\n").includes("hash map works"), "the full prompt is visible, not truncated");
+  // The caret at the end lands on the last content row, just past the last char.
+  const caretRow = built.rows[built.inputRow]!.map((s) => s.text).join("");
+  assert.equal(caretRow[built.inputCol - 2], "s", `the caret is on the last char (saw '${caretRow[built.inputCol - 2]}')`);
+});
+
+test("a prompt taller than the box scrolls and counts what is above", () => {
+  const draft = "x".repeat(400);
+  const built = composerRows({ cols: 40, draft, caret: draft.length, busy: false, maxHeight: 6 });
+  const out = built.rows.map((r) => r.map((s) => s.text).join("")).join("\n");
+  assert.ok(/↑ \d+ more lines?/.test(out), "the scrolled-off lines are counted");
+  assert.ok(built.rows.length <= 6, "the box never exceeds its max height");
 });
