@@ -254,13 +254,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
   }, [provider, resolved.error]);
 
-  // NOTE: the environment probe (detectEnvironment) is deliberately NOT
-  // warmed here. It runs several synchronous shell spawns that measured ~80%
-  // of the whole boot, blocking the first frame — the CLI felt frozen before
-  // it drew. It is paid lazily now, on the first turn that builds the system
-  // prompt (turn.ts), where a few seconds is an expected wait for a response
-  // rather than a stall before the composer appears.
-
   // Redraw at the new size on resize. The render effect only runs on a state
   // change, and a resize is not one, so without this the old-size grid is left
   // on a resized terminal and everything after it is misaligned.
@@ -388,6 +381,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     abortRef.current = controller;
     void (async () => {
       try {
+        // Let the just-committed message and the busy spinner render before the
+        // turn's first synchronous work (loading the turn bundle, which spawns a
+        // shell) blocks the event loop — so the message appears immediately even
+        // on a cold cache rather than after the probe.
+        await new Promise((r) => setTimeout(r, 0));
         let activeProvider = provider;
         if (provider.auth === "oauth") {
           const refreshed = await refreshProvider(provider, config).catch(() => undefined);
