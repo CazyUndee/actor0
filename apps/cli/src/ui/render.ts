@@ -2,10 +2,46 @@ import chalk from "chalk";
 import type { Entry } from "../conversation.js";
 import { HELP_TEXT } from "../slash.js";
 import { color } from "../theme.js";
-import { toolLabel } from "../tools.js";
 import { parseDiffBlock } from "../diff.js";
 import { formatTokens } from "../usage.js";
-import { flattenText, proseWidth, reasonText, toolDetail, toolRowFailed } from "./parts.js";
+import { flattenText, proseWidth, reasonText, toolRowFailed } from "./parts.js";
+
+/** A clear, human name for a tool — "Bash", not the cryptic "$". */
+function toolDisplayName(name: string): string {
+  switch (name) {
+    case "shell":
+      return "Bash";
+    case "read":
+      return "Read";
+    case "write":
+      return "Write";
+    case "edit":
+      return "Edit";
+    case "glob":
+      return "Glob";
+    case "grep":
+      return "Grep";
+    default:
+      return name;
+  }
+}
+
+/**
+ * A tool's output as a few dimmed lines under its header: line structure kept,
+ * a leading "path (N lines):" label dropped, and long output cut to a count so a
+ * hundred-line result never floods the transcript.
+ */
+function toolOutputLines(status: "ok" | "error", output: string, cols: number): string[] {
+  const text = output.replace(/\r/g, "").trim();
+  if (!text) return [];
+  const width = Math.max(20, cols - 4);
+  const raw = text.split("\n").filter((l, i) => !(i === 0 && /^\S.*\(\d+ .*\):$/.test(l.trim())));
+  const lines = raw.flatMap((l) => flattenText(l, width));
+  const max = status === "error" ? 8 : 6;
+  if (lines.length <= max) return lines;
+  const rest = lines.length - max;
+  return [...lines.slice(0, max), `… ${rest} more line${rest === 1 ? "" : "s"}`];
+}
 
 /**
  * Our own renderer: the transcript and chrome as strings.
@@ -150,7 +186,7 @@ export function managePanelRows(
 }
 
 /** One committed transcript entry, as rows of segments (each row ≤ `cols`). */
-export function entryLines(entry: Entry, cols: number): Seg[][] {
+export function entryLines(entry: Entry, cols: number, expandReasoning = false): Seg[][] {
   switch (entry.kind) {
     case "user":
       return [
@@ -170,7 +206,21 @@ export function entryLines(entry: Entry, cols: number): Seg[][] {
 
     case "reasoning": {
       const { title, body } = reasonText(entry.text);
-      const rows: Seg[][] = [plain(`∴ ${title || "thinking"}`, color.dim)];
+      const label = `∴ ${title || "thinking"}`;
+      // Collapsed by default: a one-line preview with an expand hint, so the
+      // model's raw chain-of-thought does not flood the transcript.
+      if (!expandReasoning) {
+        const flat = body.replace(/\s+/g, " ").trim();
+        const room = Math.max(10, cols - label.length - 14);
+        const cut = flat.slice(0, room);
+        const row: Seg[] = [
+          { text: label, color: color.dim },
+          { text: `  ${cut}${flat.length > cut.length ? "…" : ""}`, color: color.dim, dim: true },
+          { text: "  ⌃r", color: color.dim, dim: true },
+        ];
+        return [blank(), ...box([row], cols, { border: color.dim })];
+      }
+      const rows: Seg[][] = [plain(label, color.dim)];
       if (body) for (const line of flattenText(body, proseWidth(cols - 6))) rows.push(plain(line, color.muted, true));
       return [blank(), ...box(rows, cols, { border: color.dim })];
     }
@@ -183,8 +233,8 @@ export function entryLines(entry: Entry, cols: number): Seg[][] {
       const tone = failed ? color.error : color.success;
       const head: Seg[] = [
         { text: `${failed ? "✗" : "✓"} `, color: tone },
-        { text: toolLabel(entry.name), color: color.text, bold: true },
-        ...(entry.target ? [{ text: ` ${entry.target}`, color: color.dim } as Seg] : []),
+        { text: toolDisplayName(entry.name), color: color.text, bold: true },
+        ...(entry.target ? [{ text: `  ${entry.target}`, color: color.dim } as Seg] : []),
       ];
       const rows: Seg[][] = [head];
       if (entry.name === "edit" && !failed) {
@@ -194,11 +244,9 @@ export function entryLines(entry: Entry, cols: number): Seg[][] {
           rows.push(plain(`  ${sign}${d.text.replace(/\t/g, "    ")}`, t));
         }
       } else {
-        const detail = toolDetail(failed ? "error" : "ok", entry.output);
-        if (detail) {
-          rows.push(plain("⎿", color.dim));
-          for (const line of flattenText(detail, proseWidth(cols - 6))) rows.push(plain(line, color.dim, true));
-        }
+        // Output reads as an indented, dimmed block under the header — line
+        // structure preserved, long output cut with a count, no cryptic marker.
+        for (const line of toolOutputLines(failed ? "error" : "ok", entry.output, cols - 6)) rows.push(plain(`  ${line}`, color.dim, true));
       }
       // A grey, highlighted rounded rectangle — the tool call reads as its own
       // block rather than more transcript chatter.
@@ -244,17 +292,25 @@ export function helpBox(cols: number): Seg[][] {
 }
 
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
-export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false): Seg[][] {
+export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = false): Seg[][] {
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
   if (!busy) return [];
   const spin = waitingOnUser ? "⏸" : "◐◓◑◒"[frame % 4];
   const out: Seg[][] = [blank()];
   if (live.retrying) out.push([{ text: `${spin} `, color: color.warning }, { text: `retrying after an interrupted attempt (${elapsed}s)`, color: color.warning }]);
-  else if (live.tool) out.push([{ text: `${spin} `, color: color.accent }, { text: `${live.tool.name}${live.tool.target ? ` ${live.tool.target}` : ""}`, color: color.muted }]);
+  else if (live.tool) out.push([{ text: `${spin} `, color: color.accent }, { text: `${toolDisplayName(live.tool.name)}${live.tool.target ? `  ${live.tool.target}` : ""}`, color: color.muted }]);
   else if (live.status) out.push([{ text: `${spin} `, color: color.accent }, { text: live.status, color: color.muted }]);
   if (live.reasoning.trim()) {
-    out.push(plain("∴ Thinking", color.dim));
-    for (const l of flattenText(live.reasoning.trimEnd(), proseWidth(cols - 2)).slice(-budget)) out.push(plain(`  ${l}`, color.muted, true));
+    if (expandReasoning) {
+      out.push(plain("∴ thinking", color.dim));
+      for (const l of flattenText(live.reasoning.trimEnd(), proseWidth(cols - 2)).slice(-budget)) out.push(plain(`  ${l}`, color.muted, true));
+    } else {
+      // Collapsed: the latest thought, tail-trimmed to one line.
+      const flat = live.reasoning.replace(/\s+/g, " ").trim();
+      const room = Math.max(20, cols - 20);
+      const cut = flat.length > room ? `…${flat.slice(-room)}` : flat;
+      out.push([{ text: "∴ thinking ", color: color.dim }, { text: cut, color: color.dim, dim: true }, { text: "  ⌃r", color: color.dim, dim: true }]);
+    }
   }
   if (live.text) for (const l of flattenText(live.text, proseWidth(cols)).slice(-budget)) out.push(plain(l));
   return out;

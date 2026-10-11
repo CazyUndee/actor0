@@ -163,6 +163,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [manageProvider, setManageProvider] = useState<string | null>(null);
   const [manageCursor, setManageCursor] = useState(0);
   const [manageConfirm, setManageConfirm] = useState(false);
+  const [expandReasoning, setExpandReasoning] = useState(false);
   const [modelCursor, setModelCursor] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
   const [thinkingCursor, setThinkingCursor] = useState(0);
@@ -667,6 +668,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   };
 
   const handleKey = (key: string): void => {
+    // Ctrl+R expands/collapses every reasoning block, in any mode.
+    if (key === "ctrl-r") return setExpandReasoning((v) => !v);
     if (key === "ctrl-c") {
       if (busy) abortRef.current?.abort();
       else onExit();
@@ -1055,7 +1058,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const face: Face = justFinished ? "happy" : busy && liveQuiet ? "startled" : stateFace({ live: conversation.live, lastEntry: conversation.entries[conversation.entries.length - 1], blocked: Boolean(conversation.blocked), busy });
 
   // ---- build the screen and draw it ----
-  const entryRowList = useMemo(() => conversation.entries.flatMap((entry) => entryLines(entry, frameInnerWidth(screen.size.cols))), [conversation.entries, screen.size.cols]);
+  const entryRowList = useMemo(() => conversation.entries.flatMap((entry) => entryLines(entry, frameInnerWidth(screen.size.cols), expandReasoning)), [conversation.entries, screen.size.cols, expandReasoning]);
 
   const buildGrid = (): { grid: string[]; caret?: { row: number; col: number } } => {
     const cols = screen.size.cols;
@@ -1092,7 +1095,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
     const chromeH = top.length + blockedRow.length + slashPopup.length + composer.length + 1;
     const transcriptV = Math.max(3, rows - 2 - chromeH);
-    const live = menuOpen ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked));
+    const live = menuOpen ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), expandReasoning);
     const transcript = windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
     while (transcript.length < transcriptV) transcript.push([{ text: " ".repeat(innerW), dim: true }]);
 
