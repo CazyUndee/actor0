@@ -1,17 +1,26 @@
 import { build } from "esbuild";
+import { readdirSync, rmSync } from "node:fs";
+
+// Drop the previous build's split chunks (their names are content-hashed, so
+// they would otherwise pile up in dist/ across builds).
+for (const f of readdirSync("dist")) {
+  if (f.startsWith("chunk-") && f.endsWith(".mjs")) rmSync(`dist/${f}`, { force: true });
+}
 
 /**
- * Bundle the CLI into a single file.
+ * Bundle the CLI, splitting the TUI out of the entry.
  *
  * `tsc` emits one module per source file, and the CLI's dependency tree (ink
  * pulls in es-toolkit, ws and ~20 more, each split across many small files) is
  * read from disk on every start. On a slow or antivirus-scanned disk that added
  * ~4s to every launch — the whole app felt frozen before its first frame.
  *
- * Bundling collapses the tree into one file, so startup pays a single read
- * instead of hundreds. Measured: ~5s → ~0.3s. Kept as a separate script rather
- * than inline flags because the shebang and the long flag list do not survive
- * shell quoting.
+ * Bundling collapses the tree, and `splitting` keeps the heavy TUI (ink, react,
+ * the harness) in its own chunks that the entry loads only on the interactive
+ * path — so `--version`/`--help`/`--sessions`/`-p` never pay for them. Measured:
+ * `--version` ~2s → ~0.3s; the TUI's own boot is unchanged (it needs those
+ * chunks either way). Kept as a separate script rather than inline flags because
+ * the shebang and the long flag list do not survive shell quoting.
  */
 
 // ink imports the optional, DEV-only `react-devtools-core` through a
@@ -54,7 +63,17 @@ await build({
   // documented remedy for exactly this error.
   format: "esm",
   target: "node20",
-  outfile: "dist/cli.mjs",
+  // Split into chunks. Without this esbuild inlines the TUI's dynamic import and
+  // evaluates it at load, so `--version` still paid for the whole dependency
+  // tree. `splitting` makes `import("./ui/App.js")` a real separate file the
+  // entry loads only on the interactive path, so the fast paths stay fast.
+  splitting: true,
+  outdir: "dist",
+  entryNames: "cli",
+  chunkNames: "chunk-[hash]",
+  // Force the `.mjs` extension (esbuild would otherwise append `.js` to the
+  // entryNames), so the bin stays `./dist/cli.mjs` and every chunk is ESM.
+  outExtension: { ".js": ".mjs" },
   // Injected after the entry's `#!` shebang, which esbuild keeps at line 1 — it
   // hoists the hashbang above the banner rather than the other way round, so
   // adding a shebang here would only duplicate it.

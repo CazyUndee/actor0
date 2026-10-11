@@ -1,17 +1,18 @@
 #!/usr/bin/env node
-import { render } from "ink";
-import { createElement } from "react";
-import { ConfigError, loadConfig } from "./config.js";
 import { FlagError, parseFlags, resolveCwd } from "./flags.js";
-import { latestSession, loadSession } from "./session.js";
-import { App } from "./ui/App.js";
-import { Screen } from "./ui/term.js";
 
 /**
  * Entry point.
  *
  * Everything interesting happens in `ui/App`; this file's job is to decide what
  * to render and to fail legibly when the terminal cannot host a TUI.
+ *
+ * Only `flags` is imported statically. Everything heavy — the config loader,
+ * the session store, the print path, and above all the TUI (App, Ink, React,
+ * the harness they pull in) — is imported dynamically in the branch that needs
+ * it. `--version` and `--help` return before any of it loads, so they answer in
+ * the time it takes to start Node instead of paying to evaluate the whole
+ * dependency tree on every invocation.
  */
 
 const HELP = `actor0 — a terminal client for the Actor0 harness
@@ -85,6 +86,7 @@ async function main(): Promise<void> {
 
   const cwd = resolveCwd(flags.cwd);
 
+  const { ConfigError, loadConfig } = await import("./config.js");
   let config;
   try {
     config = loadConfig();
@@ -97,6 +99,7 @@ async function main(): Promise<void> {
     throw error;
   }
 
+  const { latestSession, loadSession } = await import("./session.js");
   const restored = flags.new
     ? undefined
     : flags.session
@@ -125,13 +128,24 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Our own renderer owns the terminal. Ink is used only to host React's state
-  // and effects, and is handed streams it writes nothing to — the App returns
-  // null, so Ink draws nothing and never fights the frame (see ui/App.tsx).
-  // Mouse capture is opt-out (it breaks terminal-native copy-paste); keyboard
-  // scroll — PgUp/PgDn, the arrows — works either way.
+  // The TUI — the only path that needs Ink, React, the harness and the renderer.
+  // Loaded here so `--version`/`--help`/`--sessions` never pay for them. Our own
+  // renderer owns the terminal; Ink is used only to host React's state and
+  // effects, and is handed streams it writes nothing to — the App returns null,
+  // so Ink draws nothing and never fights the frame (see ui/App.tsx). Mouse
+  // capture is opt-out (it breaks terminal-native copy-paste); keyboard scroll —
+  // PgUp/PgDn, the arrows — works either way.
+  const [{ App }, { Screen }, { render }, reactNs, { PassThrough }] = await Promise.all([
+    import("./ui/App.js"),
+    import("./ui/term.js"),
+    import("ink"),
+    import("react"),
+    import("node:stream"),
+  ]);
+  // React's CJS interop puts the object (with createElement) on `.default` in a
+  // dynamic import namespace, so the named `{ createElement }` is undefined there.
+  const createElement = (reactNs.default ?? reactNs).createElement as typeof import("react").createElement;
   const screen = new Screen(process.stdout, { mouse: !truthy(process.env.ACTOR0_DISABLE_MOUSE) });
-  const { PassThrough } = await import("node:stream");
   const sink = new PassThrough();
   sink.resume();
   const instanceRef: { current: ReturnType<typeof render> | undefined } = { current: undefined };
