@@ -308,12 +308,40 @@ test("the provider menu's add entry opens the add flow on enter", async () => {
     await tick(60);
     stdin.write("\r");
     await tick(120);
-    stdin.write("\x1b[B"); // down onto the 'add a new provider' entry
+    // The list is: provider, "manage models…", "add a new provider…".
+    stdin.write("\x1b[B"); // manage models
+    await tick(40);
+    stdin.write("\x1b[B"); // add a new provider
     await tick(80);
     stdin.write("\r");
     await tick(120);
     const add = screen.last.join("\n");
     assert.ok(add.includes("add a provider"), "enter on the add entry opened the add-provider flow");
+  } finally {
+    unmount();
+  }
+});
+
+test("the provider menu offers manage-models and filters as you type", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy, cfg: manyModels() });
+  try {
+    stdin.write("/provider");
+    await tick(60);
+    stdin.write("\r");
+    await tick(120);
+    const menu = screen.last.join("\n");
+    assert.ok(menu.includes("manage models"), "the menu offers to manage an existing provider's models");
+    assert.ok(menu.includes("add a new provider"), "the menu offers to add a provider");
+    assert.ok(menu.includes("●") && menu.includes("○"), "rows are bullets (filled/open), not a caret");
+    assert.ok(!menu.includes("❯"), "no caret pushes the rows in");
+    // Typing filters the provider list.
+    stdin.write("anthropic");
+    await tick(100);
+    const filtered = screen.last.join("\n");
+    assert.ok(filtered.includes("search anthropic"), "the search line shows the query");
   } finally {
     unmount();
   }

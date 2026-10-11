@@ -529,6 +529,18 @@ export function withModel(config: CliConfig, model: string): CliConfig {
 }
 
 /**
+ * Add models to the flat list the `/model` picker shows, keeping the newest and
+ * capping at 20 like `withModel`. Records any known context windows. Used to
+ * grow an already-configured provider's model set without re-adding it.
+ */
+export function addModels(config: CliConfig, models: string[], windows: Record<string, number> = {}): CliConfig {
+  const merged = [...new Set([...models, ...config.models])].slice(0, 20);
+  let next: CliConfig = { ...config, models: merged };
+  for (const [model, win] of Object.entries(windows)) next = withContextWindow(next, model, win);
+  return next;
+}
+
+/**
  * The provider registry `/provider` manages.
  *
  * Each function is pure: it returns a new `CliConfig` and never touches disk.

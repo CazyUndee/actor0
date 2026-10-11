@@ -277,15 +277,24 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   return { rows, inputRow: 1 + caretLine, inputCol: 2 + glyph.length + caretCol };
 }
 
+export interface PickerItem {
+  label: string;
+  detail?: string;
+  /** A filled bullet (●) rather than an open one (○). */
+  selected?: boolean;
+}
+
 /**
- * A windowed, optionally searchable selectable list. Used by the provider and
- * model pickers, whose lists run to hundreds of rows — a provider's model list
- * especially. The window follows the cursor, and a search line filters it, so a
- * long list never runs off the screen.
+ * The one selectable list every menu uses, so they all look and behave the
+ * same: a title, an optional search line, a windowed list, and a hint. There is
+ * no caret pushing rows in — the selected row is the one whose bullet is filled
+ * (●), and the focused row is the one whose label is accented. A list that runs
+ * long (a provider's models) windows to `height`, following the cursor, with
+ * ↑/↓ markers for the rest.
  */
 export function pickerRows(opts: {
   title: string;
-  items: { label: string; detail?: string; mark?: string; accent?: boolean }[];
+  items: PickerItem[];
   cursor: number;
   hint: string;
   height: number;
@@ -305,12 +314,10 @@ export function pickerRows(opts: {
   if (start > 0) out.push(plain(`  ↑ ${start} above`, color.dim));
   for (let i = start; i < end; i += 1) {
     const item = opts.items[i]!;
-    const sel = i === opts.cursor;
-    const labelColor = item.accent ? (sel ? color.accent : color.muted) : sel ? color.accent : color.text;
+    const focused = i === opts.cursor;
     out.push([
-      { text: sel ? "❯ " : "  ", color: color.accent },
-      ...(item.mark ? [{ text: item.mark, color: color.text } as Seg] : []),
-      { text: item.label, color: labelColor },
+      { text: item.selected ? "● " : "○ ", color: item.selected ? color.accent : color.dim },
+      { text: item.label, color: focused ? color.accent : color.text },
       ...(item.detail ? [{ text: `  ${item.detail}`, color: color.dim } as Seg] : []),
     ]);
   }
@@ -319,18 +326,19 @@ export function pickerRows(opts: {
   return out;
 }
 
-export function providerMenuRows(providers: { name: string; label: string; active: boolean }[], cursor: number, height: number): Seg[][] {
-  const items: { label: string; detail?: string; mark?: string; accent?: boolean }[] = providers.map((p) => ({ label: p.name, detail: p.active ? `${p.label} (active)` : p.label, mark: p.active ? "● " : "○ " }));
-  // An explicit "add a new provider" entry rather than a hidden `a` key: the
-  // last row of the list, selectable like any other.
-  items.push({ label: "add a new provider…", mark: "＋ ", accent: true });
-  return pickerRows({ title: "providers", items, cursor, hint: "↑/↓ move · enter select · d remove · esc close", height });
+export function providerMenuRows(providers: { name: string; label: string; active: boolean }[], cursor: number, height: number, query?: string, manageTarget?: string): Seg[][] {
+  const items: PickerItem[] = providers.map((p, i) => ({ label: p.name, detail: p.active ? `${p.label} (active)` : p.label, selected: i === cursor }));
+  // Two explicit trailing entries rather than hidden keys: manage the models of
+  // an already-configured provider, or add a brand-new one.
+  items.push({ label: `manage models${manageTarget ? ` for ${manageTarget}` : ""}…`, selected: cursor === providers.length });
+  items.push({ label: "add a new provider…", selected: cursor === providers.length + 1 });
+  return pickerRows({ title: "providers", items, cursor, hint: "type to filter · ↑/↓ move · enter select · d remove · esc close", height, query });
 }
 
 export function modelPickerRows(models: string[], cursor: number, height: number, query?: string): Seg[][] {
   return pickerRows({
     title: query ? `choose a model — ${models.length} match${models.length === 1 ? "" : "es"}` : "choose a model",
-    items: models.map((m) => ({ label: m })),
+    items: models.map((m, i) => ({ label: m, selected: i === cursor })),
     cursor,
     hint: "type to filter · ↑/↓ move · enter select · esc cancel",
     height,
@@ -338,8 +346,8 @@ export function modelPickerRows(models: string[], cursor: number, height: number
   });
 }
 
-export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number): Seg[][] {
-  return pickerRows({ title: "reasoning effort", items: options.map((o) => ({ label: o.label })), cursor, hint: "↑/↓ move · enter select · esc cancel", height: options.length + 6 });
+export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query?: string): Seg[][] {
+  return pickerRows({ title: "reasoning effort", items: options.map((o, i) => ({ label: o.label, selected: i === cursor })), cursor, hint: "type to filter · ↑/↓ move · enter select · esc cancel", height: options.length + 6, query });
 }
 
 /** The `/usage` panel: a period, a total, and a per-model breakdown. */
@@ -357,22 +365,24 @@ export function usagePanelRows(periodLabel: string, sinceTokens: number, sinceTu
 
 export function slashPopupRows(commands: { name: string; description: string }[], selected: number): Seg[][] {
   return commands.map((c, i) => [
-    { text: i === selected ? "❯ " : "  ", color: color.accent },
+    { text: i === selected ? "● " : "○ ", color: i === selected ? color.accent : color.dim },
     { text: `/${c.name}`, color: i === selected ? color.accent : color.text },
     { text: `  ${c.description}`, color: color.dim },
   ]);
 }
 
 /** The add-provider flow, one renderer per phase. */
-export function addKindRows(onboarding: boolean, kinds: { id: string; label: string; auth: string[] }[], cursor: number): Seg[][] {
-  const out: Seg[][] = onboarding ? [plain("welcome to actor0", color.accent), plain("bring your own provider — pick one to start", color.dim)] : [plain("add a provider", color.muted)];
-  kinds.forEach((k, i) => out.push([
-    { text: i === cursor ? "❯ " : "  ", color: color.accent },
-    { text: k.label, color: i === cursor ? color.accent : color.text },
-    { text: `  ${k.auth.join(" or ")}`, color: color.dim },
-  ]));
-  out.push(plain("↑/↓ move · enter choose · esc cancel", color.dim));
-  return out;
+export function addKindRows(onboarding: boolean, kinds: { id: string; label: string; auth: string[] }[], cursor: number, query?: string): Seg[][] {
+  const rows = pickerRows({
+    title: onboarding ? "welcome to actor0" : "add a provider",
+    items: kinds.map((k, i) => ({ label: k.label, detail: k.auth.join(" or "), selected: i === cursor })),
+    cursor,
+    hint: "type to filter · ↑/↓ move · enter choose · esc cancel",
+    height: kinds.length + 8,
+    query,
+  });
+  if (onboarding) rows.splice(1, 0, plain("bring your own provider — pick one to start", color.dim));
+  return rows;
 }
 
 export function addUrlRows(label: string, url: string): { rows: Seg[][]; inputRow: number; inputCol: number } {
@@ -402,7 +412,7 @@ export function addErrorRows(message: string): Seg[][] {
 export function addModelsRows(label: string, models: string[], cursor: number, chosen: Set<string>, height: number, query?: string): Seg[][] {
   return pickerRows({
     title: `${label} — ${models.length} model${models.length === 1 ? "" : "s"}`,
-    items: models.map((m) => ({ label: m, mark: chosen.has(m) ? "◉ " : "○ " })),
+    items: models.map((m) => ({ label: m, selected: chosen.has(m) })),
     cursor,
     hint: "type to filter · space toggle · a all · n none · enter use · esc cancel",
     height,
