@@ -915,7 +915,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (caretPos) {
       const headerLen = 1 + blockedRow.length + slashPopup.length;
       const composerTop = headerLen + transcript.length;
-      const absRow = 1 + composerTop + caretPos.row;
+      const absRow = 2 + composerTop + caretPos.row;
       return { grid, caret: { row: absRow, col: 2 + caretPos.col } };
     }
     return { grid };

@@ -119,6 +119,10 @@ test("typing updates the composer and the caret tracks it", async () => {
     const caret = screen.carets.at(-1);
     assert.ok(caret, "the caret is placed in the composer");
     assert.ok(caret!.col > 3 && caret!.col <= 10, `caret near the end of 'hello' (col ${caret!.col})`);
+    // The caret must be on the input row, not the composer's top border — the
+    // off-by-one that put it there made it look pinned to the box edge.
+    const inputRow = screen.last.findIndex((l) => l.includes("❯"));
+    assert.equal(caret!.row, inputRow + 1, `caret on the input row (row ${caret!.row}, input at ${inputRow + 1})`);
   } finally {
     unmount();
   }

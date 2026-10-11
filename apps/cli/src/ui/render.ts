@@ -232,16 +232,17 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   const hint = opts.busy ? "esc to cancel" : "enter to send · / for commands · ↑ history";
   const leftRows = Math.max(1, draftLines.length) + 1; // draft lines + hint
   const contentH = Math.max(leftRows, 4); // right column is face (3) + send (1)
-  const faceW = 6;
+  const faceW = 5;
   const promptW = Math.max(8, inner - faceW - 1);
   const glyph = opts.busy ? "· " : "❯ ";
   const cut = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
 
+  // A tight 3×3 face box: ╭───╮ / │face│ / ╰───╯, the face flush to the sides.
   const face = faceChar(opts.face);
   const faceBoxRows = [
-    plain(`╭${"─".repeat(5)}╮`, color.dim),
-    [{ text: "│", color: color.dim }, { text: ` ${face} `, color: color.accent, bold: true }, { text: "│", color: color.dim }],
-    plain(`╰${"─".repeat(5)}╯`, color.dim),
+    plain("╭───╮", color.dim),
+    [{ text: "│", color: color.dim }, { text: face, color: color.accent, bold: true }, { text: "│", color: color.dim }],
+    plain("╰───╯", color.dim),
   ];
 
   // Caret: which draft line and column it sits on.
