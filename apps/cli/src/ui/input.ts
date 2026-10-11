@@ -101,9 +101,13 @@ export function parseInput(buffer: string): { events: InputEvent[]; rest: string
       i += c[0].length;
       continue;
     }
-    // A lone ESC (nothing recognizable after it): the Escape key. Hold only if
-    // it might be the start of a longer sequence that hasn't fully arrived.
-    if (buffer[i + 1] === undefined) break;
+    // A bare ESC: the Escape key. Hold it only when it is the start of a
+    // CSI or SS3 sequence that has not fully arrived (ESC [ … / ESC O …). A
+    // lone ESC must fire now — holding it makes the Escape key never register
+    // until an unrelated next key, which then arrives mis-routed in the same
+    // batch (the escape's mode change is not visible to it yet).
+    const next = buffer[i + 1];
+    if (next === "[" || next === "O") break;
     events.push({ type: "key", key: "escape" });
     i += 1;
   }

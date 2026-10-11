@@ -18,6 +18,16 @@ import { addProvider, withModel, type CliConfig } from "../src/config.js";
 import type { Screen } from "../src/ui/term.js";
 import { detectEnvironment } from "../src/environment.js";
 
+/** A config with a long model list, so the picker's window and search show. */
+function previewConfig(): CliConfig {
+  const models = Array.from({ length: 42 }, (_, i) => `example-provider/model-${String(i + 1).padStart(2, "0")}-preview`);
+  models[3] = "example-provider/claude-opus-4-6";
+  const active = models[3]!;
+  return addProvider(withModel({ model: active, models }, active), {
+    name: "claude", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "api-key", apiKey: "k", model: active,
+  });
+}
+
 const tick = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
 
 class Capture {
@@ -30,12 +40,6 @@ class Capture {
   hideCaret(): void {}
   setSize(): void {}
   dispose(): void {}
-}
-
-function config(): CliConfig {
-  return addProvider(withModel({ model: "example-model", models: ["example-model", "other-model"] }, "example-model"), {
-    name: "claude", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "api-key", apiKey: "demo", model: "claude-opus-4-6",
-  });
 }
 
 const transport: ModelClient = {
@@ -66,7 +70,7 @@ async function main(): Promise<void> {
   const instance = render(
     createElement(App, {
       cwd: process.cwd(),
-      config: config(),
+      config: previewConfig(),
       version: "0.1.1",
       screen: screen as unknown as Screen,
       stdin: stdin as unknown as NodeJS.ReadStream,
@@ -104,12 +108,17 @@ async function main(): Promise<void> {
   await tick(50);
   await type("/model");
   await type("\r");
-  await show("6 · the model picker");
+  await show("6 · the model picker (windowed)");
+  await type("claude");
+  await tick(50);
+  await show("7 · the model picker (search 'claude')");
+  stdin.write("\x1b");
+  await tick(50);
   stdin.write("\x1b");
   await tick(50);
   await type("/usage");
   await type("\r");
-  await show("7 · the usage panel");
+  await show("8 · the usage panel");
 
   instance.unmount();
   if (prev === undefined) delete process.env.ACTOR0_CONFIG_DIR;

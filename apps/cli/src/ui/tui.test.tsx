@@ -8,7 +8,7 @@ import { createElement } from "react";
 import { render } from "ink";
 import type { ModelClient } from "@actor0/harness";
 import { App } from "./App.js";
-import { addProvider, withModel } from "../config.js";
+import { addProvider, withModel, type CliConfig } from "../config.js";
 import type { Screen } from "./term.js";
 
 const tick = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
@@ -49,7 +49,17 @@ function config(): ReturnType<typeof addProvider> {
   });
 }
 
-async function mount(opts: { transport?: ModelClient; onExit?: () => void } = {}): Promise<{ screen: FakeScreen; stdin: PassThrough; unmount: () => void; dir: string }> {
+/** A config with a long model list, so the picker's window and search show. */
+function manyModels(): CliConfig {
+  const models = Array.from({ length: 42 }, (_, i) => `example-provider/model-${String(i + 1).padStart(2, "0")}-preview`);
+  models[3] = "example-provider/claude-opus-4-6";
+  const active = models[3]!;
+  return addProvider(withModel({ model: active, models }, active), {
+    name: "claude", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "api-key", apiKey: "k", model: active,
+  });
+}
+
+async function mount(opts: { transport?: ModelClient; onExit?: () => void; cfg?: CliConfig } = {}): Promise<{ screen: FakeScreen; stdin: PassThrough; unmount: () => void; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), "actor0-tui-"));
   const prev = process.env.ACTOR0_CONFIG_DIR;
   process.env.ACTOR0_CONFIG_DIR = dir;
@@ -60,7 +70,7 @@ async function mount(opts: { transport?: ModelClient; onExit?: () => void } = {}
   const instance = render(
     createElement(App, {
       cwd: process.cwd(),
-      config: config(),
+      config: opts.cfg ?? config(),
       version: "9.9.9",
       screen: screen as unknown as Screen,
       stdin: stdin as unknown as NodeJS.ReadStream,
@@ -240,7 +250,7 @@ test("up-arrow edits the text instead of recalling history", async () => {
   }
 });
 
-test("the provider menu lists human-readable providers and opens the add flow on 'a'", async () => {
+test("the provider menu lists human-readable providers and an add entry", async () => {
   const dummy: ModelClient = {
     async *stream() { yield { type: "done", text: "", complete: true } as never; },
   };
@@ -252,11 +262,58 @@ test("the provider menu lists human-readable providers and opens the add flow on
     await tick(150);
     const menu = screen.last.join("\n");
     assert.ok(menu.includes("Anthropic API - Direct"), "the provider menu shows the human-readable provider label");
-    stdin.write("a");
+    assert.ok(menu.includes("add a new provider"), "the menu offers an explicit add-provider entry, not a hidden key");
+  } finally {
+    unmount();
+  }
+});
+
+test("the model picker windows a long list and filters it as you type", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy, cfg: manyModels() });
+  try {
+    stdin.write("/model");
+    await tick(60);
+    stdin.write("\r");
     await tick(150);
+    const open = screen.last.join("\n");
+    assert.ok(open.includes("choose a model"), "the picker opened");
+    // 42 models cannot all fit: the window shows a subset and a 'more' marker.
+    assert.ok(open.includes("more"), "the list is windowed, with a '↓ N more' marker");
+    assert.ok(!open.includes("model-42-preview"), "the last model is off-screen until scrolled");
+    // Typing filters the list to the one match.
+    stdin.write("claude");
+    await tick(120);
+    const filtered = screen.last.join("\n");
+    assert.ok(filtered.includes("1 match") || filtered.includes("claude-opus"), "the search narrowed the list");
+    assert.ok(!filtered.includes("model-01-preview"), "non-matching models are filtered out");
+    // Enter on the single match selects it (no turn runs).
+    stdin.write("\r");
+    await tick(150);
+    assert.ok(!screen.last.join("\n").includes("choose a model"), "the picker closed on selection");
+  } finally {
+    unmount();
+  }
+});
+
+test("the provider menu's add entry opens the add flow on enter", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
+  try {
+    stdin.write("/provider");
+    await tick(60);
+    stdin.write("\r");
+    await tick(120);
+    stdin.write("\x1b[B"); // down onto the 'add a new provider' entry
+    await tick(80);
+    stdin.write("\r");
+    await tick(120);
     const add = screen.last.join("\n");
-    assert.ok(add.includes("add a provider"), "pressing 'a' opens the add-provider flow");
-    assert.ok(add.includes("Claude (Anthropic)") && add.includes("ChatGPT (OpenAI)"), "the add flow lists human-readable provider kinds");
+    assert.ok(add.includes("add a provider"), "enter on the add entry opened the add-provider flow");
   } finally {
     unmount();
   }

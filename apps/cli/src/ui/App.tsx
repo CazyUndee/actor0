@@ -115,7 +115,7 @@ type AddPhase =
   | { kind: "url"; provider: ProviderKind }
   | { kind: "key"; provider: ProviderKind; baseUrl: string }
   | { kind: "working"; provider: ProviderKind; note: string }
-  | { kind: "models"; provider: ProviderKind; base: Record<string, unknown>; models: string[]; cursor: number; chosen: Set<string>; windows: Record<string, number> }
+  | { kind: "models"; provider: ProviderKind; base: Record<string, unknown>; models: string[]; cursor: number; chosen: Set<string>; windows: Record<string, number>; query: string }
   | { kind: "error"; provider: ProviderKind; message: string; baseUrl?: string };
 
 const THINKING = [
@@ -156,6 +156,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // Menu cursors and the add-provider phase machine.
   const [menuIndex, setMenuIndex] = useState(0);
   const [modelCursor, setModelCursor] = useState(0);
+  const [modelQuery, setModelQuery] = useState("");
   const [thinkingCursor, setThinkingCursor] = useState(0);
   const [usageIndex, setUsageIndex] = useState(0);
   const [add, setAdd] = useState<AddPhase>({ kind: "kind" });
@@ -280,6 +281,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           return;
         }
         setModelCursor(Math.max(0, config.models.indexOf(provider?.model ?? config.model)));
+        setModelQuery("");
         setMode("model");
         return;
       case "provider":
@@ -462,7 +464,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       .then((infos) => {
         const windows: Record<string, number> = {};
         for (const info of infos) if (info.contextWindow !== undefined) windows[info.id] = info.contextWindow;
-        setAdd({ kind: "models", provider: kind, base, models: infos.map((i) => i.id), cursor: 0, chosen: new Set(), windows });
+        setAdd({ kind: "models", provider: kind, base, models: infos.map((i) => i.id), cursor: 0, chosen: new Set(), windows, query: "" });
       })
       .catch((error: Error) => setAdd({ kind: "error", provider: kind, message: error.message, baseUrl: String(base.baseUrl ?? "") }));
   };
@@ -543,6 +545,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const slashEngaged = mode === "chat" && slashToken !== undefined && slashDismissed !== slashToken;
   const slashMatches = slashEngaged ? matchSlashCommands(slashToken!) : [];
   const slashSel = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
+  // The model picker filters on a search query; an empty query is every model.
+  const filteredModels = modelQuery ? config.models.filter((m) => m.toLowerCase().includes(modelQuery.toLowerCase())) : config.models;
 
   // ---- input dispatch ----
   // One listener for the life of the stream; it calls the latest dispatch through
@@ -571,6 +575,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       // typing "/hel" print nothing and never update the list.
       if (mode === "chat") editDraft(event);
       else if (mode === "add") handleAddText(event.text);
+      // In the model picker, typing is a search filter, not a command key.
+      else if (mode === "model") {
+        setModelQuery((q) => q + event.text);
+        setModelCursor(0);
+      }
       // In any other mode a bare character is a command key (a/d/k/j in a
       // menu), not text to type — routing it here is what made the vim keys
       // and the add/remove letters dead in every menu.
@@ -653,11 +662,21 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   const menuKey = (key: string): void => {
     const providers = namedProviders(config);
-    if (key === "up" || key === "k") return setMenuIndex((i) => wrap(i, providers.length, -1));
-    if (key === "down" || key === "j") return setMenuIndex((i) => wrap(i, providers.length, 1));
+    // The list is the providers plus a trailing "add a new provider" entry.
+    const itemCount = providers.length + 1;
+    if (key === "up" || key === "k") return setMenuIndex((i) => wrap(i, itemCount, -1));
+    if (key === "down" || key === "j") return setMenuIndex((i) => wrap(i, itemCount, 1));
     if (key === "escape") return setMode("chat");
     if (key === "return") {
-      const target = providers[Math.min(menuIndex, providers.length - 1)];
+      // The last entry is "add a new provider" — open the flow, don't switch.
+      if (menuIndex >= providers.length) {
+        setOnboarding(false);
+        setAdd({ kind: "kind" });
+        setAddKindCursor(0);
+        setMode("add");
+        return;
+      }
+      const target = providers[menuIndex];
       if (target) {
         const next = setActiveProvider(config, target.name);
         setConfig(next);
@@ -667,15 +686,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       setMode("chat");
       return;
     }
-    if (key === "a") {
-      setOnboarding(false);
-      setAdd({ kind: "kind" });
-      setAddKindCursor(0);
-      setMode("add");
-      return;
-    }
     if (key === "d") {
-      const target = providers[Math.min(menuIndex, providers.length - 1)];
+      const target = providers[menuIndex];
       if (target) {
         const next = removeProvider(config, target.name);
         setConfig(next);
@@ -687,11 +699,24 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   };
 
   const modelKey = (key: string): void => {
-    if (key === "up" || key === "k") return setModelCursor((c) => wrap(c, config.models.length, -1));
-    if (key === "down" || key === "j") return setModelCursor((c) => wrap(c, config.models.length, 1));
-    if (key === "escape") return setMode("chat");
+    const count = Math.max(1, filteredModels.length);
+    if (key === "up" || key === "k") return setModelCursor((c) => wrap(c, count, -1));
+    if (key === "down" || key === "j") return setModelCursor((c) => wrap(c, count, 1));
+    if (key === "escape") {
+      // First escape clears the search; a second closes the picker.
+      if (modelQuery) {
+        setModelQuery("");
+        setModelCursor(0);
+      } else setMode("chat");
+      return;
+    }
+    if (key === "backspace") {
+      setModelQuery((q) => q.slice(0, -1));
+      setModelCursor(0);
+      return;
+    }
     if (key === "return") {
-      const model = config.models[modelCursor];
+      const model = filteredModels[modelCursor];
       if (model) {
         const next = withModel(config, model);
         setConfig(next);
@@ -736,13 +761,18 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       setAddKey((k) => k + text);
       return;
     }
-    if (add.kind === "models" && add.models.length === 0) {
-      setAddManual((m) => m + text);
+    if (add.kind === "models") {
+      // With a model list on screen, typing filters it; with none (the manual
+      // fallback), typing enters the model name.
+      if (add.models.length === 0) setAddManual((m) => m + text);
+      else setAdd((a) => (a.kind === "models" ? { ...a, query: a.query + text, cursor: 0 } : a));
     }
   };
 
   const addKeyHandler = (key: string): void => {
     if (key === "escape") {
+      // In the model list, the first escape clears the search; a second leaves.
+      if (add.kind === "models" && add.query) return setAdd({ ...add, query: "", cursor: 0 });
       signInAbort.current?.abort();
       setMode(onboarding ? "chat" : "menu");
       return;
@@ -804,22 +834,29 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         if (key === "backspace") setAddManual((m) => m.slice(0, -1));
         return;
       }
-      if (key === "up" || key === "k") return setAdd({ ...add, cursor: wrap(add.cursor, add.models.length, -1) });
-      if (key === "down" || key === "j") return setAdd({ ...add, cursor: wrap(add.cursor, add.models.length, 1) });
+      // Navigation and selection act on the filtered list, so a search narrows
+      // what the cursor can reach without reindexing the whole model set.
+      const models = add.query ? add.models.filter((m) => m.toLowerCase().includes(add.query.toLowerCase())) : add.models;
+      const count = Math.max(1, models.length);
+      if (key === "up" || key === "k") return setAdd({ ...add, cursor: wrap(add.cursor, count, -1) });
+      if (key === "down" || key === "j") return setAdd({ ...add, cursor: wrap(add.cursor, count, 1) });
+      if (key === "backspace") return setAdd({ ...add, query: add.query.slice(0, -1), cursor: 0 });
       if (key === " ") {
-        const model = add.models[add.cursor];
+        const model = models[add.cursor];
         if (!model) return;
         const chosen = new Set(add.chosen);
         if (chosen.has(model)) chosen.delete(model);
         else chosen.add(model);
         setAdd({ ...add, chosen });
+        return;
       }
       if (key === "a") return addRegister(add.models);
       if (key === "n") return addRegister([]);
       if (key === "return") {
-        const model = add.models[add.cursor];
+        const model = models[add.cursor];
         addRegister(model ? [model] : []);
       }
+      return;
     }
   };
 
@@ -845,8 +882,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // window fills the space above it.
     let composer: Seg[][];
     let caretPos: { row: number; col: number } | undefined;
+    // Rows a menu may occupy: the frame minus both borders, the top area, the
+    // disclaimer and a sliver of transcript. Long lists window to this height.
+    const menuHeight = Math.max(6, rows - 2 - 3 - 1 - 3);
     if (menuOpen) {
-      composer = menuRows();
+      composer = menuRows(menuHeight);
     } else {
       const built = composerRows({ cols: innerW, draft, caret, busy });
       composer = built.rows;
@@ -897,14 +937,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     return { grid };
   };
 
-  function menuRows(): Seg[][] {
+  function menuRows(height: number): Seg[][] {
     switch (mode) {
       case "menu": {
         const providers = namedProviders(config).map((p) => ({ name: p.name, label: providerLabel(p), active: p.name === config.activeProvider }));
-        return providerMenuRows(providers, Math.min(menuIndex, Math.max(0, providers.length - 1)));
+        // The cursor may sit on the trailing "add a new provider" entry.
+        return providerMenuRows(providers, Math.min(menuIndex, providers.length), height);
       }
       case "model":
-        return modelPickerRows(config.models, Math.min(modelCursor, Math.max(0, config.models.length - 1)));
+        return modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery);
       case "thinking":
         return thinkingPickerRows(THINKING.map((o) => ({ label: o.label, effort: o.effort })), thinkingCursor);
       case "usage": {
@@ -917,13 +958,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         return usagePanelRows(`[${period.label}]`, bucket.tokens, bucket.turns, all.tokens, all.turns, byModel);
       }
       case "add":
-        return addRows();
+        return addRows(height);
       default:
         return [];
     }
   }
 
-  function addRows(): Seg[][] {
+  function addRows(height: number): Seg[][] {
     if (add.kind === "kind") return addKindRows(onboarding, PROVIDER_KINDS.map((k) => ({ id: k.id, label: k.label, auth: k.auth })), addKindCursor);
     if (add.kind === "url") return addUrlRows(add.provider.label, addUrl).rows;
     if (add.kind === "key") return addKeyRows(add.provider.label, addKey).rows;
@@ -931,7 +972,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (add.kind === "error") return addErrorRows(add.message);
     if (add.kind === "models") {
       if (add.models.length === 0) return addManualRows(add.provider.label, addManual).rows;
-      return addModelsRows(add.provider.label, add.models, add.cursor, add.chosen);
+      const models = add.query ? add.models.filter((m) => m.toLowerCase().includes(add.query.toLowerCase())) : add.models;
+      return addModelsRows(add.provider.label, models, Math.min(add.cursor, Math.max(0, models.length - 1)), add.chosen, height, add.query);
     }
     return [];
   }

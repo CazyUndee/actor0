@@ -277,37 +277,69 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   return { rows, inputRow: 1 + caretLine, inputCol: 2 + glyph.length + caretCol };
 }
 
-/** A generic selectable list, used by the provider and model pickers. */
-function listRows(title: string, items: { label: string; detail?: string; mark?: string }[], cursor: number, hint: string): Seg[][] {
-  const out: Seg[][] = [plain(title, color.muted)];
-  items.forEach((item, i) => {
-    const sel = i === cursor;
+/**
+ * A windowed, optionally searchable selectable list. Used by the provider and
+ * model pickers, whose lists run to hundreds of rows — a provider's model list
+ * especially. The window follows the cursor, and a search line filters it, so a
+ * long list never runs off the screen.
+ */
+export function pickerRows(opts: {
+  title: string;
+  items: { label: string; detail?: string; mark?: string; accent?: boolean }[];
+  cursor: number;
+  hint: string;
+  height: number;
+  query?: string;
+}): Seg[][] {
+  const out: Seg[][] = [plain(opts.title, color.muted)];
+  if (opts.query !== undefined) {
+    out.push([{ text: "search ", color: color.dim }, { text: opts.query, color: color.text }, { text: "▏", color: color.accent }]);
+  }
+  // Reserve rows for the title, the search line, the hint and up to two scroll
+  // indicators; whatever is left is the item window.
+  const reserved = 1 + (opts.query !== undefined ? 1 : 0) + 1 + 2;
+  const itemH = Math.max(1, opts.height - reserved);
+  const n = opts.items.length;
+  const start = n <= itemH ? 0 : Math.max(0, Math.min(opts.cursor - Math.floor(itemH / 2), n - itemH));
+  const end = Math.min(n, start + itemH);
+  if (start > 0) out.push(plain(`  ↑ ${start} above`, color.dim));
+  for (let i = start; i < end; i += 1) {
+    const item = opts.items[i]!;
+    const sel = i === opts.cursor;
+    const labelColor = item.accent ? (sel ? color.accent : color.muted) : sel ? color.accent : color.text;
     out.push([
       { text: sel ? "❯ " : "  ", color: color.accent },
       ...(item.mark ? [{ text: item.mark, color: color.text } as Seg] : []),
-      { text: item.label, color: sel ? color.accent : color.text },
+      { text: item.label, color: labelColor },
       ...(item.detail ? [{ text: `  ${item.detail}`, color: color.dim } as Seg] : []),
     ]);
-  });
-  out.push(plain(hint, color.dim));
+  }
+  if (end < n) out.push(plain(`  ↓ ${n - end} more`, color.dim));
+  out.push(plain(opts.hint, color.dim));
   return out;
 }
 
-export function providerMenuRows(providers: { name: string; label: string; active: boolean }[], cursor: number): Seg[][] {
-  return listRows(
-    "providers",
-    providers.map((p) => ({ label: p.name, detail: p.active ? `${p.label} (active)` : p.label, mark: p.active ? "● " : "○ " })),
-    cursor,
-    "↑/↓ move · enter switch · a add · d remove · esc close",
-  );
+export function providerMenuRows(providers: { name: string; label: string; active: boolean }[], cursor: number, height: number): Seg[][] {
+  const items: { label: string; detail?: string; mark?: string; accent?: boolean }[] = providers.map((p) => ({ label: p.name, detail: p.active ? `${p.label} (active)` : p.label, mark: p.active ? "● " : "○ " }));
+  // An explicit "add a new provider" entry rather than a hidden `a` key: the
+  // last row of the list, selectable like any other.
+  items.push({ label: "add a new provider…", mark: "＋ ", accent: true });
+  return pickerRows({ title: "providers", items, cursor, hint: "↑/↓ move · enter select · d remove · esc close", height });
 }
 
-export function modelPickerRows(models: string[], cursor: number): Seg[][] {
-  return listRows("choose a model", models.map((m) => ({ label: m })), cursor, "↑/↓ move · enter select · esc cancel");
+export function modelPickerRows(models: string[], cursor: number, height: number, query?: string): Seg[][] {
+  return pickerRows({
+    title: query ? `choose a model — ${models.length} match${models.length === 1 ? "" : "es"}` : "choose a model",
+    items: models.map((m) => ({ label: m })),
+    cursor,
+    hint: "type to filter · ↑/↓ move · enter select · esc cancel",
+    height,
+    query,
+  });
 }
 
 export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number): Seg[][] {
-  return listRows("reasoning effort", options.map((o) => ({ label: o.label })), cursor, "↑/↓ move · enter select · esc cancel");
+  return pickerRows({ title: "reasoning effort", items: options.map((o) => ({ label: o.label })), cursor, hint: "↑/↓ move · enter select · esc cancel", height: options.length + 6 });
 }
 
 /** The `/usage` panel: a period, a total, and a per-model breakdown. */
@@ -367,15 +399,15 @@ export function addErrorRows(message: string): Seg[][] {
   return [plain(message, color.error), plain("enter to try again · esc cancel", color.dim)];
 }
 
-export function addModelsRows(label: string, models: string[], cursor: number, chosen: Set<string>): Seg[][] {
-  const out: Seg[][] = [plain(`${label} — ${models.length} models`, color.muted)];
-  models.forEach((m, i) => out.push([
-    { text: i === cursor ? "❯ " : "  ", color: color.accent },
-    { text: chosen.has(m) ? "◉ " : "○ ", color: color.text },
-    { text: m, color: i === cursor ? color.accent : color.text },
-  ]));
-  out.push(plain("space toggles · a all · n none · enter uses highlighted · esc cancel", color.dim));
-  return out;
+export function addModelsRows(label: string, models: string[], cursor: number, chosen: Set<string>, height: number, query?: string): Seg[][] {
+  return pickerRows({
+    title: `${label} — ${models.length} model${models.length === 1 ? "" : "s"}`,
+    items: models.map((m) => ({ label: m, mark: chosen.has(m) ? "◉ " : "○ " })),
+    cursor,
+    hint: "type to filter · space toggle · a all · n none · enter use · esc cancel",
+    height,
+    query,
+  });
 }
 
 export function addManualRows(label: string, manual: string): { rows: Seg[][]; inputRow: number; inputCol: number } {
