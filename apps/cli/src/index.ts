@@ -5,7 +5,7 @@ import { ConfigError, loadConfig } from "./config.js";
 import { FlagError, parseFlags, resolveCwd } from "./flags.js";
 import { latestSession, loadSession } from "./session.js";
 import { App } from "./ui/App.js";
-import { installMouse } from "./ui/mouse.js";
+import { Screen } from "./ui/term.js";
 
 /**
  * Entry point.
@@ -119,15 +119,34 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Wrap the real streams so a click on the send button submits the draft:
-  // stdout feeds a screen model that locates the button, and stdin has mouse
-  // reports stripped off before Ink reads it (see ui/mouse.ts).
-  const mouse = installMouse(process.stdin, process.stdout);
-  const instance = render(
+  // Our own renderer owns the terminal. Ink is used only to host React's state
+  // and effects, and is handed streams it writes nothing to — the App returns
+  // null, so Ink draws nothing and never fights the frame (see ui/App.tsx).
+  const screen = new Screen(process.stdout);
+  const { PassThrough } = await import("node:stream");
+  const sink = new PassThrough();
+  sink.resume();
+  const instanceRef: { current: ReturnType<typeof render> | undefined } = { current: undefined };
+  const exit = (): void => {
+    screen.dispose();
+    try {
+      process.stdin.setRawMode?.(false);
+    } catch {
+      // not a TTY — nothing to restore
+    }
+    instanceRef.current?.unmount();
+    process.exit(0);
+  };
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  process.stdin.setEncoding("utf8");
+  instanceRef.current = render(
     createElement(App, {
       cwd,
       config,
       version: await readVersion(),
+      screen,
+      stdin: process.stdin,
+      onExit: exit,
       ...(restored
         ? {
             resumed: {
@@ -141,11 +160,10 @@ async function main(): Promise<void> {
     }),
     // Ctrl+C is handled in the app: it cancels a running turn first and only
     // exits when there is nothing to cancel.
-    { exitOnCtrlC: false, stdin: mouse.stdin, stdout: mouse.stdout },
+    { exitOnCtrlC: false, stdin: sink as never, stdout: sink as never, patchConsole: false },
   );
 
-  mouse.dispose();
-  await instance.waitUntilExit();
+  await instanceRef.current!.waitUntilExit();
 }
 
 main().catch((error: unknown) => {

@@ -1,17 +1,19 @@
-import { Box, Text, useApp, useInput } from "ink";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage, ModelClient } from "@actor0/harness";
 import {
-  addProvider,
   activeNamedProvider,
+  addProvider,
   namedProviders,
   removeProvider,
   resolveProvider,
   saveConfig,
   setActiveProvider,
   withActiveReasoningEffort,
+  withContextWindow,
   withModel,
+  providerName,
   type CliConfig,
+  type NamedProvider,
   type ResolvedProvider,
 } from "../config.js";
 import {
@@ -24,132 +26,162 @@ import {
   withUserInput,
   type ConversationState,
 } from "../conversation.js";
-import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn } from "../turn.js";
+import {
+  cancelledTurnMessages,
+  describeRecovery,
+  describeStop,
+  describeTruncation,
+  failedTurnMessages,
+  forStorage,
+  runTurn,
+  verifyProvider,
+} from "../turn.js";
 import { newSessionId, saveSession } from "../session.js";
 import { refreshProvider } from "../sign-in.js";
-import { verifyProvider } from "../turn.js";
-import { recordUsage, formatTokens, contextBar, readUsage, startOfDay, usageSince } from "../usage.js";
+import { recordAudit, recordUsage, formatTokens, contextBar, readUsage, startOfDay, startOfWeek, startOfMonth, usageSince, usageByModel } from "../usage.js";
 import { gitBranch } from "../git.js";
-import { withContextWindow } from "../config.js";
+import { detectEnvironment } from "../environment.js";
 import { contextWindowTokens } from "@actor0/harness";
-import { parseSlash, type SlashCommand } from "../slash.js";
+import { parseSlash, matchSlashCommands, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { createToolHost } from "../tools.js";
-import { StatusBar, bannerActivity, useTerminalSize } from "./parts.js";
-import { Composer, composerHeight } from "./prompts.js";
-import { bannerRows, entryRows, liveRows, windowRows, stateFace, type Face } from "./scroll.js";
-import { AddProvider } from "./AddProvider.js";
-import { UsagePanel } from "./UsagePanel.js";
-import { ModelPicker } from "./ModelPicker.js";
-import { ThinkingPicker } from "./ThinkingPicker.js";
-import { ProviderMenu } from "./ProviderMenu.js";
-import { SlashPopup } from "./SlashPopup.js";
+import { Screen } from "./term.js";
+import { parseInput, type InputEvent } from "./input.js";
+import {
+  entryLines,
+  liveLines,
+  composerRows,
+  providerMenuRows,
+  modelPickerRows,
+  thinkingPickerRows,
+  usagePanelRows,
+  slashPopupRows,
+  addKindRows,
+  addUrlRows,
+  addKeyRows,
+  addWorkingRows,
+  addErrorRows,
+  addModelsRows,
+  addManualRows,
+  stateFace,
+  windowRows,
+  frameInnerWidth,
+  topFrameBorder,
+  bottomFrameBorder,
+  paint,
+  fitWidth,
+  type Face,
+  type Seg,
+} from "./render.js";
+import { PROVIDER_KINDS, type ProviderKind } from "../provider-presets.js";
 import { providerLabel } from "../provider-presets.js";
-import { matchSlashCommands } from "../slash.js";
-import { disableMouse, enableMouse, mouseLink, SEND_ROWS_ABOVE_FOOTER, SEND_X_MARGIN } from "./mouse.js";
+import { fetchModelInfos, fetchClaudePlan } from "../models.js";
+import { runOAuthSignIn } from "../sign-in.js";
+import { openBrowser } from "../oauth.js";
+import type { OAuthTokens } from "../oauth.js";
 
 /**
- * The root component, and the only place the CLI holds state.
+ * The app, as our own controller.
  *
- * The division of labour is the point of the whole exercise: this file knows
- * about React, keys and spinners, and knows nothing about retries, tool rounds
- * or stream parsing. Those belong to the harness, which reports them as events
- * and this file merely reflects.
+ * It keeps every bit of the CLI's state and logic — the turn loop, config,
+ * sessions, usage, onboarding, the slash commands, and the provider/model/
+ * thinking/usage panels — but it does not render through Ink. Ink is the wrong
+ * tool for this TUI: a full-height frame makes the terminal scroll on every
+ * repaint and re-rendering the whole tree on every streamed token drops
+ * characters. So this returns `null` (Ink writes nothing), draws the screen
+ * itself through `Screen`, and reads input through its own parser. React is
+ * used only for state and effects, which is all it is good for here.
  */
 
 export type AppProps = {
   cwd: string;
   config: CliConfig;
-  /** Session restored from disk at launch. */
   resumed?: { id: string; createdAt: string; updatedAt: string; messages: ChatMessage[] };
-  /** Printed in the opening card. */
   version?: string;
-  /**
-   * Replaces the fixed endpoint for the duration of this render.
-   *
-   * The endpoint is not configurable, so the only way to exercise the UI
-   * without a network is the harness's own `ModelClient` port — which is what
-   * the headless preview driver does. Nothing a user can set reaches this.
-   */
   transport?: ModelClient;
+  /** Our renderer. */
+  screen: Screen;
+  /** The raw TTY stdin, already in raw mode. */
+  stdin: NodeJS.ReadStream;
+  /** Called on quit, after the screen is restored. */
+  onExit: () => void;
 };
 
-/** Move `current` by `delta`, wrapping at both ends — for the `/` popup. */
-function wrapSlash(current: number, count: number, delta: number): number {
+type Mode = "chat" | "menu" | "add" | "usage" | "model" | "thinking";
+
+type AddPhase =
+  | { kind: "kind" }
+  | { kind: "url"; provider: ProviderKind }
+  | { kind: "key"; provider: ProviderKind; baseUrl: string }
+  | { kind: "working"; provider: ProviderKind; note: string }
+  | { kind: "models"; provider: ProviderKind; base: Record<string, unknown>; models: string[]; cursor: number; chosen: Set<string>; windows: Record<string, number> }
+  | { kind: "error"; provider: ProviderKind; message: string; baseUrl?: string };
+
+const THINKING = [
+  { label: "default (provider)", effort: undefined },
+  { label: "low", effort: "low" },
+  { label: "medium", effort: "medium" },
+  { label: "high", effort: "high" },
+] as const;
+
+const PERIODS: { key: string; label: string; since: (now: Date) => number }[] = [
+  { key: "day", label: "today", since: startOfDay },
+  { key: "week", label: "this week", since: startOfWeek },
+  { key: "month", label: "this month", since: startOfMonth },
+];
+
+function wrap(current: number, count: number, delta: number): number {
   if (count <= 0) return 0;
   return (((current + delta) % count) + count) % count;
 }
 
-export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", transport }: AppProps) {
-  const { exit } = useApp();
-
+export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", transport, screen, stdin, onExit }: AppProps) {
   const [config, setConfig] = useState<CliConfig>(initialConfig);
   const [conversation, setConversation] = useState<ConversationState>(() => initialConversation());
   const [draft, setDraft] = useState("");
-  // The `/` command popup. `slashDismissed` holds the token the user pressed Esc
-  // on — a per-token dismissal, so editing the command reopens the popup
-  // (Codex's behaviour) rather than a sticky global hide. The derived filter is
-  // computed below, once `mode` exists.
+  const [caret, setCaret] = useState(0);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
+  const [histIndex, setHistIndex] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
-  // Which interactive region owns the keyboard. "chat" is the composer; the
-  // other two are the provider menu and its add form, which replace the
-  // composer while open — one region at a time, so no two `useInput`s fight
-  // over the same key. A menu never opens mid-turn (see `runCommand`).
-  const [mode, setMode] = useState<"chat" | "menu" | "add" | "usage" | "model" | "thinking">("chat");
-  // True only during the first-run welcome, so the add flow is framed as a
-  // welcome and its completion is confirmed as "you're ready".
+  const [mode, setMode] = useState<Mode>("chat");
   const [onboarding, setOnboarding] = useState(false);
-  // Context tokens in the latest request (the input the model just saw), for the
-  // status line's "Context N% used". Zero until the first turn.
   const [contextTokens, setContextTokens] = useState(0);
-  // Transcript scroll. Rows scrolled up from the bottom; 0 means "following" the
-  // newest output. The composer is pinned to the bottom of the frame, so this
-  // only ever moves the transcript window above it — see the render below.
   const [scrollOffset, setScrollOffset] = useState(0);
-  // A brief "good job" beat after a turn completes, for the status face. Clears
-  // itself so the face settles back to idle rather than grinning for the whole
-  // idle period; a timer ref holds the pending clear so a new turn can cancel it.
   const [justFinished, setJustFinished] = useState(false);
   const finishedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Session state lives in refs: it changes on every turn but must never
-  // trigger a re-render, because nothing on screen depends on it.
+  // Menu cursors and the add-provider phase machine.
+  const [menuIndex, setMenuIndex] = useState(0);
+  const [modelCursor, setModelCursor] = useState(0);
+  const [thinkingCursor, setThinkingCursor] = useState(0);
+  const [usageIndex, setUsageIndex] = useState(0);
+  const [add, setAdd] = useState<AddPhase>({ kind: "kind" });
+  const [addKindCursor, setAddKindCursor] = useState(0);
+  const [addKey, setAddKey] = useState("");
+  const [addUrl, setAddUrl] = useState("");
+  const [addManual, setAddManual] = useState("");
+  const signInAbort = useRef<AbortController | null>(null);
+
   const messagesRef = useRef<ChatMessage[]>(resumed?.messages ?? []);
   const sessionIdRef = useRef<string>(resumed?.id ?? newSessionId());
   const abortRef = useRef<AbortController | null>(null);
-  const conversationRef = useRef(conversation);
-  // Latest draft, readable from the mouse-click handler without re-subscribing
-  // it on every keystroke.
-  const draftRef = useRef(draft);
-  conversationRef.current = conversation;
-
-  // What the transcript would show if the turn ended right now: the last
-  // settled state, plus any partial text the current attempt has streamed.
-  // `finally` persists from this mirror, so a cancel saves the exchange the
-  // user watched instead of silently rewinding the session file.
   const liveRef = useRef<ChatMessage[]>(messagesRef.current);
-  const updateLive = useCallback((messages: ChatMessage[]) => {
+  const conversationRef = useRef(conversation);
+  conversationRef.current = conversation;
+  const openedOnboarding = useRef(false);
+  // Where the send button landed this frame, for a mouse click to hit.
+  const sendPos = useRef<{ row: number; col: number } | null>(null);
+
+  const updateLive = (messages: ChatMessage[]): void => {
     liveRef.current = messages;
-  }, []);
+  };
 
   const toolHost = useMemo(() => createToolHost({ cwd }), [cwd]);
 
-  // The endpoint the next turn will actually use, and the display name for it.
-  //
-  // Resolved here rather than at submit so the status bar can show where
-  // requests go — the whole point of a configurable endpoint is that it is
-  // never a surprise, and a constant host in the footer is a lie the moment
-  // the endpoint is anything but the built-in one.
-  //
-  // Resolution never throws, because a config that cannot resolve is a fact
-  // about this session rather than a reason to fail to draw it: the user has
-  // to be able to *see* the broken endpoint in order to fix it. The message is
-  // carried alongside and shown when a turn is submitted.
   const resolved = useMemo(() => {
     try {
       return { provider: resolveProvider(config), error: undefined } as const;
@@ -158,64 +190,47 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
   }, [config]);
   const provider = resolved.provider;
-  // The active provider, as a readable label — "Claude Code - Pro subscription",
-  // "Anthropic API - Direct" — not a URL. Shown in the banner's endpoint row and
-  // the status bar, so several providers are recognisable at a glance.
+
   const active = activeNamedProvider(config);
   const endpoint = active ? providerLabel(active) : "not configured";
-  // Context usage for the status line: "Context 42% used" when the active
-  // model's window is known (from /models or a past overflow), else the absolute
-  // count — never a guessed percentage from a hardcoded window.
   const activeModel = active?.model;
-  const window = activeModel ? config.contextWindows?.[activeModel] : undefined;
-  // Status chips for the bottom bar, each with a tone. The context chip is
-  // coloured by how full the window is — green, then amber, then red — so the
-  // gauge is readable at a glance, not just numeric.
-  const context = contextTokens > 0
-    ? window && contextTokens <= window * 4
-      ? { text: `${contextBar(contextTokens / window)} ${Math.min(100, Math.round((contextTokens / window) * 100))}%`, tone: (contextTokens / window >= 0.85 ? "error" : contextTokens / window >= 0.6 ? "warning" : "success") as "error" | "warning" | "success" }
-      : { text: `${formatTokens(contextTokens)} tokens`, tone: "muted" as const }
-    : undefined;
-  // The git branch and today's token total change only with the directory
-  // or a completed turn (contextTokens advances once per turn), so memoise
-  // them — reading the usage log and .git/HEAD on every keystroke and spinner
-  // frame is pure waste.
+  const contextWindow = activeModel ? config.contextWindows?.[activeModel] : undefined;
   const { branch, tokensToday } = useMemo(
     () => ({ branch: gitBranch(cwd), tokensToday: usageSince(readUsage(), startOfDay()).tokens }),
     [cwd, contextTokens],
   );
-  const chips: { text: string; tone: "accent" | "success" | "warning" | "error" | "muted" | "dim" }[] = [
-    { text: endpoint, tone: "accent" },
-  ];
-  if (context) chips.push(context);
-  if (branch) chips.push({ text: `⎇ ${branch}`, tone: "muted" });
-  if (active?.reasoningEffort) chips.push({ text: `◆ ${active.reasoningEffort}`, tone: "muted" });
-  if (tokensToday > 0) chips.push({ text: `≡ ${formatTokens(tokensToday)} today`, tone: "dim" });
+  const context =
+    contextTokens > 0
+      ? contextWindow && contextTokens <= contextWindow * 4
+        ? { text: `${contextBar(contextTokens / contextWindow)} ${Math.min(100, Math.round((contextTokens / contextWindow) * 100))}%` }
+        : { text: `${formatTokens(contextTokens)} tokens` }
+      : undefined;
 
-  // Onboarding. BYOK means there is nothing to talk to until a provider is
-  // configured, so on launch — rather than presenting a composer that cannot
-  // send anything — open the menu that adds one. Once only: the user may dismiss
-  // it, and a config that merely becomes invalid later is not a reason to reopen.
-  const openedOnboarding = useRef(false);
+  const notice = (tone: "info" | "warn" | "error", text: string): void => {
+    setConversation((state) => withNotice(state, tone, text));
+  };
+
+  // Onboarding: with nothing configured, open the add flow as a welcome.
   useEffect(() => {
     if (openedOnboarding.current) return;
     if (!provider && /No provider is configured/.test(resolved.error ?? "")) {
       openedOnboarding.current = true;
-      // Open the add flow as a welcome, not the empty management menu — the
-      // first thing a new user should see is how to bring their own provider.
       setOnboarding(true);
       setMode("add");
+      setAdd({ kind: "kind" });
     }
   }, [provider, resolved.error]);
 
+  // Warm the environment probe at startup. Its first call spawns a shell, and
+  // every turn's system prompt needs it — so pay that once, here, during load,
+  // instead of on the first message the user sends (which otherwise stalls for
+  // seconds before a single token appears). Fire-and-forget: the result is
+  // cached for the turn that eventually needs it.
+  useEffect(() => {
+    void detectEnvironment(cwd);
+  }, [cwd]);
 
-  /** Push a notice without depending on the current state. */
-  const notice = useCallback((tone: "info" | "warn" | "error", text: string) => {
-    setConversation((state) => withNotice(state, tone, text));
-  }, []);
-
-  // Spinner frame and elapsed clock, driven by CronixUI's own transition
-  // durations so the cadence belongs to the design system.
+  // Spinner + elapsed clock.
   useEffect(() => {
     if (!busy) {
       setElapsed(0);
@@ -229,622 +244,718 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     return () => clearInterval(id);
   }, [busy]);
 
-  const runCommand = useCallback(
-    (command: SlashCommand) => {
-      switch (command.name) {
-        case "help":
-          setConversation((state) => withHelp(state));
-          return;
-        case "clear": {
-          // A cleared conversation is a new session, not a truncated one, so
-          // the old transcript stays on disk and can be resumed by hand.
-          sessionIdRef.current = newSessionId();
-          messagesRef.current = [];
-          setConversation(initialConversation());
-          notice("info", "started a new conversation");
-          return;
-        }
-        case "model": {
-          if (command.model) {
-            const next = withModel(config, command.model);
-            setConfig(next);
-            saveConfig(next);
-            notice("info", `model set to ${command.model}`);
-            return;
-          }
-          // No argument: open the interactive picker over the remembered models
-          // rather than dumping the list as a text notice.
-          if (config.models.length === 0) {
-            notice("info", `model is ${config.model || provider?.model || "(none)"} — switch with /model <name>`);
-            return;
-          }
-          setMode("model");
-          return;
-        }
-        case "provider": {
-          // Open the interactive menu. `/provider` used to print the endpoint as
-          // text; the menu is the same information, plus the ability to act on
-          // it — switch, add, remove — which a printed block cannot do.
-          setMode("menu");
-          return;
-        }
-        case "setup": {
-          // Re-run the first-run wizard at any time.
-          setOnboarding(true);
-          setMode("add");
-          return;
-        }
-        case "usage": {
-          setMode("usage");
-          return;
-        }
-        case "thinking": {
-          const effort = command.effort;
-          if (effort === "low" || effort === "medium" || effort === "high") {
-            const next = withActiveReasoningEffort(config, effort);
-            setConfig(next);
-            saveConfig(next);
-            notice("info", `reasoning effort set to ${effort}`);
-            return;
-          }
-          setMode("thinking");
-          return;
-        }
-        case "quit":
-          exit();
-          return;
-        case "unknown":
-          notice("warn", `unknown command ${command.input} — try /help`);
-      }
-    },
-    [config, exit, notice, provider, resolved.error],
-  );
-
-  const submit = useCallback(
-    (raw: string) => {
-      const input = raw.trim();
-      if (!input) return;
-
-      // A turn is already running. The text stays in the composer and the
-      // user is told why: it is not cleared, and it is not sent. The composer
-      // used to be made inactive for the duration of a turn, which discarded
-      // every keystroke typed while the agent worked — a user who starts the
-      // next question during a long tool call watches it disappear, character
-      // by character, with nothing on screen saying the input is off. Found by
-      // the TUI preview typing the next question during a turn and losing it.
-      // Type-ahead is ordinary; losing what someone typed is not.
-      if (busy) {
-        notice("warn", "still working — wait for the turn, or press Esc to cancel it");
+  const runCommand = (command: SlashCommand): void => {
+    switch (command.name) {
+      case "help":
+        setConversation((state) => withHelp(state));
         return;
-      }
-
-      const command = parseSlash(input);
-      if (command) {
-        // Clear the composer first. A command that leaves its own text behind
-        // turns the next keystroke into `/helpwhatever`.
-        setDraft("");
-        setScrollOffset(0); // a command is the user acting now — jump to the bottom
-        if (finishedTimer.current) { clearTimeout(finishedTimer.current); finishedTimer.current = null; }
-        setJustFinished(false);
-        runCommand(command);
+      case "clear":
+        sessionIdRef.current = newSessionId();
+        messagesRef.current = [];
+        setConversation(initialConversation());
+        notice("info", "started a new conversation");
         return;
-      }
-
-      setDraft("");
-      setScrollOffset(0); // the user's own turn is at the bottom — follow it
-      if (finishedTimer.current) { clearTimeout(finishedTimer.current); finishedTimer.current = null; }
-      setJustFinished(false);
-      setHistory((prev) => [input, ...prev.filter((item) => item !== input)].slice(0, 50));
-      setConversation((state) => withUserInput(state, input));
-      setBusy(true);
-
-      // Resolved at submit so a configuration that only just became invalid is
-      // reported here, in front of the user, instead of failing the first
-      // request with a transport error about a URL they cannot see.
-      if (!provider) {
-        // No provider yet: walk into setup rather than dead-ending on an error.
+      case "model":
+        if (command.model) {
+          const next = withModel(config, command.model);
+          setConfig(next);
+          saveConfig(next);
+          notice("info", `model set to ${command.model}`);
+          return;
+        }
+        if (config.models.length === 0) {
+          notice("info", `model is ${config.model || provider?.model || "(none)"} — switch with /model <name>`);
+          return;
+        }
+        setModelCursor(Math.max(0, config.models.indexOf(provider?.model ?? config.model)));
+        setMode("model");
+        return;
+      case "provider":
+        setMenuIndex(0);
+        setMode("menu");
+        return;
+      case "setup":
         setOnboarding(true);
+        setAdd({ kind: "kind" });
         setMode("add");
         return;
-      }
-      const controller = new AbortController();
-      abortRef.current = controller;
+      case "usage":
+        setUsageIndex(0);
+        setMode("usage");
+        return;
+      case "thinking":
+        if (command.effort === "low" || command.effort === "medium" || command.effort === "high") {
+          const next = withActiveReasoningEffort(config, command.effort);
+          setConfig(next);
+          saveConfig(next);
+          notice("info", `reasoning effort set to ${command.effort}`);
+          return;
+        }
+        setThinkingCursor(Math.max(0, THINKING.findIndex((o) => o.effort === active?.reasoningEffort)));
+        setMode("thinking");
+        return;
+      case "quit":
+        onExit();
+        return;
+      case "unknown":
+        notice("warn", `unknown command ${command.input} — try /help`);
+    }
+  };
 
-      void (async () => {
-        try {
-          // Refresh an expired OAuth token before the turn and persist the new
-          // one, so a long session does not 401 the moment the access token
-          // ages out. A failed refresh is ignored here — the turn proceeds with
-          // the stale token and the endpoint's 401 tells the user to sign in
-          // again, which is clearer than a silent retry.
-          let activeProvider = provider;
-          if (provider.auth === "oauth") {
-            const refreshed = await refreshProvider(provider, config).catch(() => undefined);
-            if (refreshed) {
-              activeProvider = refreshed.provider;
-              setConfig(refreshed.config);
-              saveConfig(refreshed.config);
-            }
-          }
-          const { result, recovery } = await runTurn({
-            model: activeProvider,
-            ...(transport ? { client: transport } : {}),
-            messages: messagesRef.current,
-            input,
-            toolHost,
-            signal: controller.signal,
-            cwd,
-            ...(config.systemPrompt ? { systemPrompt: config.systemPrompt } : {}),
-            onEvent: (event) =>
-              setConversation((state) => {
-                const next = applyEvent(state, event);
-                if (event.type === "done") {
-                  // The turn's answer is final: this is the state a save
-                  // should capture if the turn ends from here on.
-                  const answer = next.entries[next.entries.length - 1];
-                  if (answer?.kind === "assistant") {
-                    updateLive([
-                      ...messagesRef.current,
-                      { role: "assistant", content: answer.text },
-                    ]);
-                  }
-                }
-                return next;
-              }),
-          });
-
-          messagesRef.current = forStorage(result.messages);
-          updateLive(messagesRef.current);
-
-          // A turn that stopped on `needs_user` is resumable, not finished, so
-          // say so rather than letting it look like a completed answer. The
-          // reason travels on the event, not on the result: `RunResult.blocked`
-          // is a bare boolean, and guessing from it meant a turn that ran out
-          // of tool rounds claimed its tools had been failing.
-          if (result.blocked) {
-            notice("warn", describeStop(conversationRef.current.blocked?.reason));
-          }
-          // The answer rendered above is marked partial, but the reader is
-          // looking at a finished-looking conversation: a warning has to name
-          // the fact that the model's reply stopped at the output cap, and
-          // that asking again is the way to get the rest of it.
-          if (result.truncated) {
-            notice("warn", describeTruncation());
-          }
-          // The overflow recovery rewrote what the model can read, and the
-          // rows above still show the real contents it can no longer see.
-          // That divergence is the whole reason this exists: the turn looks
-          // like it succeeded, so nothing else would ever mention it.
-          if (recovery) {
-            notice("warn", describeRecovery(recovery));
-          }
-          const total = totalUsage(result.usage);
-          // Log the turn locally for /usage, and remember the context size so
-          // the status line can show how full the window is.
-          recordUsage(provider.model, total);
-          setContextTokens(total.prompt_tokens);
-        } catch (error) {
-          // Learn the context window from an overflow the recovery could not
-          // clear: the error names it, and remembering it means the status line
-          // can show "Context N% used" on the next turn instead of a bare count.
-          const learned = contextWindowTokens(error);
-          if (learned !== undefined) {
-            const next = withContextWindow(config, provider.model, learned);
-            setConfig(next);
-            saveConfig(next);
-          }
-          // The harness hands the transcript back on abort (AbortedTurnError)
-          // and on any other turn failure (FailedTurnError): the input,
-          // every finished round, honest answers for the calls a cancel cut
-          // short, and the partial answer marked interrupted or failed.
-          // Adopting it is what makes the turn survive a restart — without
-          // this, messagesRef still holds the state from before the turn and
-          // the save below quietly rewinds the session to it, losing an
-          // exchange the user watched happen. The save reads the live
-          // mirror, so the adoption has to advance it too: skipping that
-          // step is how the abort path once promised a restart-surviving
-          // cancel the TUI never actually delivered.
-          const recovered = cancelledTurnMessages(error) ?? failedTurnMessages(error);
-          if (recovered) {
-            messagesRef.current = recovered;
-            updateLive(recovered);
-          }
-
-          if (controller.signal.aborted) {
-            // Keep whatever streamed before the cancel — discarding it would
-            // throw away text the user already read.
-            setConversation((state) => {
-              const partial = state.live.text;
-              const kept: ConversationState = partial.trim()
-                ? { ...state, entries: [...state.entries, { kind: "assistant", text: partial, partial: true }] }
-                : state;
-              // "cancelled" on its own says only that the turn stopped. What a
-              // person who pressed Esc needs to know is what they have left, and
-              // the answer is everything above: the interrupted call is now a row
-              // of its own, because the harness reports it, and anything that
-              // had streamed is kept below it.
-              return withNotice(
-                { ...kept, live: emptyLive() },
-                "warn",
-                "cancelled \u2014 what you see above is all that was kept",
-              );
-            });
-          } else {
-            // A failed turn keeps its fragment on screen the way a cancel
-            // does: the text above the error is the part of the answer
-            // that made it out, and it is saved — marked failed — in the
-            // transcript adopted above. The live region must still be
-            // cleared here, or the streamed text, the tool spinner and
-            // the status line freeze on screen above the error.
-            setConversation((state) => {
-              const partial = state.live.text;
-              const kept: ConversationState = partial.trim()
-                ? { ...state, entries: [...state.entries, { kind: "assistant", text: partial, partial: true }] }
-                : state;
-              return withNotice({ ...kept, live: emptyLive() }, "error", (error as Error).message);
-            });
-          }
-        } finally {
-          abortRef.current = null;
-          setBusy(false);
-          // A beat of "good job" on the status face, then back to idle. The
-          // clear is on a timer so it never outlives the moment it marks.
-          setJustFinished(true);
-          if (finishedTimer.current) clearTimeout(finishedTimer.current);
-          finishedTimer.current = setTimeout(() => { setJustFinished(false); finishedTimer.current = null; }, 2200);
-          try {
-            saveSession({
-              id: sessionIdRef.current,
-              // The original creation time, not the last time it was touched.
-              // These drifted because this read `updatedAt`, so a session that
-              // had been resumed once reported a creation time equal to its
-              // most recent save.
-              createdAt: resumed?.createdAt ?? new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              model: provider.model,
-              // The live region's mirror: this ref advances only when the
-              // conversation is adopting new history — a completed turn's
-              // result, or a cancelled turn's recovered transcript. Saving it
-              // instead of reading React state is what keeps the file matching
-              // what the user actually saw, including a turn they stopped.
-              messages: liveRef.current,
-            });
-          } catch (error) {
-            notice("error", `could not save session: ${(error as Error).message}`);
+  const submit = (raw: string): void => {
+    const input = raw.trim();
+    if (!input) return;
+    if (busy) {
+      notice("warn", "still working — wait for the turn, or press Esc to cancel it");
+      return;
+    }
+    const command = parseSlash(input);
+    if (command) {
+      setDraft("");
+      setCaret(0);
+      setScrollOffset(0);
+      if (finishedTimer.current) clearTimeout(finishedTimer.current);
+      finishedTimer.current = null;
+      setJustFinished(false);
+      runCommand(command);
+      return;
+    }
+    setDraft("");
+    setCaret(0);
+    setHistIndex(null);
+    setScrollOffset(0);
+    if (finishedTimer.current) clearTimeout(finishedTimer.current);
+    finishedTimer.current = null;
+    setJustFinished(false);
+    setHistory((prev) => [input, ...prev.filter((item) => item !== input)].slice(0, 50));
+    setConversation((state) => withUserInput(state, input));
+    setBusy(true);
+    if (!provider) {
+      setOnboarding(true);
+      setAdd({ kind: "kind" });
+      setMode("add");
+      return;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    void (async () => {
+      try {
+        let activeProvider = provider;
+        if (provider.auth === "oauth") {
+          const refreshed = await refreshProvider(provider, config).catch(() => undefined);
+          if (refreshed) {
+            activeProvider = refreshed.provider;
+            setConfig(refreshed.config);
+            saveConfig(refreshed.config);
           }
         }
-      })();
-    },
-    [busy, config, notice, provider, resolved.error, resumed?.updatedAt, runCommand, toolHost, updateLive],
-  );
+        const { result, recovery } = await runTurn({
+          model: activeProvider,
+          ...(transport ? { client: transport } : {}),
+          messages: messagesRef.current,
+          input,
+          toolHost,
+          signal: controller.signal,
+          cwd,
+          ...(config.systemPrompt ? { systemPrompt: config.systemPrompt } : {}),
+          onEvent: (event) =>
+            setConversation((state) => {
+              const next = applyEvent(state, event);
+              if (event.type === "done") {
+                const answer = next.entries[next.entries.length - 1];
+                if (answer?.kind === "assistant") updateLive([...messagesRef.current, { role: "assistant", content: answer.text }]);
+              }
+              return next;
+            }),
+        });
+        messagesRef.current = forStorage(result.messages);
+        updateLive(messagesRef.current);
+        if (result.blocked) notice("warn", describeStop(conversationRef.current.blocked?.reason));
+        if (result.truncated) notice("warn", describeTruncation());
+        if (recovery) notice("warn", describeRecovery(recovery));
+        const total = totalUsage(result.usage);
+        recordUsage(provider.model, total);
+        recordAudit(provider.model, result.audit);
+        setContextTokens(total.prompt_tokens);
+      } catch (error) {
+        const learned = contextWindowTokens(error);
+        if (learned !== undefined) {
+          const next = withContextWindow(config, provider.model, learned);
+          setConfig(next);
+          saveConfig(next);
+        }
+        const recovered = cancelledTurnMessages(error) ?? failedTurnMessages(error);
+        if (recovered) {
+          messagesRef.current = recovered;
+          updateLive(recovered);
+        }
+        if (controller.signal.aborted) {
+          setConversation((state) => {
+            const partial = state.live.text;
+            const kept: ConversationState = partial.trim() ? { ...state, entries: [...state.entries, { kind: "assistant", text: partial, partial: true }] } : state;
+            return withNotice({ ...kept, live: emptyLive() }, "warn", "cancelled — what you see above is all that was kept");
+          });
+        } else {
+          setConversation((state) => {
+            const partial = state.live.text;
+            const kept: ConversationState = partial.trim() ? { ...state, entries: [...state.entries, { kind: "assistant", text: partial, partial: true }] } : state;
+            return withNotice({ ...kept, live: emptyLive() }, "error", (error as Error).message);
+          });
+        }
+      } finally {
+        abortRef.current = null;
+        setBusy(false);
+        setJustFinished(true);
+        if (finishedTimer.current) clearTimeout(finishedTimer.current);
+        finishedTimer.current = setTimeout(() => {
+          setJustFinished(false);
+          finishedTimer.current = null;
+        }, 2200);
+        try {
+          saveSession({
+            id: sessionIdRef.current,
+            createdAt: resumed?.createdAt ?? new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            model: provider.model,
+            messages: liveRef.current,
+          });
+        } catch (error) {
+          notice("error", `could not save session: ${(error as Error).message}`);
+        }
+      }
+    })();
+  };
 
-  // Global keys. Deliberately narrow: the composer owns text entry and the
-  // approval dialog owns y/n.
-  //
-  // Scrolling is absent here on purpose. The transcript lives in the terminal's
-  // scrollback now, so the wheel and Shift+PageUp reach it without the app
-  // intercepting anything — and no key here can swallow a scroll the user is
-  // trying to make, which is what the old PageUp handler did.
+  // ---- add-provider flow ----
+  const addSignIn = (kind: ProviderKind): void => {
+    if (!kind.oauth) return;
+    const controller = new AbortController();
+    signInAbort.current = controller;
+    setAdd({ kind: "working", provider: kind, note: "opening your browser to authorize…" });
+    void runOAuthSignIn(kind.oauth, {
+      signal: controller.signal,
+      openBrowser: (url) => {
+        setAdd({ kind: "working", provider: kind, note: `authorize in your browser (or open this URL):\n${url}` });
+        openBrowser(url);
+      },
+    })
+      .then(async (tokens: OAuthTokens) => {
+        const withPlan = kind.transport === "anthropic" && !tokens.plan ? { ...tokens, plan: await fetchClaudePlan(tokens.accessToken).catch(() => undefined) } : tokens;
+        addListModels(kind, buildBase(kind, kind.baseUrl, { auth: "oauth", oauth: withPlan }));
+      })
+      .catch((error: Error) => setAdd({ kind: "error", provider: kind, message: error.message }));
+  };
+
+  const addListModels = (kind: ProviderKind, base: Record<string, unknown>): void => {
+    setAdd({ kind: "working", provider: kind, note: "listing models…" });
+    void fetchModelInfos(base as never)
+      .then((infos) => {
+        const windows: Record<string, number> = {};
+        for (const info of infos) if (info.contextWindow !== undefined) windows[info.id] = info.contextWindow;
+        setAdd({ kind: "models", provider: kind, base, models: infos.map((i) => i.id), cursor: 0, chosen: new Set(), windows });
+      })
+      .catch((error: Error) => setAdd({ kind: "error", provider: kind, message: error.message, baseUrl: String(base.baseUrl ?? "") }));
+  };
+
+  const addRegister = (chosen: string[]): void => {
+    if (add.kind !== "models") return;
+    const activeModelName = chosen[0] ?? add.models[add.cursor];
+    const providerToAdd: NamedProvider = { ...(add.base as object), name: providerName(String(add.base.baseUrl ?? "")), ...(activeModelName ? { model: activeModelName } : {}) } as NamedProvider;
+    let next = addProvider(config, providerToAdd);
+    const remembered = [...new Set([providerToAdd.model, ...chosen].filter((m): m is string => Boolean(m)))];
+    const rest = next.models.filter((m) => !remembered.includes(m));
+    next = { ...next, models: [...remembered, ...rest].slice(0, 20) };
+    for (const [model, win] of Object.entries(add.windows)) next = withContextWindow(next, model, win);
+    setConfig(next);
+    saveConfig(next);
+    setMode("chat");
+    setOnboarding(false);
+    const name = next.activeProvider ?? "provider";
+    if (!onboarding) {
+      notice("info", `added ${name}${remembered.length ? ` · ${remembered.length} model${remembered.length === 1 ? "" : "s"}` : ""}`);
+      return;
+    }
+    let resolvedProvider: ResolvedProvider;
+    try {
+      resolvedProvider = resolveProvider(next);
+    } catch {
+      notice("info", `added ${name} — set a model with /model <name> to start.`);
+      return;
+    }
+    notice("info", `verifying ${name}…`);
+    void verifyProvider(resolvedProvider).then((result) => {
+      if (result.ok) notice("info", `ready — ${name} works. Ask anything, or /provider to manage providers.`);
+      else if (result.retriable) notice("warn", `added ${name}, but couldn't verify it (network) — it may still work.`);
+      else notice("warn", `added ${name}, but it didn't answer: ${result.message}`);
+    });
+  };
+
+  // ---- draft editing (the composer input, ours) ----
+  const editDraft = (event: InputEvent): boolean => {
+    if (event.type === "text") {
+      setDraft((d) => d.slice(0, caret) + event.text + d.slice(caret));
+      setCaret((c) => c + event.text.length);
+      setHistIndex(null);
+      return true;
+    }
+    if (event.type !== "key") return false;
+    switch (event.key) {
+      case "backspace":
+        if (caret > 0) {
+          setDraft((d) => d.slice(0, caret - 1) + d.slice(caret));
+          setCaret((c) => c - 1);
+        }
+        return true;
+      case "delete":
+        setDraft((d) => d.slice(0, caret) + d.slice(caret + 1));
+        return true;
+      case "left":
+        setCaret((c) => Math.max(0, c - 1));
+        return true;
+      case "right":
+        setCaret((c) => Math.min(draft.length, c + 1));
+        return true;
+      case "home":
+        setCaret(0);
+        return true;
+      case "end":
+        setCaret(draft.length);
+        return true;
+      case "ctrl-u":
+        setDraft("");
+        setCaret(0);
+        return true;
+      default:
+        return false;
+    }
+  };
+
   const slashToken = /^\/([a-z]*)$/i.exec(draft)?.[1];
   const slashEngaged = mode === "chat" && slashToken !== undefined && slashDismissed !== slashToken;
   const slashMatches = slashEngaged ? matchSlashCommands(slashToken!) : [];
-  // Kept current so the mouse handler below always sees the fresh draft.
-  draftRef.current = draft;
+  const slashSel = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
 
-  // Real mouse-to-send. Click reporting is on only in the chat composer — a
-  // menu or picker replaced it, so there is no send button to hit there, and
-  // terminal mouse mode is worth keeping off when it has nothing to do.
+  // ---- input dispatch ----
+  // One listener for the life of the stream; it calls the latest dispatch through
+  // a ref. Re-subscribing on every render (no deps) is what let a buffered
+  // chunk reach two closures during a turn's many re-renders and submit twice.
+  const dispatchRef = useRef<(event: InputEvent) => void>(() => {});
   useEffect(() => {
-    if (mode === "chat") enableMouse();
-    else disableMouse();
-    return () => disableMouse();
-  }, [mode]);
-
-  // Send when a left-click lands squarely on the composer's send button — the
-  // same `submit` Enter uses. The button's row is not a constant (it drifts with
-  // the scrollback), so it is read from the screen model that Ink's own output
-  // feeds; see ui/mouse.ts. Every guard is a miss-safe: a click that is not on
-  // the button, or with nothing to send, simply does nothing.
-  useEffect(() => {
-    mouseLink.onClick = ({ x, y }) => {
-      if (mode !== "chat" || slashEngaged || busy) return;
-      const value = draftRef.current;
-      if (!value.trim()) return;
-      const screen = mouseLink.screen;
-      if (!screen) return;
-      const lastContent = screen.lastContentRow();
-      if (lastContent < 0) return;
-      const sendRow = lastContent - SEND_ROWS_ABOVE_FOOTER;
-      if (sendRow < 0) return;
-      if (y !== sendRow + 1) return; // mouse rows are 1-based; screen rows are 0-based
-      if (x < mouseLink.columns - SEND_X_MARGIN) return; // the button is right-aligned
-      submit(value);
+    let rest = "";
+    const onData = (chunk: Buffer | string): void => {
+      rest += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      const parsed = parseInput(rest);
+      rest = parsed.rest;
+      for (const event of parsed.events) dispatchRef.current(event);
     };
+    stdin.on("data", onData);
     return () => {
-      mouseLink.onClick = null;
+      stdin.off("data", onData);
     };
-  }, [mode, slashEngaged, busy, submit]);
+  }, [stdin]);
 
-  // Wheel scrolls the transcript only. It runs whenever the mouse is live
-  // (chat mode), regardless of the draft, and only ever moves `scrollOffset`;
-  // the composer below the window never moves. One notch is three rows.
-  useEffect(() => {
-    if (mode !== "chat") {
-      mouseLink.onScroll = null;
+  const dispatch = (event: InputEvent): void => {
+    if (event.type === "mouse") return handleMouse(event);
+    if (event.type === "text") {
+      if (mode === "chat" && !slashEngaged) editDraft(event);
+      else if (mode === "add") handleAddText(event.text);
       return;
     }
-    mouseLink.onScroll = (notches) => {
-      setScrollOffset((o) => Math.max(0, o + notches * 3));
-    };
-    return () => {
-      mouseLink.onScroll = null;
-    };
-  }, [mode]);
-  const slashSel = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
-  useInput((input, key) => {
-    // While a `/` command is being typed, the popup owns the keys — Codex-style:
-    // arrows/1-9 move and run, Tab completes into the draft, Esc dismisses this
-    // token. Enter runs the highlighted command (or submits the raw text when
-    // nothing matches), never a half-typed string to the model.
+    handleKey(event.key);
+  };
+  dispatchRef.current = dispatch;
+
+  const handleMouse = (event: InputEvent & { type: "mouse" }): void => {
+    if (mode !== "chat") return;
+    if (event.button === "wheel-up") return setScrollOffset((o) => o + 3);
+    if (event.button === "wheel-down") return setScrollOffset((o) => Math.max(0, o - 3));
+    if (event.button === "left" && event.release) {
+      const pos = sendPos.current;
+      if (!pos) return;
+      if (busy || slashEngaged || !draft.trim()) return;
+      if (event.y === pos.row && event.x >= pos.col && event.x <= pos.col + 5) submit(draft);
+    }
+  };
+
+  const handleKey = (key: string): void => {
+    if (key === "ctrl-c") {
+      if (busy) abortRef.current?.abort();
+      else onExit();
+      return;
+    }
+    if (key === "ctrl-d") {
+      onExit();
+      return;
+    }
+    if (mode === "chat") return chatKey(key);
+    if (mode === "menu") return menuKey(key);
+    if (mode === "model") return modelKey(key);
+    if (mode === "thinking") return thinkingKey(key);
+    if (mode === "usage") return usageKey(key);
+    if (mode === "add") return addKeyHandler(key);
+  };
+
+  const chatKey = (key: string): void => {
     if (slashEngaged) {
-      if (key.upArrow || input === "k") {
-        if (slashMatches.length > 0) setSlashIndex((n) => wrapSlash(n, slashMatches.length, -1));
-        return;
-      }
-      if (key.downArrow || input === "j") {
-        if (slashMatches.length > 0) setSlashIndex((n) => wrapSlash(n, slashMatches.length, 1));
-        return;
-      }
-      if (key.escape) {
-        setSlashDismissed(slashToken!);
-        return;
-      }
-      if (key.tab) {
+      if (key === "up") return setSlashIndex((n) => wrapSlash(n, slashMatches.length, -1));
+      if (key === "down") return setSlashIndex((n) => wrapSlash(n, slashMatches.length, 1));
+      if (key === "escape") return setSlashDismissed(slashToken!);
+      if (key === "tab") {
         const match = slashMatches[slashSel];
-        if (match) setDraft(`/${match.name}`);
+        if (match) {
+          setDraft(`/${match.name}`);
+          setCaret(match.name.length + 1);
+        }
         return;
       }
-      if (input >= "1" && input <= "9") {
-        const match = slashMatches[Number(input) - 1];
-        if (match) submit(`/${match.name}`);
-        return;
-      }
-      if (key.return) {
+      if (key === "return") {
         const match = slashMatches[slashSel];
         submit(match ? `/${match.name}` : draft);
         return;
       }
     }
-    if (key.escape) {
-      if (busy) {
-        abortRef.current?.abort();
-        return;
+    if (key === "escape") {
+      if (busy) abortRef.current?.abort();
+      return;
+    }
+    if (key === "return") return submit(draft);
+    if (key === "up") {
+      if (history.length === 0) return;
+      const next = histIndex === null ? 0 : Math.min(histIndex + 1, history.length - 1);
+      setHistIndex(next);
+      setDraft(history[next] ?? "");
+      setCaret((history[next] ?? "").length);
+      return;
+    }
+    if (key === "down") {
+      if (histIndex === null) return;
+      const next = histIndex - 1;
+      if (next < 0) {
+        setHistIndex(null);
+        setDraft("");
+        setCaret(0);
+      } else {
+        setHistIndex(next);
+        setDraft(history[next] ?? "");
+        setCaret((history[next] ?? "").length);
       }
       return;
     }
-    // Ctrl+C cancels a run, and exits when there is nothing to cancel.
-    if (key.ctrl && input === "c") {
-      if (busy) {
-        abortRef.current?.abort();
-        return;
+    if (key === "pageup") return setScrollOffset((o) => o + 5);
+    if (key === "pagedown") return setScrollOffset((o) => Math.max(0, o - 5));
+    editDraft({ type: "key", key: key as never });
+  };
+
+  const menuKey = (key: string): void => {
+    const providers = namedProviders(config);
+    if (key === "up" || key === "k") return setMenuIndex((i) => wrap(i, providers.length, -1));
+    if (key === "down" || key === "j") return setMenuIndex((i) => wrap(i, providers.length, 1));
+    if (key === "escape") return setMode("chat");
+    if (key === "return") {
+      const target = providers[Math.min(menuIndex, providers.length - 1)];
+      if (target) {
+        const next = setActiveProvider(config, target.name);
+        setConfig(next);
+        saveConfig(next);
+        notice("info", `switched to ${target.name}`);
       }
-      exit();
+      setMode("chat");
       return;
     }
-    if (key.ctrl && input === "d") exit();
-  }, { isActive: true });
+    if (key === "a") {
+      setOnboarding(false);
+      setAdd({ kind: "kind" });
+      setAddKindCursor(0);
+      setMode("add");
+      return;
+    }
+    if (key === "d") {
+      const target = providers[Math.min(menuIndex, providers.length - 1)];
+      if (target) {
+        const next = removeProvider(config, target.name);
+        setConfig(next);
+        saveConfig(next);
+        notice("info", `removed ${target.name}`);
+        setMenuIndex(0);
+      }
+    }
+  };
 
-  const { columns, rows } = useTerminalSize();
+  const modelKey = (key: string): void => {
+    if (key === "up" || key === "k") return setModelCursor((c) => wrap(c, config.models.length, -1));
+    if (key === "down" || key === "j") return setModelCursor((c) => wrap(c, config.models.length, 1));
+    if (key === "escape") return setMode("chat");
+    if (key === "return") {
+      const model = config.models[modelCursor];
+      if (model) {
+        const next = withModel(config, model);
+        setConfig(next);
+        saveConfig(next);
+        notice("info", `model set to ${model}`);
+      }
+      setMode("chat");
+    }
+  };
 
-  // The footer must describe the key that is actually live. While an approval
-  // dialog is open, Esc is *not* cancelling the turn — the dialog is denying the
-  // write, and the global handler is disabled. Telling the user otherwise is
-  // the kind of small lie that costs a wrong overwrite.
-  // When a panel (menu, add, usage, model, thinking) is open it renders its
-  // own key hints, so the status bar's second line stays down to quit + path
-  // rather than repeating them.
-  const footerHint = busy
-    ? "Esc cancels a running turn · Ctrl+D quits"
-    : mode !== "chat"
-      ? "Ctrl+D quits"
-      : "/help for commands · Ctrl+D quits";
+  const thinkingKey = (key: string): void => {
+    if (key === "up" || key === "k") return setThinkingCursor((c) => wrap(c, THINKING.length, -1));
+    if (key === "down" || key === "j") return setThinkingCursor((c) => wrap(c, THINKING.length, 1));
+    if (key === "escape") return setMode("chat");
+    if (key === "return") {
+      const effort = THINKING[thinkingCursor]!.effort;
+      if (effort) {
+        const next = withActiveReasoningEffort(config, effort);
+        setConfig(next);
+        saveConfig(next);
+        notice("info", `reasoning effort set to ${effort}`);
+      } else {
+        notice("info", "reasoning effort left to the provider");
+      }
+      setMode("chat");
+    }
+  };
 
-  // The pinned composer and the status bar are the bottom of the frame; the
-  // transcript is everything above them. `viewport` is the exact number of rows
-  // the scroll window may use, so the composer sits on the terminal's last rows
-  // and never drifts with the transcript. The status bar is three rows (its
-  // top margin plus two lines); the composer's height follows the draft.
-  const statusRows = 3;
-  const blockedRows = conversation.blocked ? 1 : 0;
-  const composerH = composerHeight(draft);
-  const menuOpen = mode !== "chat";
-  // In chat the composer is pinned exactly. A modal (menu/add/picker) is short
-  // and transient, so it is given room and the transcript above it scrolls to
-  // fill the rest — the modal is the thing the user is acting on.
-  const bottomRows = menuOpen
-    ? Math.min(Math.max(composerH, 6), Math.max(6, rows - 8)) + statusRows + blockedRows
-    : composerH + statusRows + blockedRows;
-  // One row short of the terminal, on purpose. A frame exactly as tall as the
-  // screen is the trap every full-screen TUI hits: the terminal emits a newline
-  // after the last row and scrolls the whole frame up by one on every repaint —
-  // which is a scrollbar appearing and the composer sliding off the bottom the
-  // moment a key is pressed. Leaving the last terminal row blank means ink
-  // repaints in place and the pinned chrome stays put.
-  const frameRows = Math.max(3, rows - 1);
-  const viewport = Math.max(3, frameRows - bottomRows);
+  const usageKey = (key: string): void => {
+    if (key === "tab" || key === "right") return setUsageIndex((n) => (n + 1) % PERIODS.length);
+    if (key === "left") return setUsageIndex((n) => (n - 1 + PERIODS.length) % PERIODS.length);
+    if (key === "escape") return setMode("chat");
+  };
 
-  // Committed entries are flattened to rows once per commit (not per token), so
-  // streaming never re-walks the whole transcript. The opening card and the
-  // in-flight region are rebuilt each frame — the card to move its activity
-  // line, the live rows for the spinner.
-  const entryRowList = useMemo(
-    () => conversation.entries.flatMap((entry) => entryRows(entry, columns)),
-    [conversation.entries, columns],
-  );
-  const live = menuOpen ? [] : liveRows(conversation.live, frame, elapsed, columns, viewport, Boolean(conversation.blocked));
-  // The status face. A moment after a turn completes is HAPPY; a user message
-  // that has not yet produced any output is STARTLED (a WAIT WHAT); everything
-  // else is read straight off the conversation's state.
+  const handleAddText = (text: string): void => {
+    if (add.kind === "url") {
+      const next = addUrl + text;
+      setAddUrl(next);
+      return;
+    }
+    if (add.kind === "key") {
+      setAddKey((k) => k + text);
+      return;
+    }
+    if (add.kind === "models" && add.models.length === 0) {
+      setAddManual((m) => m + text);
+    }
+  };
+
+  const addKeyHandler = (key: string): void => {
+    if (key === "escape") {
+      signInAbort.current?.abort();
+      setMode(onboarding ? "chat" : "menu");
+      return;
+    }
+    if (add.kind === "kind") {
+      if (key === "up" || key === "k") return setAddKindCursor((n) => wrap(n, PROVIDER_KINDS.length, -1));
+      if (key === "down" || key === "j") return setAddKindCursor((n) => wrap(n, PROVIDER_KINDS.length, 1));
+      if (key === "return") {
+        const chosen = PROVIDER_KINDS[addKindCursor]!;
+        if (chosen.auth.length === 1 && chosen.auth[0] === "oauth") return addSignIn(chosen);
+        setAddUrl(chosen.baseUrl);
+        setAdd({ kind: "url", provider: chosen });
+      }
+      return;
+    }
+    if (add.kind === "url") {
+      if (key === "return") {
+        const baseUrl = addUrl.trim();
+        let ok = false;
+        try {
+          const parsed = new URL(baseUrl);
+          ok = parsed.protocol === "http:" || parsed.protocol === "https:";
+        } catch {
+          ok = false;
+        }
+        if (!ok) return setAdd({ kind: "error", provider: add.provider, message: `"${baseUrl}" is not a valid http(s) URL` });
+        setAddKey("");
+        setAdd({ kind: "key", provider: add.provider, baseUrl });
+      }
+      if (key === "backspace") setAddUrl((u) => u.slice(0, -1));
+      return;
+    }
+    if (add.kind === "key") {
+      if (key === "return") {
+        const apiKey = addKey.trim();
+        if (!apiKey) return setAdd({ kind: "error", provider: add.provider, message: "an API key is required", baseUrl: add.baseUrl });
+        addListModels(add.provider, buildBase(add.provider, add.baseUrl, { auth: "api-key", apiKey }));
+      }
+      if (key === "backspace") setAddKey((k) => k.slice(0, -1));
+      return;
+    }
+    if (add.kind === "error") {
+      if (key === "return") {
+        const retry = add.provider;
+        if (retry.auth.includes("oauth") && retry.oauth && retry.auth.length === 1) return addSignIn(retry);
+        if (add.baseUrl) {
+          setAddKey("");
+          setAdd({ kind: "key", provider: retry, baseUrl: add.baseUrl });
+        } else {
+          setAddUrl(retry.baseUrl);
+          setAdd({ kind: "url", provider: retry });
+        }
+      }
+      return;
+    }
+    if (add.kind === "models") {
+      if (add.models.length === 0) {
+        if (key === "return") addRegister(addManual.trim() ? [addManual.trim()] : []);
+        if (key === "backspace") setAddManual((m) => m.slice(0, -1));
+        return;
+      }
+      if (key === "up" || key === "k") return setAdd({ ...add, cursor: wrap(add.cursor, add.models.length, -1) });
+      if (key === "down" || key === "j") return setAdd({ ...add, cursor: wrap(add.cursor, add.models.length, 1) });
+      if (key === " ") {
+        const model = add.models[add.cursor];
+        if (!model) return;
+        const chosen = new Set(add.chosen);
+        if (chosen.has(model)) chosen.delete(model);
+        else chosen.add(model);
+        setAdd({ ...add, chosen });
+      }
+      if (key === "a") return addRegister(add.models);
+      if (key === "n") return addRegister([]);
+      if (key === "return") {
+        const model = add.models[add.cursor];
+        addRegister(model ? [model] : []);
+      }
+    }
+  };
+
+  function wrapSlash(current: number, count: number, delta: number): number {
+    if (count <= 0) return 0;
+    return (((current + delta) % count) + count) % count;
+  }
+
+  // ---- the face ----
   const liveQuiet = !(conversation.live.text || conversation.live.reasoning.trim() || conversation.live.tool || conversation.live.status || conversation.live.retrying);
-  const face: Face = justFinished
-    ? "happy"
-    : busy && liveQuiet
-      ? "startled"
-      : stateFace({
-          live: conversation.live,
-          lastEntry: conversation.entries[conversation.entries.length - 1],
-          blocked: Boolean(conversation.blocked),
-          busy,
-        });
-  const content = [
-    ...bannerRows({
-      title: "actor0",
-      version,
-      model: provider?.model ?? config.model,
-      endpoint,
-      directory: cwd,
-      activity: bannerActivity(conversation.live),
-      hint: "/provider to switch",
-      width: columns,
-    }, face, columns),
-    ...entryRowList,
-    ...live,
-  ];
-  const visible = windowRows(content, viewport, scrollOffset);
-  return (
-    // A full-height column: the scroll window on top, then whatever owns the
-    // bottom of the screen, then the status bar. Because the frame is exactly
-    // `rows` tall and the bottom children are laid out last, the composer (or
-    // an open modal) is pinned to the terminal's final rows and the transcript
-    // scrolls above it — the wheel moves only the window.
-    <Box flexDirection="column" height={frameRows} width={columns}>
-      <Box flexDirection="column" height={viewport} overflow="hidden" flexShrink={0}>
-        {visible.map((node, index) => (
-          // eslint-disable-next-line react/no-array-index-key -- windowed transcript rows are positional and stable within a frame
-          <Fragment key={index}>{node}</Fragment>
-        ))}
-      </Box>
+  const face: Face = justFinished ? "happy" : busy && liveQuiet ? "startled" : stateFace({ live: conversation.live, lastEntry: conversation.entries[conversation.entries.length - 1], blocked: Boolean(conversation.blocked), busy });
 
-      {conversation.blocked ? (
-        <Box marginTop={1}>
-          <Text color={color.warning} wrap="truncate-end">
-            the agent needs you: {conversation.blocked.message}
-          </Text>
-          <Text color={color.dim}> reply to continue, or /clear to start over</Text>
-        </Box>
-      ) : null}
+  // ---- build the screen and draw it ----
+  const entryRowList = useMemo(() => conversation.entries.flatMap((entry) => entryLines(entry, frameInnerWidth(screen.size.cols))), [conversation.entries, screen.size.cols]);
 
-      {mode === "menu" ? (
-        <ProviderMenu
-          providers={namedProviders(config)}
-          activeName={config.activeProvider}
-          onActivate={(name) => {
-            const next = setActiveProvider(config, name);
-            setConfig(next);
-            saveConfig(next);
-            setMode("chat");
-            notice("info", `switched to ${name}`);
-          }}
-          onAdd={() => setMode("add")}
-          onRemove={(name) => {
-            // Stays in the menu so the list can be pruned more than once; the
-            // menu resets its selection when the row count changes.
-            const next = removeProvider(config, name);
-            setConfig(next);
-            saveConfig(next);
-            notice("info", `removed ${name}`);
-          }}
-          onCancel={() => setMode("chat")}
-        />
-      ) : mode === "add" ? (
-        <AddProvider
-          onboarding={onboarding}
-          onDone={(provider, models, windows) => {
-            // Register the one provider, then remember the chosen models the way
-            // `/model` does — the active one first, capped, de-duplicated.
-            let next = addProvider(config, provider);
-            const remembered = [...new Set([provider.model, ...models].filter((m): m is string => Boolean(m)))];
-            const rest = next.models.filter((m) => !remembered.includes(m));
-            next = { ...next, models: [...remembered, ...rest].slice(0, 20) };
-            // Merge any context windows the provider published — learned, never a
-            // hand-maintained table.
-            if (windows) for (const [model, window] of Object.entries(windows)) next = withContextWindow(next, model, window);
-            setConfig(next);
-            saveConfig(next);
-            setMode("chat");
-            setOnboarding(false);
-            const name = next.activeProvider ?? "provider";
-            if (!onboarding) {
-              notice("info", `added ${name}${remembered.length ? ` · ${remembered.length} model${remembered.length === 1 ? "" : "s"}` : ""}`);
-              return;
-            }
-            // First run: the model-list fetch already proved the credential, but
-            // confirm the chosen model actually answers before calling it ready.
-            let resolved: ResolvedProvider;
-            try {
-              resolved = resolveProvider(next);
-            } catch {
-              notice("info", `added ${name} — set a model with /model <name> to start.`);
-              return;
-            }
-            notice("info", `verifying ${name}…`);
-            void verifyProvider(resolved).then((result) => {
-              if (result.ok) notice("info", `ready — ${name} works. Ask anything, or /provider to manage providers.`);
-              else if (result.retriable) notice("warn", `added ${name}, but couldn't verify it (network) — it may still work.`);
-              else notice("warn", `added ${name}, but it didn't answer: ${result.message}`);
-            });
-          }}
-          onCancel={() => {
-            setOnboarding(false);
-            // From onboarding there is nothing to manage yet, so cancel returns
-            // to the composer; from /provider it returns to the provider menu.
-            setMode(onboarding ? "chat" : "menu");
-          }}
-        />
-      ) : mode === "usage" ? (
-        <UsagePanel onCancel={() => setMode("chat")} />
-      ) : mode === "model" ? (
-        <ModelPicker
-          models={config.models}
-          active={provider?.model ?? config.model}
-          onSelect={(model) => {
-            const next = withModel(config, model);
-            setConfig(next);
-            saveConfig(next);
-            setMode("chat");
-            notice("info", `model set to ${model}`);
-          }}
-          onCancel={() => setMode("chat")}
-        />
-      ) : mode === "thinking" ? (
-        <ThinkingPicker
-          active={active?.reasoningEffort}
-          onSelect={(effort) => {
-            const next = withActiveReasoningEffort(config, effort);
-            setConfig(next);
-            saveConfig(next);
-            setMode("chat");
-            notice("info", `reasoning effort set to ${effort}`);
-          }}
-          onCancel={() => setMode("chat")}
-        />
-      ) : (
-        <>
-          {slashEngaged && slashMatches.length > 0 ? <SlashPopup commands={slashMatches} selected={slashSel} /> : null}
-          <Composer
-            value={draft}
-            onChange={setDraft}
-            onSubmit={submit}
-            history={history}
-            isActive
-            busy={busy}
-            popupOpen={slashEngaged}
-          />
-        </>
-      )}
+  const buildGrid = (): { grid: string[]; caret?: { row: number; col: number } } => {
+    const cols = screen.size.cols;
+    const rows = screen.size.rows;
+    const innerW = frameInnerWidth(cols);
+    const menuOpen = mode !== "chat";
 
-      <StatusBar cwd={cwd} chips={chips} hint={footerHint} />
-    </Box>
-  );
+    // The composer (or an open menu) is pinned to the bottom; the transcript
+    // window fills the space above it.
+    let composer: Seg[][];
+    let caretPos: { row: number; col: number } | undefined;
+    if (menuOpen) {
+      composer = menuRows();
+    } else {
+      const canSend = !busy && draft.trim().length > 0;
+      const built = composerRows({ cols: innerW, draft, caret, face, canSend, busy });
+      composer = built.rows;
+      caretPos = { row: built.inputRow, col: built.inputCol };
+    }
+    const slashPopup = !menuOpen && slashEngaged && slashMatches.length > 0 ? slashPopupRows(slashMatches.map((c) => ({ name: c.name, description: c.description })), slashSel) : [];
+    const blockedRow = conversation.blocked ? [[{ text: `the agent needs you: ${conversation.blocked.message} — reply to continue, or /clear`, color: color.warning }]] : [];
+
+    const transcriptV = Math.max(3, rows - composer.length - slashPopup.length - blockedRow.length - 4);
+
+    const headerInfo = [provider?.model ?? config.model, endpoint, branch ? `⎇ ${branch}` : undefined, context?.text, tokensToday > 0 ? `≡ ${formatTokens(tokensToday)} today` : undefined].filter((p): p is string => Boolean(p)).join(" · ");
+    const live = menuOpen ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked));
+    const transcript = windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
+
+    // Assemble the inner column, then frame it.
+    const inner: Seg[][] = [
+      [{ text: headerInfo || "no provider configured — run /setup", color: color.muted }],
+      ...blockedRow,
+      ...slashPopup,
+      ...transcript,
+      ...composer,
+      [{ text: "Actor0 is an experimental agent and may make mistakes.", color: color.dim }],
+    ];
+    // Pad the inner column so the frame is exactly `rows` tall and the bottom
+    // border sits on the last row — the composer is the row just above it.
+    const innerPainted = inner.map((r) => paint(fitWidth(r, innerW)));
+    const contentH = rows - 2; // between the two borders
+    while (innerPainted.length < contentH) innerPainted.push(paint([{ text: " ".repeat(innerW), dim: true }]));
+    const grid: string[] = [topFrameBorder("actor0", version, cols)];
+    for (const line of innerPainted.slice(0, contentH)) grid.push(`│ ${line} │`);
+    grid.push(bottomFrameBorder(cols));
+    // The send button's on-screen position, in *visible* columns — mouse
+    // coordinates ignore the ANSI the painted grid carries, so this is measured
+    // off the unpainted rows, not the strings we write. A click can hit it.
+    const sendInner = inner.findIndex((r) => r.some((s) => s.text.includes("[Send]")));
+    if (sendInner >= 0) {
+      let col = 0;
+      for (const s of inner[sendInner]!) {
+        const at = s.text.indexOf("[Send]");
+        if (at >= 0) {
+          col += at;
+          break;
+        }
+        col += s.text.length;
+      }
+      sendPos.current = { row: sendInner + 2, col: col + 3 };
+    } else {
+      sendPos.current = null;
+    }
+    // Caret: absolute row = 1 (top border) + index of composer's input row within inner + 1.
+    if (caretPos) {
+      const headerLen = 1 + blockedRow.length + slashPopup.length;
+      const composerTop = headerLen + transcript.length;
+      const absRow = 1 + composerTop + caretPos.row;
+      return { grid, caret: { row: absRow, col: 2 + caretPos.col } };
+    }
+    return { grid };
+  };
+
+  function menuRows(): Seg[][] {
+    switch (mode) {
+      case "menu": {
+        const providers = namedProviders(config).map((p) => ({ name: p.name, label: providerLabel(p), active: p.name === config.activeProvider }));
+        return providerMenuRows(providers, Math.min(menuIndex, Math.max(0, providers.length - 1)));
+      }
+      case "model":
+        return modelPickerRows(config.models, Math.min(modelCursor, Math.max(0, config.models.length - 1)));
+      case "thinking":
+        return thinkingPickerRows(THINKING.map((o) => ({ label: o.label, effort: o.effort })), thinkingCursor);
+      case "usage": {
+        const entries = readUsage();
+        const period = PERIODS[usageIndex]!;
+        const since = period.since(new Date()).valueOf();
+        const bucket = usageSince(entries, since);
+        const all = usageSince(entries, 0);
+        const byModel = usageByModel(entries, since);
+        return usagePanelRows(`[${period.label}]`, bucket.tokens, bucket.turns, all.tokens, all.turns, byModel);
+      }
+      case "add":
+        return addRows();
+      default:
+        return [];
+    }
+  }
+
+  function addRows(): Seg[][] {
+    if (add.kind === "kind") return addKindRows(onboarding, PROVIDER_KINDS.map((k) => ({ id: k.id, label: k.label, auth: k.auth })), addKindCursor);
+    if (add.kind === "url") return addUrlRows(add.provider.label, addUrl).rows;
+    if (add.kind === "key") return addKeyRows(add.provider.label, addKey).rows;
+    if (add.kind === "working") return addWorkingRows(add.provider.label, add.note);
+    if (add.kind === "error") return addErrorRows(add.message);
+    if (add.kind === "models") {
+      if (add.models.length === 0) return addManualRows(add.provider.label, addManual).rows;
+      return addModelsRows(add.provider.label, add.models, add.cursor, add.chosen);
+    }
+    return [];
+  }
+
+  // Draw on every state change. A full-screen grid is small; rewriting it each
+  // frame is cheap and — unlike re-reconciling an Ink tree — never drops a byte.
+  useEffect(() => {
+    const { grid, caret } = buildGrid();
+    screen.render(grid);
+    if (caret && mode === "chat") screen.caret(caret.row, caret.col);
+    else screen.hideCaret();
+  });
+
+  // Restore the terminal on unmount.
+  useEffect(() => () => screen.dispose(), [screen]);
+
+  return null;
 }
 
+function buildBase(provider: ProviderKind, baseUrl: string, auth: { auth: "api-key"; apiKey: string } | { auth: "oauth"; oauth: OAuthTokens }): Record<string, unknown> {
+  return { baseUrl, transport: provider.transport, ...(provider.path ? { path: provider.path } : {}), ...auth };
+}
