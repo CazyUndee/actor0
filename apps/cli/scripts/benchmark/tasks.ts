@@ -27,6 +27,13 @@ const write = (dir: string, rel: string, content: string): void => {
   writeFileSync(path, content, "utf8");
 };
 
+/** A small multi-file project the harder tasks operate on. */
+const miniProject = (dir: string): void => {
+  write(dir, "src/index.ts", "import { computeTotal } from './math';\n\nconsole.log(computeTotal([1, 2, 3]));\n");
+  write(dir, "src/math.ts", "export function computeTotal(nums: number[]): number {\n  let sum = 0;\n  for (const n of nums) sum += n;\n  return sum + 1;\n}\n");
+  write(dir, "src/notes.md", "# Notes\n\nTODO: add more functions\n\nSome prose here.\n\nTODO: write tests\n");
+};
+
 export const TASKS: Task[] = [
   {
     id: "read-and-report",
@@ -65,5 +72,51 @@ export const TASKS: Task[] = [
     capabilities: ["glob"],
     setup: (dir) => write(dir, "logs/target.log", "entry\n"),
     success: (_dir, answer) => /\byes\b/i.test(answer),
+  },
+  // --- harder, multi-step tasks that stress the search→edit→shell flow ---
+  {
+    id: "rename-symbol",
+    prompt: "Rename the function computeTotal to calculateTotal everywhere under src/ — both its definition and its call site. Keep everything else the same.",
+    capabilities: ["glob", "grep", "edit"],
+    setup: miniProject,
+    success: (dir) => {
+      const texts = ["src/index.ts", "src/math.ts"].map((f) =>
+        existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8") : "",
+      );
+      return texts.every((t) => !t.includes("computeTotal")) && texts.every((t) => t.includes("calculateTotal"));
+    },
+  },
+  {
+    id: "fix-off-by-one",
+    prompt: "In src/math.ts, computeTotal adds 1 to the sum before returning. It should return the plain sum of the numbers. Fix it.",
+    capabilities: ["read", "edit"],
+    setup: miniProject,
+    success: (dir) => {
+      const path = join(dir, "src/math.ts");
+      if (!existsSync(path)) return false;
+      const text = readFileSync(path, "utf8");
+      return /return sum;/.test(text) && !/sum \+ 1/.test(text);
+    },
+  },
+  {
+    id: "count-todos",
+    prompt: "How many lines under src/ contain the word TODO? Reply with just the number.",
+    capabilities: ["grep"],
+    setup: miniProject,
+    success: (_dir, answer) => /\b2\b/.test(answer),
+  },
+  {
+    id: "create-and-wire",
+    prompt: "Create src/greet.ts that exports a function greet(name) returning the string 'Hi ' followed by the name. Then edit src/index.ts to import greet from './greet' and log greet('world').",
+    capabilities: ["write", "edit"],
+    setup: miniProject,
+    success: (dir) => {
+      const greet = join(dir, "src/greet.ts");
+      const index = join(dir, "src/index.ts");
+      if (!existsSync(greet) || !existsSync(index)) return false;
+      const g = readFileSync(greet, "utf8");
+      const i = readFileSync(index, "utf8");
+      return /export function greet/.test(g) && /import .*greet.*from ['"]\.\/greet['"]/.test(i) && /greet\(['"]world['"]\)/.test(i);
+    },
   },
 ];
