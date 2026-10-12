@@ -19,7 +19,7 @@ import { createToolHost } from "../../src/tools.js";
 export type JsonSchema = Record<string, unknown>;
 export type RawTool = { name: string; description: string; input_schema: JsonSchema };
 export type RawCandidate = { id: CandidateId; label: string; tools: RawTool[] };
-export type CandidateId = "A" | "B" | "C" | "D";
+export type CandidateId = "A" | "B" | "C" | "D" | "C2";
 
 /** The provider's structured tool-calling representation. */
 export type OpenAiTool = {
@@ -236,6 +236,26 @@ export function captureCandidateA(cwd: string): RawCandidate {
 export const CANDIDATE_B: RawCandidate = { id: "B", label: "flat specialised tools", tools: B_TOOLS };
 export const CANDIDATE_C: RawCandidate = { id: "C", label: "five tools grouped by effect class", tools: C_TOOLS };
 export const CANDIDATE_D: RawCandidate = { id: "D", label: "one universal structured action tool", tools: D_TOOLS };
+
+/**
+ * Candidate C2: C's grouped tools with each op's required arguments spelled out
+ * in the tool description. A hardening of C aimed squarely at first-call
+ * validity — the model is told, up front, that `grep` needs `pattern` and
+ * `write` needs `content` — while keeping the grouping that beat D and the
+ * cheap permissive field pool. Same dispatcher path as C.
+ */
+const C2_DESCRIPTIONS: Record<string, string> = {
+  inspect:
+    "Read-only local inspection. Pick op and supply that op's argument: read→path; grep→pattern (optional path, glob); glob→pattern (optional path); tree→path, depth (both optional); index→query; skill→name.",
+  modify:
+    "Change one file. Pick op and supply that op's arguments: write→path + content; edit→path + old + new (optional all); delete→path.",
+  web: "Search the web or fetch a URL. op=search→query (optional limit); op=fetch→url.",
+};
+const C2_TOOLS: RawTool[] = C_TOOLS.map((tool) => ({
+  ...tool,
+  description: C2_DESCRIPTIONS[tool.name] ?? tool.description,
+}));
+export const CANDIDATE_C2: RawCandidate = { id: "C2", label: "grouped tools, hardened descriptions", tools: C2_TOOLS };
 
 /** Convert a candidate's Anthropic-style schemas to the provider's tool format. */
 export function toOpenAiTools(candidate: RawCandidate): OpenAiTool[] {

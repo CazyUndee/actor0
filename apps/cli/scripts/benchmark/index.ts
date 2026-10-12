@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig, resolveProvider } from "../../src/config.js";
-import { CANDIDATE_B, CANDIDATE_C, CANDIDATE_D, captureCandidateA } from "./candidates.js";
+import { CANDIDATE_B, CANDIDATE_C, CANDIDATE_C2, CANDIDATE_D, captureCandidateA } from "./candidates.js";
 import { buildReport } from "./report.js";
 import { runCandidateOnTask, type TaskResult } from "./runner.js";
 import { TASKS } from "./tasks.js";
@@ -36,7 +36,7 @@ const onlyTask = flag("--task");
 const resume = has("--resume");
 
 const provider = resolveProvider(loadConfig());
-const all = [captureCandidateA(process.cwd()), CANDIDATE_B, CANDIDATE_C, CANDIDATE_D];
+const all = [captureCandidateA(process.cwd()), CANDIDATE_B, CANDIDATE_C, CANDIDATE_C2, CANDIDATE_D];
 const candidates = onlyCandidate ? all.filter((c) => c.id === onlyCandidate) : all;
 const tasks = onlyTask ? TASKS.filter((t) => t.id === onlyTask) : TASKS;
 if (candidates.length === 0) throw new Error(`no such candidate: ${onlyCandidate}`);

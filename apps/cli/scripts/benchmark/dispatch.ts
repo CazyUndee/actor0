@@ -84,7 +84,7 @@ function resolve(candidate: CandidateId, call: ToolCall): Resolution {
     const op = tool as OperationName;
     return { op, required: OPERATION_REQUIRED[op], strict: true };
   }
-  if (candidate === "C") {
+  if (candidate === "C" || candidate === "C2") {
     if (tool === "shell") return { op: "shell", required: OPERATION_REQUIRED.shell, strict: false };
     if (tool === "delegate") return { op: "delegate", required: OPERATION_REQUIRED.delegate, strict: false };
     if (tool === "inspect") {
