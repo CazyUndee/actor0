@@ -3,6 +3,35 @@
 Notes for agents and for anyone auditing the harness. The project is small; the
 traps below are the parts that are not obvious from the code.
 
+## Commit every change. Every time. No exceptions.
+
+The working tree is not storage. In one session the entire `apps/cli/src` and
+`packages/harness/src` trees were deleted from the checkout by something
+external — not a reset, not a checkout, just gone. Everything committed came
+back with `git checkout HEAD -- ...`; everything sitting uncommitted (a whole
+subagent / MCP / usage-audit refactor) did not, and was not recoverable from
+git at all. That is the difference between a bad afternoon and a lost feature.
+The recovery is commit `7f54249`.
+
+So: **commit the moment a change is in a coherent state.** Not at the end of
+the task, not "once it is all working," not at the end of the session. A
+half-finished but self-consistent edit gets its own commit. If you are about
+to start something that moves or rewrites files, commit what already exists
+first. The only safe place for work to live is in a commit.
+
+Two disciplines keep "commit constantly" from decaying into "commit garbage":
+
+- **Stage your own paths; never `git add -A` or `git commit -a`.** Another
+  agent may have dirty files in the tree, and sweeping them in is how `HEAD`
+  once came to depend on an uncommitted `subagent.ts` and stopped building.
+  Stage the specific files you touched (`git add path/to/file ...`).
+- **Do not knowingly commit a red tree.** Run the checks that apply to what
+  you changed (see Verify below) before committing. A commit that builds is
+  one you can always get back to; one that does not is a trap for the next
+  person and for you.
+
+Small, frequent, each-one-builds commits. That is the whole policy.
+
 ## Layout
 
 - `packages/harness/src` — the runtime. `harness.ts` owns the turn loop,
