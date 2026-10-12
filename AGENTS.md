@@ -384,6 +384,14 @@ The tests write `$$`, `$&` and `$'` into a file and read it back.
 - A shell command has **no** default timeout, deliberately: a 120s default
   killed real installs. The ceiling is an hour. Three tests in `tools.test.ts`
   pin this; they are not stale.
+- **Change a pinned dependency version only when it is worth it.** A bump for
+  its own sake is churn: a bigger diff to review, a new binary to re-verify,
+  and a chance to reintroduce a bug that was not there. Bump when there is a
+  reason — a fix you need, a feature you are using, a security patch — and say
+  which in the commit. This matters most for the external binaries the CLI
+  spawns (`mst`, `webclaw`), whose versions are pinned in `web-search.ts` and
+  SHA256-verified on install: leave them where they are unless a concrete need
+  says otherwise.
 - Tool calls run in sequence, in the order the model asked for them.
 - History compaction only ever clears tool *payloads*. It never drops a
   message, never reorders, and never cuts mid-conversation-unit — a cut there
