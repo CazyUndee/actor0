@@ -29,7 +29,7 @@ import {
 } from "../conversation.js";
 import { newSessionId, saveSession } from "../session.js";
 import { refreshProvider } from "../sign-in.js";
-import { recordAudit, recordUsage, formatTokens, contextBar, readUsage, startOfDay, startOfWeek, startOfMonth, usageSince, usageByModel } from "../usage.js";
+import { recordUsage, formatTokens, contextBar, readUsage, startOfDay, startOfWeek, startOfMonth, usageSince, usageByModel } from "../usage.js";
 import { gitBranch } from "../git.js";
 import { contextWindowTokens } from "@actor0/harness";
 import { parseSlash, matchSlashCommands, type SlashCommand } from "../slash.js";
@@ -202,18 +202,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     liveRef.current = messages;
   };
 
-  // Sub-agents run through the same provider and endpoint as the parent turn
-  // (or the injected test transport), so delegation never needs its own
-  // credential path. turnMod is loaded by loadTurn before this is called.
-  const taskDelegateHost = (activeProvider: ResolvedProvider): ReturnType<Awaited<ReturnType<typeof loadTurn>>["createToolHost"]> =>
-    turnMod!.createToolHost({
-      cwd,
-      taskDelegate: turnMod!.createTaskDelegate({
-        provider: activeProvider,
-        cwd,
-        ...(transport ? { client: transport } : {}),
-      }),
-    });
+  const taskDelegateHost = (): ReturnType<Awaited<ReturnType<typeof loadTurn>>["createToolHost"]> =>
+    turnMod!.createToolHost({ cwd });
 
   const resolved = useMemo(() => {
     try {
@@ -401,7 +391,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           ...(transport ? { client: transport } : {}),
           messages: messagesRef.current,
           input,
-          toolHost: taskDelegateHost(activeProvider),
+          toolHost: taskDelegateHost(),
           signal: controller.signal,
           cwd,
           ...(config.systemPrompt ? { systemPrompt: config.systemPrompt } : {}),
@@ -422,7 +412,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         if (recovery) notice("warn", T.describeRecovery(recovery));
         const total = totalUsage(result.usage);
         recordUsage(provider.model, total);
-        recordAudit(provider.model, result.audit);
         setContextTokens(total.prompt_tokens);
       } catch (error) {
         const learned = contextWindowTokens(error);
