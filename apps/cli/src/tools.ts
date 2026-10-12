@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve, dirname, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { formatEditDiff } from "./diff.js";
 import { findSkill, loadSkills, renderSkill } from "./skills.js";
+import { invalidateRepoIndex } from "./repo-index.js";
 
 /**
  * The CLI's tools.
@@ -461,6 +462,7 @@ const writeTool: CliTool = {
     );
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, content, "utf8");
+    invalidateRepoIndex(ctx.cwd);
     // `"".split("\n")` is one empty line, not zero; a file the model just
     // emptied should not be reported as having one.
     const lines = content === "" ? 0 : content.split("\n").length;
@@ -551,6 +553,7 @@ const editTool: CliTool = {
     const updated = content.split(before).join(after);
     const written = joinTextFile(bom, updated, crlf);
     await writeFile(target, written, "utf8");
+    invalidateRepoIndex(ctx.cwd);
     const changed = occurrences === 1 ? "1 occurrence" : `${occurrences} occurrences`;
     // The diff is what the user wants to see and what tells the model precisely
     // what changed; the one-line summary is the token-cheap header above it.

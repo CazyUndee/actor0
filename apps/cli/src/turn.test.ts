@@ -412,6 +412,7 @@ test("a window the endpoint named is the one the recovery is sized against", asy
       model: { baseUrl, path: "/chat/completions", model: "test-model" },
       messages: roomyHistory(),
       input: "and now, what did it say?",
+      cwd: cwd(),
       toolHost: createToolHost({ cwd: cwd() }),
       signal: new AbortController().signal,
     });
@@ -472,6 +473,7 @@ test("a retry earned by repair rather than by size reports nothing", async () =>
       model: { baseUrl, path: "/chat/completions", model: "test-model" },
       messages: danglingHistory(50),
       input: "ask again",
+      cwd: cwd(),
       toolHost: createToolHost({ cwd: cwd() }),
       signal: new AbortController().signal,
     });

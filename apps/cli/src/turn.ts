@@ -19,6 +19,7 @@ import { createModel } from "@actor0/providers";
 import { totalUsage } from "./conversation.js";
 import { formatProjectContext, loadProjectContext } from "./context.js";
 import { formatSkillListing, loadSkills } from "./skills.js";
+import { formatRepoTree, getRepoIndex } from "./repo-index.js";
 import { detectEnvironment, formatEnvironment } from "./environment.js";
 import { CHARS_PER_TOKEN, compactHistory, measureHistory } from "./history.js";
 import {
@@ -227,7 +228,14 @@ export function withProjectContext(systemPrompt: string, cwd: string): string {
     ? `
 \n\n<skills>\nAvailable skills (load one with the \`skill\` tool by name):\n${skills}\n</skills>\n`
     : "";
-  return systemPrompt + formatEnvironment(detectEnvironment(cwd)) + formatProjectContext(loadProjectContext(cwd)) + skillBlock;
+  // A shallow tree of the repo, so the model knows the shape of the project
+  // without walking it; the full index is queried on demand, never dumped here.
+  const index = getRepoIndex(cwd);
+  // A tree is only worth its tokens once the repo has some shape; a one- or
+  // two-file directory is cheaper to `glob` than to print.
+  const tree = index.files.length >= 5 ? formatRepoTree(index) : "";
+  const treeBlock = tree ? `\n\n<repo_tree>\n${tree}\n</repo_tree>\n` : "";
+  return systemPrompt + formatEnvironment(detectEnvironment(cwd)) + formatProjectContext(loadProjectContext(cwd)) + skillBlock + treeBlock;
 }
 
 /**
