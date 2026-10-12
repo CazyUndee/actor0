@@ -250,15 +250,16 @@ the bug.
 
 ## Adding a tool touches five places, and three of them are tripwires
 
-`grep` was the fifth tool. Registering it was one line in the `TOOLS` array;
-everything else was found by a test failing and is easy to miss:
+`grep` (now `rg`, backed by ripgrep) was an early tool. Registering it was one
+line in the `TOOLS` array; everything else was found by a test failing and is
+easy to miss:
 
 1. **`TOOLS`** in `tools.ts`. The array order *is* the order the
    unknown-tool error lists, so `tools.test.ts` asserts that whole string
-   verbatim. `glob` was the sixth tool and this was the place AGENTS.md
+   verbatim. `glob` was a later tool and this was the place AGENTS.md
    had not counted, which is how a green suite still shipped a tool the
    error message did not offer.
-2. **"the five tools are advertised, and nothing else"** — the count is in
+2. **"the eight tools are advertised, and nothing else"** — the count is in
    the test's own name, so it fails when the tool set changes, which is
    the point. Keep the name honest.
 3. **"every tool verb in the prompt is a real tool"** — the list is written
@@ -349,8 +350,8 @@ run directly — which is exactly how they get run while iterating.
 
 ## A listing cannot hide what a search may hide
 
-`grep` skips `.git` and `node_modules` outright, and that is right:
-the answer is a match list, and a dependency tree in it is noise.
+`rg` skips `.git` (hidden) and `node_modules` (an explicit glob) outright, and
+that is right: the answer is a match list, and a dependency tree in it is noise.
 `glob` was written the same way at first and a test caught it — a
 listing that omits `node_modules/` tells the model the tree has no such
 thing, and the model will say so.

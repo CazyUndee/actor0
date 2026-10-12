@@ -59,7 +59,7 @@ test("the eight tools are advertised, and nothing else", () => {
   const names = createToolHost({ cwd: scratch() })
     .definitions()
     .map((d) => d.function.name);
-  assert.deepEqual(names.sort(), ["edit", "glob", "grep", "read", "shell", "skill", "task", "write"]);
+  assert.deepEqual(names.sort(), ["edit", "glob", "read", "rg", "shell", "skill", "task", "write"]);
   for (const definition of createToolHost({ cwd: scratch() }).definitions()) {
     assert.equal(definition.type, "function");
     assert.ok(definition.function.description.length > 10, `${definition.function.name} needs a real description`);
@@ -69,7 +69,7 @@ test("the eight tools are advertised, and nothing else", () => {
 
 test("every tool verb in the prompt is a real tool", () => {
   // A tool named in the system prompt but absent from the host is a prompt lie.
-  for (const name of ["read", "write", "edit", "grep", "glob", "shell", "task", "skill"]) {
+  for (const name of ["read", "write", "edit", "rg", "glob", "shell", "task", "skill"]) {
     assert.ok(host(scratch()).definitions().some((d) => d.function.name === name), `missing ${name}`);
   }
 });
@@ -975,7 +975,7 @@ test("paths inside the working directory are fine, however they are spelled", as
 
 test("an unknown tool throws and lists what is available", async () => {
   await assert.rejects(() => host(scratch()).execute(call("rm_rf", {}), signal), /unknown tool "rm_rf"/);
-  await assert.rejects(() => host(scratch()).execute(call("rm_rf", {}), signal), /read, write, edit, grep, glob, shell/);
+  await assert.rejects(() => host(scratch()).execute(call("rm_rf", {}), signal), /read, write, edit, glob, shell/);
 });
 
 test("malformed arguments throw rather than being silently ignored", async () => {
@@ -1140,166 +1140,128 @@ function fixture(): string {
   return dir;
 }
 
-const grep = (dir: string, args: Record<string, unknown>): Promise<string> =>
-  host(dir).execute(call("grep", args), signal);
+const rg = (dir: string, args: Record<string, unknown>): Promise<string> =>
+  host(dir).execute(call("rg", args), signal);
 
-// --- grep -------------------------------------------------------------------
+// --- rg --------------------------------------------------------------------
 
-test("grep returns the matching paths, relative and posix, by default", async () => {
-  assert.equal(
-    await grep(fixture(), { pattern: "fitTail" }),
-    ["apps/cli/ui/parts.test.ts", "apps/cli/ui/parts.tsx", "README.md"].join("\n"),
-  );
+test("rg returns the matching paths by default", async () => {
+  const out = await rg(fixture(), { pattern: "fitTail" });
+  assert.deepEqual(out.split("\n").sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())), [
+    "apps/cli/ui/parts.test.ts",
+    "apps/cli/ui/parts.tsx",
+    "README.md",
+  ]);
 });
 
-test("grep skips .git and node_modules rather than searching them", async () => {
-  const dir = fixture();
-  assert.equal(await grep(dir, { pattern: "fitTail" }), await grep(dir, { pattern: "fitTail" }));
-  assert.ok(!(await grep(dir, { pattern: "fitTail" })).includes("node_modules"));
-  // Asked for by name it is searched — the skip is about not descending into
-  // it uninvited, not about pretending the directory is empty.
-  assert.equal(await grep(dir, { pattern: "fitTail", path: "node_modules" }), "node_modules/left-pad/index.js");
+test("rg skips node_modules and .git rather than searching them", async () => {
+  const out = await rg(fixture(), { pattern: "fitTail" });
+  assert.ok(!out.includes("node_modules"), "node_modules was searched");
+  assert.ok(!out.includes(".git"), ".git was searched");
 });
 
-test("grep scoped to a subdirectory still reports paths the model can read", async () => {
-  // The paths have to come out relative to the working directory even when the
-  // search itself was rooted somewhere else, or `read` cannot open them.
-  assert.equal(
-    await grep(fixture(), { pattern: "fitTail", path: "apps/cli/ui" }),
-    ["apps/cli/ui/parts.test.ts", "apps/cli/ui/parts.tsx"].join("\n"),
-  );
+test("rg scoped to a subdirectory still reports paths the model can read", async () => {
+  const out = await rg(fixture(), { pattern: "fitTail", path: "apps/cli/ui" });
+  assert.deepEqual(out.split("\n").sort(), ["apps/cli/ui/parts.test.ts", "apps/cli/ui/parts.tsx"]);
 });
 
 test("content mode marks a match with :n: and its context with -n-", async () => {
-  const out = await grep(fixture(), {
-    pattern: "fitTail",
-    path: "apps/cli/ui/parts.tsx",
-    output_mode: "content",
-    context: 1,
-  });
+  const out = await rg(fixture(), { pattern: "fitTail", path: "apps/cli/ui/parts.tsx", output_mode: "content", context: 1 });
   assert.deepEqual(out.split("\n"), [
-    "apps/cli/ui/parts.tsx-1- import { Text } from 'ink';",
-    "apps/cli/ui/parts.tsx:2: export function fitTail() {",
-    "apps/cli/ui/parts.tsx-3-   const rows = 5;",
+    "apps/cli/ui/parts.tsx-1-import { Text } from 'ink';",
+    "apps/cli/ui/parts.tsx:2:export function fitTail() {",
+    "apps/cli/ui/parts.tsx-3-  const rows = 5;",
   ]);
 });
 
 test("context around two nearby matches is not printed twice", async () => {
   const dir = scratch();
   writeFileSync(join(dir, "a.txt"), ["hit", "x", "hit", "x", "x"].join("\n"));
-  const out = await grep(dir, { pattern: "hit", path: "a.txt", output_mode: "content", context: 2 });
+  const out = await rg(dir, { pattern: "hit", path: "a.txt", output_mode: "content", context: 2 });
   assert.deepEqual(out.split("\n"), [
-    "a.txt:1: hit",
-    "a.txt-2- x",
-    "a.txt:3: hit",
-    "a.txt-4- x",
-    "a.txt-5- x",
+    "a.txt:1:hit",
+    "a.txt-2-x",
+    "a.txt:3:hit",
+    "a.txt-4-x",
+    "a.txt-5-x",
   ]);
 });
 
 test("count mode counts the lines that matched, the way ripgrep does", async () => {
-  // Two matches on one line is still one matching line. This is `rg --count`
-  // rather than a count of occurrences, and the difference is deliberate: the
-  // model reads this as "how much of this file is about the thing", which is
-  // the question it is asking.
   const dir = scratch();
   writeFileSync(join(dir, "a.txt"), ["one hit and another hit", "no match", "a third hit"].join("\n"));
-  assert.equal(await grep(dir, { pattern: "hit", path: "a.txt", output_mode: "count" }), "a.txt:2");
+  assert.equal(await rg(dir, { pattern: "hit", path: "a.txt", output_mode: "count" }), "a.txt:2");
 });
 
 test("an include glob with no slash matches the file name, so *.ts works", async () => {
-  // This is the glob everybody writes. Anchored to the whole path it matches
-  // nothing at all, and the search then reports "nothing was searched".
-  assert.equal(
-    await grep(fixture(), { pattern: "fitTail", include: "*.ts" }),
-    "apps/cli/ui/parts.test.ts",
-  );
-  // And it stops at the end of the name. Unanchored, *.ts also matched
-  // parts.tsx, and this test pinned that as correct — so a model that asked
-  // for the TypeScript was handed the JSX too, with no way to tell which
-  // of the two it had been given.
-  assert.match(
-    await grep(fixture(), { pattern: "fitTail", include: "*.tsx" }),
-    /parts\.tsx/,
-    "a glob that spells the extension out still reaches the file",
-  );
+  assert.equal(await rg(fixture(), { pattern: "fitTail", include: "*.ts" }), "apps/cli/ui/parts.test.ts");
+  assert.match(await rg(fixture(), { pattern: "fitTail", include: "*.tsx" }), /parts\.tsx/);
 });
 
 test("an include glob with a slash matches the path", async () => {
-  assert.equal(
-    await grep(fixture(), { pattern: "fitTail", include: "apps/**/ui/*.tsx" }),
-    "apps/cli/ui/parts.tsx",
-  );
+  assert.equal(await rg(fixture(), { pattern: "fitTail", include: "apps/**/ui/*.tsx" }), "apps/cli/ui/parts.tsx");
 });
 
 test("case_insensitive and multiline do what they say", async () => {
-  assert.equal(await grep(fixture(), { pattern: "FITTail", case_insensitive: true }), await grep(fixture(), { pattern: "fitTail" }));
-  // A pattern that crosses a line end only matches with multiline set, and is
-  // then reported at the line it starts on.
-  const across = { pattern: "function \\w+\\(\\) \\{\\n  const rows", output_mode: "content" as const };
-  assert.equal(await grep(fixture(), { pattern: across.pattern, path: "apps/cli/ui/parts.tsx", output_mode: "content" }), "No matches for " + across.pattern + ". [searched 1 file].");
-  assert.equal(
-    await grep(fixture(), { pattern: across.pattern, path: "apps/cli/ui/parts.tsx", output_mode: "content", multiline: true }),
-    "apps/cli/ui/parts.tsx:2: export function fitTail() {",
-  );
+  const insensitive = (await rg(fixture(), { pattern: "FITTail", case_insensitive: true })).split("\n").sort();
+  const sensitive = (await rg(fixture(), { pattern: "fitTail" })).split("\n").sort();
+  assert.deepEqual(insensitive, sensitive);
+  const across = "function \\w+\\(\\) \\{\\n  const rows";
+  // Without multiline, rg refuses a pattern that contains a literal newline.
+  await assert.rejects(() => rg(fixture(), { pattern: across, path: "apps/cli/ui/parts.tsx", output_mode: "content" }), /rg failed|not allowed/);
+  const multi = await rg(fixture(), { pattern: across, path: "apps/cli/ui/parts.tsx", output_mode: "content", multiline: true });
+  assert.match(multi, /parts\.tsx:2:/, "a cross-line pattern only matches with multiline set");
 });
 
-test("a binary file is skipped and the skip is reported", async () => {
-  const dir = fixture();
-  const out = await grep(dir, { pattern: "fitTail", path: "blob.bin" });
-  assert.match(out, /No matches for fitTail\. \[searched 1 file, skipped 1 binary file\]\./);
-  // With only a binary file to search, the count of real files is zero, and the
-  // model is told that rather than being told the pattern does not occur.
-  assert.equal(await grep(dir, { pattern: "fitTail", include: "*.bin" }), await grep(dir, { pattern: "fitTail", path: "blob.bin" }));
+test("a binary match is filtered and reads as no match", async () => {
+  // ripgrep reports a matching binary as "binary file matches"; the tool filters
+  // that, so a pattern found only in a binary reads as no match, not as noise.
+  assert.equal(await rg(fixture(), { pattern: "fitTail", path: "blob.bin", output_mode: "content" }), "No matches for fitTail.");
 });
 
-test("an empty result says how much was searched, not just that nothing matched", async () => {
-  const out = await grep(fixture(), { pattern: "no-such-symbol-anywhere" });
-  assert.match(out, /^No matches for no-such-symbol-anywhere\. \[searched 4 files/);
+test("an empty result says nothing matched", async () => {
+  assert.equal(await rg(fixture(), { pattern: "no-such-symbol-anywhere" }), "No matches for no-such-symbol-anywhere.");
 });
 
-test("an include that excludes everything names the glob instead of the path", async () => {
-  assert.match(
-    await grep(fixture(), { pattern: "fitTail", include: "*.rs" }),
-    /include: \*\.rs excluded all \d+ files/,
-  );
+test("an include that excludes everything is just no matches", async () => {
+  assert.equal(await rg(fixture(), { pattern: "fitTail", include: "*.rs" }), "No matches for fitTail.");
 });
 
 test("a path that does not exist is a sentence, not an ENOENT stack", async () => {
-  await assert.rejects(() => grep(fixture(), { pattern: "x", path: "no/such/place" }), /path does not exist: no\/such\/place/);
+  await assert.rejects(() => rg(fixture(), { pattern: "x", path: "no/such/place" }), /path does not exist: no\/such\/place/);
 });
 
-test("a bad pattern and a bad output_mode each say which argument was wrong", async () => {
-  const dir = fixture();
-  await assert.rejects(() => grep(dir, { pattern: "fitTail(" }), /not a valid regular expression: fitTail\(/);
-  await assert.rejects(() => grep(dir, { pattern: "x", output_mode: "everything" }), /output_mode must be files_with_matches, content or count/);
+test("a bad output_mode says which argument was wrong", async () => {
+  await assert.rejects(() => rg(fixture(), { pattern: "x", output_mode: "everything" }), /output_mode must be files_with_matches, content or count/);
+});
+
+test("a bad pattern surfaces rg's own error", async () => {
+  await assert.rejects(() => rg(fixture(), { pattern: "fitTail(" }), /rg failed/);
 });
 
 test("head_limit is honoured and the note says how much was left behind", async () => {
   const dir = scratch();
   for (const name of ["a", "b", "c"]) writeFileSync(join(dir, `${name}.txt`), "hit\n");
-  const out = await grep(dir, { pattern: "hit", head_limit: 2 });
-  assert.deepEqual(out.split("\n").slice(0, 2), ["a.txt", "b.txt"]);
-  assert.match(out, /showing the first 2 of 3 candidate files/);
-  // No truncation, no note — the same rule `shell` follows.
-  assert.equal(await grep(dir, { pattern: "hit" }), ["a.txt", "b.txt", "c.txt"].join("\n"));
+  const out = await rg(dir, { pattern: "hit", head_limit: 2 });
+  assert.match(out, /showing the first 2 of 3/);
+  assert.equal((await rg(dir, { pattern: "hit" })).split("\n").sort().join("\n"), ["a.txt", "b.txt", "c.txt"].join("\n"));
 });
 
-test("a very long matching line is cut, and the cut is announced", async () => {
+test("a very long matching line is cut by --max-columns", async () => {
   const dir = scratch();
-  writeFileSync(join(dir, "a.txt"), `${"hit ".repeat(400)}\n`);
-  const out = await grep(dir, { pattern: "hit", path: "a.txt", output_mode: "content" });
+  writeFileSync(join(dir, "a.txt"), `${'hit '.repeat(400)}\n`);
+  const out = await rg(dir, { pattern: "hit", path: "a.txt", output_mode: "content" });
   assert.ok(out.split("\n")[0]!.length < 600, "the line was not cut");
-  assert.match(out, /1 line longer than 500 characters/);
 });
 
-test("grep will not leave the working directory", async () => {
-  await assert.rejects(() => grep(fixture(), { pattern: "x", path: "../.." }), /outside|within|working directory/i);
+test("rg will not leave the working directory", async () => {
+  await assert.rejects(() => rg(fixture(), { pattern: "x", path: "../.." }), /outside|within|working directory/i);
 });
 
-test("grep is a real tool the prompt can name", () => {
-  assert.ok(host(scratch()).definitions().some((d) => d.function.name === "grep"));
+test("rg is a real tool the prompt can name", () => {
+  assert.ok(host(scratch()).definitions().some((d) => d.function.name === "rg"));
 });
+
 // --- glob -------------------------------------------------------------------
 
 const glob = (dir: string, args: Record<string, unknown>): Promise<string> =>

@@ -20,8 +20,8 @@ function toolDisplayName(name: string): string {
       return "Edit";
     case "glob":
       return "Glob";
-    case "grep":
-      return "Grep";
+    case "rg":
+      return "Rg";
     default:
       return name;
   }
