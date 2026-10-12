@@ -5,4 +5,5 @@ export * from "./model-client.js";
 export * from "./plan-prefix.js";
 export * from "./protocol.js";
 export * from "./reasoning-summary.js";
+export * from "./tool-host.js";
 export * from "./types.js";
