@@ -334,6 +334,34 @@ Two things the measurement changed, beyond the pattern:
   Bytes and characters are not the same unit, and the one that is enforced is
   characters.
 
+## The two upstream CLIs are local paths, not links
+
+`PRODUCTION.md` opens by saying the port was mined from two trees, and it names
+both by absolute path:
+
+    D:\projects\codex\codex-rs
+    C:\Users\roone.DESKTOP-QJ3UG2M\Downloads\claude-code-main\claude-code-main\src
+
+Codex contributed the design — `core/tasks`, `execpolicy`, `protocol/error`,
+rollout, sandboxing — and `docs/skills.md` cites `skills/{selection,mentions,
+invocation}.rs` out of the same tree. Claude Code contributed `Tool.ts`,
+`permissions/`, `Task.ts` and `applyEditToFile`, and `provider-presets.ts`
+cites `src/constants/oauth.ts` plus `src/services/oauth/`.
+
+One asymmetry is worth keeping straight: **the ChatGPT OAuth values did not come
+out of `codex-rs`.** They were read as strings from the shipped `codex.exe`
+(`chatgpt-client.ts`, `provider-presets.ts`), because the binary is where the
+live endpoint, headers and event names are actually true. No file says where
+either copy came from and no URL in the repo points at either one, so a fresh
+checkout cannot re-derive a single constant here.
+
+Which is the point: those constants are **evidence, not configuration.** A
+`client_id` that merely looks plausible is the most dangerous thing in
+`provider-presets.ts`, and the next person tidying it is how one gets invented.
+When a provider changes its flow, the fix is to obtain the source or the binary
+again and read the constants off it — that file is the one place to update, and
+its header says so.
+
 ## Neutering across a package boundary needs a rebuild
 
 The harness is consumed by the CLI through its built `dist/`, not its source.
