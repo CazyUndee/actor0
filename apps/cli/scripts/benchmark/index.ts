@@ -18,13 +18,21 @@ import { TASKS } from "./tasks.js";
 
 const outFlag = process.argv.indexOf("--out");
 const out = outFlag >= 0 ? process.argv[outFlag + 1]! : "benchmark-results.json";
+const candFlag = process.argv.indexOf("--candidate");
+const taskFlag = process.argv.indexOf("--task");
+const onlyCandidate = candFlag >= 0 ? process.argv[candFlag + 1] : undefined;
+const onlyTask = taskFlag >= 0 ? process.argv[taskFlag + 1] : undefined;
 
 const provider = resolveProvider(loadConfig());
-const candidates = [captureCandidateA(process.cwd()), CANDIDATE_B, CANDIDATE_C, CANDIDATE_D];
+const all = [captureCandidateA(process.cwd()), CANDIDATE_B, CANDIDATE_C, CANDIDATE_D];
+const candidates = onlyCandidate ? all.filter((c) => c.id === onlyCandidate) : all;
+const tasks = onlyTask ? TASKS.filter((t) => t.id === onlyTask) : TASKS;
+if (candidates.length === 0) throw new Error(`no such candidate: ${onlyCandidate}`);
+if (tasks.length === 0) throw new Error(`no such task: ${onlyTask}`);
 
 const results = [];
 for (const candidate of candidates) {
-  for (const task of TASKS) {
+  for (const task of tasks) {
     process.stderr.write(`… candidate ${candidate.id} / task ${task.id}\n`);
     results.push(await runCandidateOnTask({ candidate, task, provider }));
   }
