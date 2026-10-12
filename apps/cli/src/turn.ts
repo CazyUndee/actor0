@@ -18,6 +18,7 @@ import type { ResolvedProvider } from "./config.js";
 import { createModel } from "@actor0/providers";
 import { totalUsage } from "./conversation.js";
 import { formatProjectContext, loadProjectContext } from "./context.js";
+import { formatSkillListing, loadSkills } from "./skills.js";
 import { detectEnvironment, formatEnvironment } from "./environment.js";
 import { CHARS_PER_TOKEN, compactHistory, measureHistory } from "./history.js";
 import {
@@ -219,7 +220,15 @@ export function promptClearsProviderFloor(prompt: string): boolean {
  * and appending keeps the base byte-identical whether or not context exists.
  */
 export function withProjectContext(systemPrompt: string, cwd: string): string {
-  return systemPrompt + formatEnvironment(detectEnvironment(cwd)) + formatProjectContext(loadProjectContext(cwd));
+  const skills = formatSkillListing(loadSkills(cwd).skills);
+  // Progressive disclosure: the prompt always names the skills and their
+  // one-line descriptions; the `skill` tool loads a body on demand. Absent
+  // when the project has no skills, so the block never shows up empty.
+  const skillBlock = skills
+    ? `
+\n\n<skills>\nAvailable skills (load one with the \`skill\` tool by name):\n${skills}\n</skills>\n`
+    : "";
+  return systemPrompt + formatEnvironment(detectEnvironment(cwd)) + formatProjectContext(loadProjectContext(cwd)) + skillBlock;
 }
 
 /**

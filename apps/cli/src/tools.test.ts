@@ -55,11 +55,11 @@ test("an approval callback, if one is passed anyway, is never consulted", async 
   assert.equal(readFileSync(join(dir, "out.txt"), "utf8"), "data");
 });
 
-test("the seven tools are advertised, and nothing else", () => {
+test("the eight tools are advertised, and nothing else", () => {
   const names = createToolHost({ cwd: scratch() })
     .definitions()
     .map((d) => d.function.name);
-  assert.deepEqual(names.sort(), ["edit", "glob", "grep", "read", "shell", "task", "write"]);
+  assert.deepEqual(names.sort(), ["edit", "glob", "grep", "read", "shell", "skill", "task", "write"]);
   for (const definition of createToolHost({ cwd: scratch() }).definitions()) {
     assert.equal(definition.type, "function");
     assert.ok(definition.function.description.length > 10, `${definition.function.name} needs a real description`);
@@ -69,7 +69,7 @@ test("the seven tools are advertised, and nothing else", () => {
 
 test("every tool verb in the prompt is a real tool", () => {
   // A tool named in the system prompt but absent from the host is a prompt lie.
-  for (const name of ["read", "write", "edit", "grep", "glob", "shell", "task"]) {
+  for (const name of ["read", "write", "edit", "grep", "glob", "shell", "task", "skill"]) {
     assert.ok(host(scratch()).definitions().some((d) => d.function.name === name), `missing ${name}`);
   }
 });
@@ -93,6 +93,17 @@ test("the task tool says delegation is unavailable rather than failing obscurely
     () => createToolHost({ cwd: scratch() }).execute(call("task", { prompt: "x" }), signal),
     /not available/,
   );
+});
+
+test("the skill tool loads a body, fills $ARGUMENTS, and errors on an unknown name", async () => {
+  const dir = scratch();
+  mkdirSync(join(dir, ".actor0", "skills"), { recursive: true });
+  writeFileSync(join(dir, ".actor0", "skills", "greet.md"), "---\nname: greet\ndescription: Say hi\n---\n\nSay hello to $ARGUMENTS.\n", "utf8");
+  const host = createToolHost({ cwd: dir });
+  const out = await host.execute(call("skill", { name: "greet", args: "Bob" }), signal);
+  assert.match(out, /\[skill: greet\]/);
+  assert.match(out, /Say hello to Bob\./);
+  await assert.rejects(() => host.execute(call("skill", { name: "nope" }), signal), /no skill named "nope"/);
 });
 
 // --- read -------------------------------------------------------------------

@@ -470,7 +470,7 @@ test("a retry earned by repair rather than by size reports nothing", async () =>
   try {
     const outcome = await runTurn({
       model: { baseUrl, path: "/chat/completions", model: "test-model" },
-      messages: danglingHistory(),
+      messages: danglingHistory(50),
       input: "ask again",
       toolHost: createToolHost({ cwd: cwd() }),
       signal: new AbortController().signal,

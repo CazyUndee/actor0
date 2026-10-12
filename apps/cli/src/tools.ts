@@ -3,6 +3,7 @@ import { readFile, readdir, realpath, stat, writeFile, mkdir, open } from "node:
 import { isAbsolute, join, relative, resolve, dirname, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { formatEditDiff } from "./diff.js";
+import { findSkill, loadSkills, renderSkill } from "./skills.js";
 
 /**
  * The CLI's tools.
@@ -1588,7 +1589,54 @@ const taskTool: CliTool = {
     return `[sub-agent${where} — ${stats}${flag}]\n\n${result.text}`;
   },
 };
-const TOOLS: CliTool[] = [readTool, writeTool, editTool, grepTool, globTool, shellTool, taskTool];
+/**
+ * The skill tool — progressive disclosure of reusable instructions.
+ *
+ * The system prompt lists every skill's name and one-line description, so the
+ * model knows what exists without any of their bodies in context. This tool
+ * loads one body on demand: the model names a skill, and the instructions come
+ * back as the result to follow. A skill is data the model reads — it is never
+ * executed — and an ambiguous or model-disabled name is refused rather than
+ * guessed (see `findSkill`).
+ */
+const skillTool: CliTool = {
+  definition: {
+    type: "function",
+    function: {
+      name: "skill",
+      description:
+        "Load a skill's instructions by name. Skills are reusable playbooks; the system prompt lists their names and one-line descriptions, and this returns the full body to follow. Pass args to fill $ARGUMENTS in the body. Use it when a listed skill matches the task.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The skill's name, exactly as listed in the prompt." },
+          args: { type: "string", description: "Optional text substituted for $ARGUMENTS in the skill body." },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  label: (args) => `skill ${String(args.name ?? "").trim()}`,
+  hint: "loading a reusable skill's instructions on demand",
+  async run(args, ctx) {
+    const name = requireString(args, "name");
+    const skillArgs = optionalText(args, "args");
+    const { skills } = loadSkills(ctx.cwd);
+    const found = findSkill(skills, name);
+    if (!found.ok) {
+      if (found.reason === "ambiguous") {
+        throw new Error(`the skill "${name}" is ambiguous — ${(found.paths ?? []).join(", ")} all claim that name; rename one so it is unique`);
+      }
+      if (found.reason === "disabled") {
+        throw new Error(`the "${name}" skill is not available to the model (disable-model-invocation)`);
+      }
+      const available = found.names.length > 0 ? found.names.join(", ") : "none";
+      throw new Error(`no skill named "${name}". Available: ${available}`);
+    }
+    return renderSkill(found.skill, skillArgs);
+  },
+};
+const TOOLS: CliTool[] = [readTool, writeTool, editTool, grepTool, globTool, shellTool, taskTool, skillTool];
 
 /**
  * How many tools the CLI offers, for the prompt to count out loud.
