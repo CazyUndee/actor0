@@ -202,8 +202,18 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     liveRef.current = messages;
   };
 
-  const taskDelegateHost = (): ReturnType<Awaited<ReturnType<typeof loadTurn>>["createToolHost"]> =>
-    turnMod!.createToolHost({ cwd });
+  // Sub-agents run through the same provider and endpoint as the parent turn
+  // (or the injected test transport), so delegation never needs its own
+  // credential path. turnMod is loaded by loadTurn before this is called.
+  const taskDelegateHost = (activeProvider: ResolvedProvider): ReturnType<Awaited<ReturnType<typeof loadTurn>>["createToolHost"]> =>
+    turnMod!.createToolHost({
+      cwd,
+      taskDelegate: turnMod!.createTaskDelegate({
+        provider: activeProvider,
+        cwd,
+        ...(transport ? { client: transport } : {}),
+      }),
+    });
 
   const resolved = useMemo(() => {
     try {
@@ -391,7 +401,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           ...(transport ? { client: transport } : {}),
           messages: messagesRef.current,
           input,
-          toolHost: taskDelegateHost(),
+          toolHost: taskDelegateHost(activeProvider),
           signal: controller.signal,
           cwd,
           ...(config.systemPrompt ? { systemPrompt: config.systemPrompt } : {}),

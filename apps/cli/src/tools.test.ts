@@ -55,11 +55,11 @@ test("an approval callback, if one is passed anyway, is never consulted", async 
   assert.equal(readFileSync(join(dir, "out.txt"), "utf8"), "data");
 });
 
-test("the six tools are advertised, and nothing else", () => {
+test("the seven tools are advertised, and nothing else", () => {
   const names = createToolHost({ cwd: scratch() })
     .definitions()
     .map((d) => d.function.name);
-  assert.deepEqual(names.sort(), ["edit", "glob", "grep", "read", "shell", "write"]);
+  assert.deepEqual(names.sort(), ["edit", "glob", "grep", "read", "shell", "task", "write"]);
   for (const definition of createToolHost({ cwd: scratch() }).definitions()) {
     assert.equal(definition.type, "function");
     assert.ok(definition.function.description.length > 10, `${definition.function.name} needs a real description`);
@@ -69,9 +69,30 @@ test("the six tools are advertised, and nothing else", () => {
 
 test("every tool verb in the prompt is a real tool", () => {
   // A tool named in the system prompt but absent from the host is a prompt lie.
-  for (const name of ["read", "write", "edit", "grep", "glob", "shell"]) {
+  for (const name of ["read", "write", "edit", "grep", "glob", "shell", "task"]) {
     assert.ok(host(scratch()).definitions().some((d) => d.function.name === name), `missing ${name}`);
   }
+});
+
+test("the task tool delegates to the configured sub-agent and returns its answer", async () => {
+  const host = createToolHost({
+    cwd: scratch(),
+    taskDelegate: {
+      async run(request) {
+        return { text: `did: ${request.prompt}`, complete: true, rounds: 2, toolCallCount: 3 };
+      },
+    },
+  });
+  const out = await host.execute(call("task", { prompt: "research X", description: "research" }), signal);
+  assert.match(out, /\[sub-agent \(research\) — 2 rounds, 3 tool calls\]/);
+  assert.match(out, /did: research X/);
+});
+
+test("the task tool says delegation is unavailable rather than failing obscurely", async () => {
+  await assert.rejects(
+    () => createToolHost({ cwd: scratch() }).execute(call("task", { prompt: "x" }), signal),
+    /not available/,
+  );
 });
 
 // --- read -------------------------------------------------------------------

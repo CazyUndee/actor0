@@ -26,9 +26,45 @@ import { formatEditDiff } from "./diff.js";
  * failing on a Windows file. Those details are what separate a tool the model
  * can drive from one it fights.
  */
+/** A self-contained subtask handed to a sub-agent. */
+export type TaskRequest = {
+  /** Everything the sub-agent needs, in full — it cannot see the caller's conversation. */
+  prompt: string;
+  /** A short label for the activity line. */
+  description?: string;
+};
+
+/** What a sub-agent turn produced. */
+export type TaskResult = {
+  /** The sub-agent's final answer. */
+  text: string;
+  /** Whether it finished with a complete, untruncated answer. */
+  complete: boolean;
+  /** Model rounds the sub-agent spent. */
+  rounds: number;
+  /** Tool calls the sub-agent made. */
+  toolCallCount: number;
+};
+
+/**
+ * Runs a subtask in an isolated sub-agent and returns its answer.
+ *
+ * A port the host supplies, so `tools.ts` never imports the thing that
+ * implements it (which would import `tools.ts` back for the sub-agent's own
+ * host). The CLI implements it in `subagent.ts`.
+ */
+export type TaskDelegate = {
+  run(request: TaskRequest, signal: AbortSignal): Promise<TaskResult>;
+};
 export type ToolContext = {
   cwd: string;
   signal: AbortSignal;
+  /**
+   * Runs a subtask in a sub-agent, when the host configured one. Read by the
+   * `task` tool; absent means delegation is unavailable and the tool says so
+   * rather than failing in a way the model cannot act on.
+   */
+  taskDelegate?: TaskDelegate;
 };
 
 type CliTool = {
@@ -1492,7 +1528,67 @@ const globTool: CliTool = {
   },
 };
 
-const TOOLS: CliTool[] = [readTool, writeTool, editTool, grepTool, globTool, shellTool];
+/**
+ * The sub-agent tool.
+ *
+ * Delegates a self-contained subtask to a second agent that runs its own turn
+ * with the same tools and endpoint, then hands its final answer back as this
+ * tool's result. The point is isolation: the sub-agent's research, file reads
+ * and dead ends stay in its own context instead of piling into the parent's, so
+ * a long investigation does not crowd out the conversation that asked for it.
+ * The sub-agent cannot see this conversation, which is why the prompt has to
+ * carry everything the task needs.
+ *
+ * A sub-agent is itself given a host whose `task` tool refuses to recurse (see
+ * `createTaskDelegate`), so the tool count is the same everywhere and the
+ * prompt's "N tools" is never a lie about what the model is holding.
+ */
+const taskTool: CliTool = {
+  definition: {
+    type: "function",
+    function: {
+      name: "task",
+      description:
+        "Delegate a self-contained subtask to a sub-agent that runs with the same tools and endpoint and returns its final answer. Use it to keep long research or multi-step work out of this conversation's context; the sub-agent cannot see this conversation, so the prompt must contain everything it needs. It returns the sub-agent's answer, or a note that it produced none.",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: {
+            type: "string",
+            description: "The complete task for the sub-agent, in full — it cannot see this conversation, so include all context, file paths and goals it needs.",
+          },
+          description: {
+            type: "string",
+            description: "A short label for what the sub-agent is doing, shown on the activity line.",
+          },
+        },
+        required: ["prompt"],
+      },
+    },
+  },
+  label: (args) => {
+    const what = optionalText(args, "description")?.trim();
+    return what ? `task: ${what}` : "task";
+  },
+  hint: "delegating a self-contained subtask to a sub-agent",
+  async run(args, ctx) {
+    const delegate = ctx.taskDelegate;
+    if (!delegate) {
+      throw new Error("task delegation is not available in this context");
+    }
+    const prompt = requireString(args, "prompt");
+    const description = optionalText(args, "description")?.trim();
+    const result = await delegate.run({ prompt, ...(description ? { description } : {}) }, ctx.signal);
+    const where = description ? ` (${description})` : "";
+    const stats = `${result.rounds} round${result.rounds === 1 ? "" : "s"}, ${result.toolCallCount} tool call${result.toolCallCount === 1 ? "" : "s"}`;
+    if (!result.text.trim()) {
+      return `The sub-agent${where} produced no answer after ${stats}. Do the task yourself or report that it could not be completed.`;
+    }
+    const flag = result.complete ? "" : " (incomplete)";
+    return `[sub-agent${where} — ${stats}${flag}]\n\n${result.text}`;
+  },
+};
+const TOOLS: CliTool[] = [readTool, writeTool, editTool, grepTool, globTool, shellTool, taskTool];
 
 /**
  * How many tools the CLI offers, for the prompt to count out loud.
@@ -1523,7 +1619,7 @@ export function toolChoiceSentence(): string {
 const BY_NAME = new Map(TOOLS.map((tool) => [tool.definition.function.name, tool]));
 
 /** A `ToolHost` backed by the CLI's own tools. */
-export function createToolHost(options: { cwd: string }): ToolHost {
+export function createToolHost(options: { cwd: string; taskDelegate?: TaskDelegate }): ToolHost {
   return {
     definitions: () => TOOLS.map((tool) => tool.definition),
 
@@ -1547,7 +1643,11 @@ export function createToolHost(options: { cwd: string }): ToolHost {
       }
 
       if (signal.aborted) throw new Error("cancelled before the tool ran");
-      return tool.run(args, { cwd: options.cwd, signal });
+      return tool.run(args, {
+        cwd: options.cwd,
+        signal,
+        ...(options.taskDelegate ? { taskDelegate: options.taskDelegate } : {}),
+      });
     },
   };
 }

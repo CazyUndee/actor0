@@ -4,6 +4,7 @@ import { resolveProvider, type CliConfig, type ResolvedProvider } from "./config
 import { createToolHost } from "./tools.js";
 import { cancelledTurnMessages, describeRecovery, describeStop, describeTruncation, failedTurnMessages, forStorage, runTurn, usageSummary } from "./turn.js";
 import { saveSession } from "./session.js";
+import { createTaskDelegate } from "./subagent.js";
 
 /**
  * One turn, plain stdout, no TUI.
@@ -70,7 +71,6 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
   else upstream.addEventListener("abort", () => controller.abort(upstream.reason), { once: true });
 
   const state: ConversationState = initialConversation();
-  const toolHost = createToolHost({ cwd: options.cwd });
   // Same contract as the TUI: persist what the conversation settled on, and
   // only advance it when the turn adopts new history. A failed or interrupted
   // turn leaves the stored transcript at the state before the turn, except
@@ -92,6 +92,19 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
     if (!options.client) throw error;
     model = { baseUrl: "http://localhost", model: options.config.model || "model", transport: "openai", auth: "api-key" };
   }
+
+  // The task tool is part of the registry everywhere, so the tool count and
+  // the prompt's "N tools" are the same in the TUI and headless. It needs the
+  // resolved provider for the sub-agent's endpoint, so the host is built here,
+  // after `model`, rather than at the top.
+  const toolHost = createToolHost({
+    cwd: options.cwd,
+    taskDelegate: createTaskDelegate({
+      provider: model,
+      cwd: options.cwd,
+      ...(options.client ? { client: options.client } : {}),
+    }),
+  });
 
   const persist = (messages: ChatMessage[]): void => {
     if (!options.session) return;
