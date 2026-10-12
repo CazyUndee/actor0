@@ -1,8 +1,8 @@
 # actor0 — CLI
 
-A terminal client for the [Actor0](../../ARCHITECTURE.md) harness. It is a
-*consumer* of the harness, not part of it: it supplies the four ports and owns
-everything a human touches.
+A terminal client for the [Actor0](../../README.md) harness. It is a *consumer*
+of the harness, not part of it: it supplies the four ports (tool host,
+observer, round policy, config) and owns everything a human touches.
 
 ```bash
 npm install
@@ -10,29 +10,28 @@ npm run build
 node apps/cli/dist/index.js
 ```
 
-There is nothing to set up. The CLI talks to one endpoint,
-`https://aestral-chat.vercel.app/api/chat`, which holds its own credential and
-expects no API key. The only thing worth remembering is the model.
+## Providers
 
-## Configuration
+BYOK only. There is no baked-in host and no credential of our own — the user
+supplies the connection. Four kinds, in the order the wizard offers them:
 
-| Setting   | File      | Environment      |
-| --------- | --------- | ---------------- |
-| Model     | `model`    | `ACTOR0_MODEL`   |
-| Models used so far | `models` | —            |
+| Kind                 | Transport         | Auth            |
+| -------------------- | ----------------- | --------------- |
+| `claude`         | Anthropic Messages | OAuth or API key |
+| `chatgpt`            | OpenAI Responses   | OAuth           |
+| `openai-compatible`  | Chat Completions   | API key         |
+| `anthropic-key`      | Anthropic Messages | API key         |
 
-A `config.json` written by an older build is still read: its
-`provider.model` is honoured and everything else in it is ignored. That keeps
-an existing install working without asking anyone to hand-edit a file, and it
-means a stale `baseUrl` can no longer send traffic anywhere.
+The first run walks through the wizard: pick a provider, sign in (OAuth opens
+a browser loopback; an API key is read from the environment or entered), verify
+it actually answers, and it is stored. `/provider` switches, signs in again,
+adds another, or removes one. Subscription plans are read from the token at
+sign-in and shown as labels, never hard-coded.
 
-There was once a `--provider` flag, a preset table, and a setup wizard. They
-are gone, and the reason is worth recording: a stored `baseUrl` for a host
-that required a credential outlived the reason it had been written, a request
-went to that host anyway, and every visible signal — the model name, the
-footer, the absence of an error — still said the right provider was in use.
-The endpoint is now a constant in `src/providers.ts`, and a test asserts that
-a config file naming a different host cannot change it.
+Custom endpoints fit the `openai-compatible` kind — any host that speaks
+Chat Completions. The three first-party kinds are parameterised by the
+constants in `src/provider-presets.ts`, whose header explains why a value that
+merely looks plausible is worse than one that is obviously missing.
 
 ## Commands
 
@@ -53,24 +52,40 @@ and "it renders" says nothing about whether the endpoint answers. The tools
 behave exactly as they do in the TUI, because there is nothing about them that
 needs a terminal.
 
+## Configuration
+
+| Setting   | File      | Environment      |
+| --------- | --------- | ---------------- |
+| Model     | `model`    | `ACTOR0_MODEL`   |
+| API keys  | `providers[].apiKey` | `ACTOR0_API_KEY` (and provider-scoped keys) |
+
+`config.json` is `0600` and lives next to the session store. OAuth tokens are
+stored there too; a lone legacy `provider` block from an older build is read and
+migrated into the `providers` list on first load, so an existing install keeps
+working without anyone hand-editing a file. A legacy `baseUrl` no longer sends
+traffic anywhere on its own — the endpoint is chosen by the active provider.
+
 ## Slash commands
 
-Deliberately five.
+Eight, with one-letter aliases.
 
-| Command          | Effect                                   |
-| ---------------- | ---------------------------------------- |
-| `/help`          | list commands and key bindings           |
-| `/clear`         | start a new conversation                |
-| `/model`          | list the models used so far            |
-| `/model <name>`  | switch to a model by name              |
-| `/quit`          | exit — `Ctrl+D` does the same            |
+| Command        | Alias | Effect                          |
+| -------------- | ----- | ------------------------------- |
+| `/provider`    | `/p`  | switch, sign in, add or remove  |
+| `/setup`       | `/s`  | re-run the setup wizard         |
+| `/model`       | `/m`  | list used models, switch model  |
+| `/thinking`    | `/t`  | reasoning effort                |
+| `/clear`       | `/c`  | start a new conversation        |
+| `/usage`       | `/u`  | tokens and quota                |
+| `/help`        | `/h`  | show commands and key bindings  |
+| `/quit`        | `/q`  | exit — `Ctrl+D` does the same   |
 
 `Esc` cancels a running turn. `Ctrl+C` cancels a turn, and exits when there is
 nothing to cancel. `↑`/`↓` walk input history.
 
 ## Built-in tools
 
-Four, and none of them ask. Paths are relative to the working directory, and
+Eight, and none of them ask. Paths are relative to the working directory, and
 shell commands run there.
 
 | Tool    | Notes                                                                 |
@@ -78,7 +93,11 @@ shell commands run there.
 | `read`  | `offset`/`limit` for paging; caps at 2000 lines / 50 kB and names the offset to resume at |
 | `write` | creates parent directories, replaces the whole file without asking       |
 | `edit`  | replaces one exact string; CRLF and BOM handled; fails on 0 or ambiguous matches |
-| `bash`  | runs a shell command; output capped keeping the tail; no timeout unless asked (seconds, max 3600) |
+| `shell` | runs a shell command; output capped keeping the tail; no timeout unless asked (seconds, max 3600) |
+| `rg`    | ripgrep-backed; matching paths, matching lines with context, or per-file counts; `include`/`exclude` globs |
+| `glob`  | lists a directory without descending into `node_modules`; a note names what it left alone |
+| `task`  | runs a nested agent turn with its own tool rounds                    |
+| `skill` | runs an LLM skill (frontmatter + body in `.claude/skills/`)          |
 
 There is no approval dialog. There was one, and it was removed on purpose: a
 gate that every command and every whole-file overwrite trips is a prompt the
@@ -93,7 +112,9 @@ promised in a prompt —
 - results are capped, keeping the tail of shell output where errors are; a
   command runs to completion unless you pass `timeout`, and cancelling the
   turn kills the whole process tree it started;
-- the system prompt tells the model that `bash` can do anything the user can,
+- `rg`/`glob` do not descend into `node_modules` and `glob` says so, because
+  an answer's shape must be a function of the question, not of the tree;
+- the system prompt tells the model that `shell` can do anything the user can,
   and that a destructive or outward-facing command is not something it may
   infer from the general shape of the task.
 
@@ -108,33 +129,29 @@ ancestor, it is loaded once at startup and appended to the system prompt as a
 memory — where tests live, which package manager, what not to touch — and it
 costs the model nothing to follow because it is already in context.
 
-## How it uses CronixUI
+## Theming
 
-**It consumes CronixUI's design tokens, not its components.** That is a
-finding, not a preference, and it is worth being precise about why.
+**The UI is Ink; the palette is CronixUI's.** Two separate facts, often
+conflated.
 
-CronixUI is a React/CSS toolkit. Its published package is 136 `.tsx` components
-and stylesheets against a browser bundle — there is no ANSI handling, no
-`readline`, no `stdout` path anywhere in it, and no terminal primitive of any
-kind. Its components render DOM nodes against a stylesheet, so they cannot
-draw to a terminal.
-
-What CronixUI *does* publish reliably is its token stylesheet, and that is a
-genuine design language: the dark base, the crimson accent, four surface steps,
-a nine-step type scale, and a spacing rhythm.
+Ink (React for terminals) renders every component — there is no DOM, no CSS.
+CronixUI is a React/CSS toolkit for the web and publishes no terminal
+primitive, so it contributes *no* components. What it does publish is a real
+design language: the dark base, the crimson accent, four surface steps, a
+nine-step type scale, and a spacing rhythm, all as design tokens.
 
 So `scripts/generate-theme.mjs` reads the **installed** package's
-`variables.css`, composites every translucent token onto `--cn-bg` — a terminal
+`variables.css`, composites every translucent token onto `--cn-bg` (a terminal
 cell cannot be translucent, and this is what makes `rgba(255,255,255,0.08)`
-look the same here as it does on the web — and writes `src/theme.generated.ts`.
-CI runs the generator in `--check` mode, so a CronixUI release that moves the
-palette fails the build instead of drifting silently.
+look the same here as it does on the web), and writes
+`src/theme.generated.ts`. CI runs the generator in `--check` mode, so a
+CronixUI release that moves the palette fails the build instead of drifting
+silently.
 
 No literal colour appears anywhere in the UI source; components reference
 semantic roles from `src/theme.ts`, which is the only file that maps a token to
-a meaning.
-
-Two known packaging problems in `cronixui@1.1.5`, worth fixing at the source:
+a meaning. Two known packaging problems in `cronixui@1.1.5`, worth fixing at
+the source:
 
 - the root export's `types` points at `packages/web/src/cronixui.d.ts`, which is
   not published, so `import "cronixui"` has no types;
