@@ -787,3 +787,50 @@ test("the round budget never fires on a turn that answers", async () => {
   assert.equal(result.text, "done");
   assert.equal(result.blocked, undefined);
 });
+
+test("the audit totals rounds, tokens, and tool calls by name", async () => {
+  // The audit is computed by the harness because it is the only thing that
+  // sees every round; this proves it sums tokens across rounds and counts
+  // each tool by name, so a host can log it without re-deriving it from the
+  // event stream.
+  const shellCall: ToolCall = { id: "c1", type: "function", function: { name: "shell", arguments: "{}" } };
+  const readCall: ToolCall = { id: "c2", type: "function", function: { name: "read", arguments: "{}" } };
+  const shellCall2: ToolCall = { id: "c3", type: "function", function: { name: "shell", arguments: "{}" } };
+  const toolHost: ToolHost = {
+    definitions: () => [],
+    async execute() {
+      return "ok";
+    },
+  };
+  const model = scriptedModel([
+    await events(
+      { type: "tool_call", tool_calls: [shellCall, readCall] },
+      { type: "usage", usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
+      { type: "done" },
+    ),
+    await events(
+      { type: "tool_call", tool_calls: [shellCall2] },
+      { type: "usage", usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 } },
+      { type: "done" },
+    ),
+    await events({ type: "token", delta: "Done" }, { type: "done" }),
+  ]);
+  const result = await runAgentTurn({
+    model,
+    messages: [],
+    input: "go",
+    toolHost,
+    signal: new AbortController().signal,
+    config: fastConfig,
+  });
+
+  assert.equal(result.rounds, 3);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.audit.toolCalls, { shell: 2, read: 1 });
+  assert.equal(result.audit.toolCallCount, 3);
+  assert.equal(result.audit.promptTokens, 30);
+  assert.equal(result.audit.completionTokens, 13);
+  assert.equal(result.audit.totalTokens, 43);
+  assert.equal(result.audit.rounds, 3);
+  assert.equal(result.audit.complete, true);
+});

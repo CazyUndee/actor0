@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   formatTokens,
+  readAudit,
   readUsage,
+  recordAudit,
   recordUsage,
   startOfDay,
   startOfMonth,
@@ -92,4 +94,35 @@ test("token counts format compactly", () => {
   assert.equal(formatTokens(842), "842");
   assert.equal(formatTokens(1_234), "1.2k");
   assert.equal(formatTokens(2_500_000), "2.5M");
+});
+
+test("a turn's audit round-trips through the log", () => {
+  withDataDir(() => {
+    recordAudit("m", {
+      rounds: 3,
+      complete: true,
+      toolCalls: { shell: 2, read: 1 },
+      toolCallCount: 3,
+      promptTokens: 30,
+      completionTokens: 13,
+      totalTokens: 43,
+    });
+    const [entry] = readAudit();
+    assert.equal(entry!.model, "m");
+    assert.equal(entry!.rounds, 3);
+    assert.equal(entry!.complete, true);
+    assert.deepEqual(entry!.toolCalls, { shell: 2, read: 1 });
+    assert.equal(entry!.toolCallCount, 3);
+    assert.equal(entry!.totalTokens, 43);
+    assert.ok(entry!.t > 0);
+  });
+});
+
+test("a corrupt audit line is skipped, not fatal", () => {
+  withDataDir(() => {
+    recordAudit("m", { rounds: 1, complete: true, toolCalls: {}, toolCallCount: 0, promptTokens: 1, completionTokens: 1, totalTokens: 2 });
+    appendFileSync(join(process.env.ACTOR0_DATA_DIR!, "audit.jsonl"), "{not json}\n", "utf8");
+    recordAudit("m", { rounds: 2, complete: false, toolCalls: { shell: 1 }, toolCallCount: 1, promptTokens: 3, completionTokens: 1, totalTokens: 4 });
+    assert.deepEqual(readAudit().map((e) => e.rounds), [1, 2], "the torn line drops, the good ones survive");
+  });
 });

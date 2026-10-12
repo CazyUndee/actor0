@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Usage } from "@actor0/harness";
+import type { Usage, TurnAudit } from "@actor0/harness";
 import { dataDir } from "./paths.js";
 
 /**
@@ -61,6 +61,67 @@ export function readUsage(): UsageEntry[] {
   return out;
 }
 
+/**
+ * One turn's audit record — what it did, not just what it cost.
+ *
+ * `UsageEntry` is the token accounting every provider reports; this is the
+ * rest of what a turn was, carried back on the harness's `RunResult.audit`
+ * and written here with the model and a timestamp the harness does not know.
+ * Append-only JSONL beside `usage.jsonl`, for the same reasons.
+ */
+export type AuditEntry = {
+  /** Epoch ms when the turn finished. */
+  t: number;
+  model: string;
+  rounds: number;
+  complete: boolean;
+  /** Tool calls the model made, by tool name. */
+  toolCalls: Record<string, number>;
+  toolCallCount: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
+const auditFile = (): string => join(dataDir(), "audit.jsonl");
+
+/** Append one turn's audit record. */
+export function recordAudit(model: string, audit: TurnAudit): void {
+  const entry: AuditEntry = {
+    t: Date.now(),
+    model,
+    rounds: audit.rounds,
+    complete: audit.complete,
+    toolCalls: audit.toolCalls,
+    toolCallCount: audit.toolCallCount,
+    promptTokens: audit.promptTokens,
+    completionTokens: audit.completionTokens,
+    totalTokens: audit.totalTokens,
+  };
+  mkdirSync(dataDir(), { recursive: true });
+  appendFileSync(auditFile(), `${JSON.stringify(entry)}\n`, "utf8");
+}
+
+/** Every recorded audit, oldest first. */
+export function readAudit(): AuditEntry[] {
+  let raw: string;
+  try {
+    raw = readFileSync(auditFile(), "utf8");
+  } catch {
+    return [];
+  }
+  const out: AuditEntry[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as AuditEntry;
+      if (typeof entry.t === "number" && typeof entry.rounds === "number") out.push(entry);
+    } catch {
+      // A torn or corrupt line is one dropped turn, not a broken read.
+    }
+  }
+  return out;
+}
 export type UsageBucket = { tokens: number; turns: number };
 
 /** Total tokens and turn count for entries at or after `since` (epoch ms). */

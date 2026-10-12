@@ -164,6 +164,32 @@ export type ToolRoundPolicy = {
   truncationContinuationMessage?: string;
 };
 
+/**
+ * What one turn actually did, for a local audit log.
+ *
+ * `usage` is the token accounting; this is everything else a host would want
+ * to total up afterwards — how many rounds it took, which tools the model
+ * reached for and how often, and whether it finished. It is computed by the
+ * harness (which is the only thing that sees every round) and handed back on
+ * `RunResult`, so a host records it without re-deriving it from the event
+ * stream. It deliberately carries no model name or timestamp: the harness
+ * knows neither, and the host that does supplies them when it writes the log.
+ */
+export type TurnAudit = {
+  /** Model rounds that ran (a round is one model call plus its tool executions). */
+  rounds: number;
+  /** Whether the turn ended with a complete, untruncated answer. */
+  complete: boolean;
+  /** Tool calls the model made, by tool name. Counts attempts, including failures. */
+  toolCalls: Record<string, number>;
+  /** Total tool calls across the turn — the sum of `toolCalls`. */
+  toolCallCount: number;
+  /** Tokens summed across every round. */
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
 export type RunResult = {
   messages: ChatMessage[];
   text: string;
@@ -171,6 +197,8 @@ export type RunResult = {
   rounds: number;
   usage: Usage[];
   reasoning: ReasoningSummary;
+  /** What the turn did, for a host's audit log — see TurnAudit. */
+  audit: TurnAudit;
   /** True when the turn stopped on `needs_user` and can be resumed. */
   blocked?: boolean;
   /**

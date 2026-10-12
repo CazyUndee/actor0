@@ -13,6 +13,7 @@ import type {
   ToolCall,
   ToolHost,
   ToolRoundPolicy,
+  TurnAudit,
   Usage,
 } from "./types.js";
 
@@ -340,6 +341,31 @@ async function runModelAttempt(
   }
 }
 
+function buildAudit(
+  rounds: number,
+  complete: boolean,
+  toolCalls: Record<string, number>,
+  usage: Usage[],
+): TurnAudit {
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let totalTokens = 0;
+  for (const entry of usage) {
+    promptTokens += entry.prompt_tokens ?? 0;
+    completionTokens += entry.completion_tokens ?? 0;
+    totalTokens += entry.total_tokens ?? 0;
+  }
+  const toolCallCount = Object.values(toolCalls).reduce((sum, n) => sum + n, 0);
+  return {
+    rounds,
+    complete,
+    toolCalls: { ...toolCalls },
+    toolCallCount,
+    promptTokens,
+    completionTokens,
+    totalTokens,
+  };
+}
 export async function runAgentTurn(options: {
   model: ModelClient;
   messages: ChatMessage[];
@@ -354,6 +380,7 @@ export async function runAgentTurn(options: {
   const messages = [...options.messages, { role: "user" as const, content: options.input }];
   const tools = options.toolHost?.definitions() ?? [];
   const allUsage: Usage[] = [];
+  const toolCounts: Record<string, number> = {};
   let recoveredEmpty = false;
   let recoveredTruncation = false;
   let finalReasoning: ReasoningSummary = { title: "", summary: "" };
@@ -429,6 +456,7 @@ export async function runAgentTurn(options: {
           complete: result.complete,
           rounds: round,
           usage: allUsage,
+          audit: buildAudit(round, result.complete, toolCounts, allUsage),
           reasoning: finalReasoning,
           blocked: true,
         };
@@ -445,6 +473,7 @@ export async function runAgentTurn(options: {
       let failedThisRound = 0;
       for (let index = 0; index < result.toolCalls.length; index += 1) {
         const call = result.toolCalls[index]!;
+        toolCounts[call.function.name] = (toolCounts[call.function.name] ?? 0) + 1;
         await emit(options.observer, { type: "tool_start", call });
         try {
           const output = await options.toolHost?.execute(call, options.signal);
@@ -507,6 +536,7 @@ export async function runAgentTurn(options: {
           complete: result.complete,
           rounds: round,
           usage: allUsage,
+          audit: buildAudit(round, result.complete, toolCounts, allUsage),
           reasoning: finalReasoning,
           blocked: true,
         };
@@ -518,6 +548,7 @@ export async function runAgentTurn(options: {
           complete: result.complete,
           rounds: round,
           usage: allUsage,
+          audit: buildAudit(round, result.complete, toolCounts, allUsage),
           reasoning: finalReasoning,
         };
       }
@@ -539,6 +570,7 @@ export async function runAgentTurn(options: {
           complete: result.complete,
           rounds: round,
           usage: allUsage,
+          audit: buildAudit(round, result.complete, toolCounts, allUsage),
           reasoning: finalReasoning,
           blocked: true,
         };
@@ -611,6 +643,7 @@ export async function runAgentTurn(options: {
       complete: result.complete,
       rounds: round,
       usage: allUsage,
+      audit: buildAudit(round, result.complete, toolCounts, allUsage),
       reasoning: finalReasoning,
       // Only the round that ends the turn decides this: an earlier truncated
       // round that the continuation finished is not a truncated turn.
