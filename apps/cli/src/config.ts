@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { configFile } from "./paths.js";
 import type { OAuthTokens } from "./oauth.js";
 import type { ProviderAuth, ProviderTransport } from "./provider-presets.js";
+import type { ResolvedProvider } from "@actor0/providers";
 
 /**
  * Configuration.
@@ -91,38 +92,7 @@ export type CliConfig = {
   contextWindows?: Record<string, number>;
 };
 
-/**
- * The endpoint, resolved. Every field here is what the request will use.
- *
- * The first three are all that is required, and the rest is metadata about
- * where they came from — so a host that builds one by hand (a test, a
- * harness embedding actor0) does not have to invent a provenance it does not
- * have, and cannot get it wrong.
- */
-export type ResolvedProvider = {
-  baseUrl: string;
-  /**
-   * An *explicit* request path, which replaces the whole pathname.
-   *
-   * Absent for an OpenAI-compatible endpoint that named none, so the transport
-   * appends `/chat/completions` to the base URL's own path — the only behaviour
-   * that survives a gateway served from a prefix.
-   */
-  path?: string;
-  model: string;
-  /** Which wire protocol to speak. Absent means OpenAI-compatible, the historical default. */
-  transport?: ProviderTransport;
-  /** How the credential is presented. Absent means api-key. */
-  auth?: ProviderAuth;
-  apiKey?: string;
-  /** OAuth tokens, when `auth` is "oauth". */
-  oauth?: OAuthTokens;
-  /** Reasoning effort, when the transport and model support it. */
-  reasoningEffort?: "low" | "medium" | "high";
-  headers?: Record<string, string>;
-  /** Where the credential came from, for display. Never the credential. */
-  apiKeySource?: string;
-};
+export type { ResolvedProvider };
 
 export class ConfigError extends Error {
   constructor(message: string) {

@@ -1,4 +1,4 @@
-import { ANTHROPIC_VERSION, OAUTH_BETA_HEADER } from "./anthropic-client.js";
+import { ANTHROPIC_VERSION, OAUTH_BETA_HEADER } from "@actor0/providers";
 import type { ResolvedProvider } from "./config.js";
 
 /**

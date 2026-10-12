@@ -18,7 +18,7 @@ export {
   failedTurnMessages,
   forStorage,
   runTurn,
-  verifyProvider,
 } from "../turn.js";
 export { createToolHost } from "../tools.js";
 export { createTaskDelegate } from "../subagent.js";
+export { verifyProvider } from "@actor0/providers";

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { AddressInfo } from "node:net";
 import { execFile } from "node:child_process";
+import type { OAuthTokens } from "@actor0/providers";
 
 /**
  * Generic OAuth 2.0 + PKCE, for CLI sign-in.
@@ -37,19 +38,7 @@ export type OAuthPreset = {
   extraTokenParams?: Record<string, string>;
 };
 
-/** The tokens a sign-in produces, stored on the provider (0600 config). */
-export type OAuthTokens = {
-  accessToken: string;
-  refreshToken?: string;
-  /** Epoch ms when the access token expires, when the provider said. */
-  expiresAt?: number;
-  scope?: string;
-  idToken?: string;
-  /** ChatGPT's account id, needed as a request header — decoded from the id token. */
-  accountId?: string;
-  /** Subscription plan, for a readable label — ChatGPT id-token claim or a Claude profile fetch. */
-  plan?: string;
-};
+export type { OAuthTokens };
 
 export type Pkce = { verifier: string; challenge: string; method: "S256" };
 

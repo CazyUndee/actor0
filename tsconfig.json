@@ -32,6 +32,9 @@
       "path": "./packages/harness"
     },
     {
+      "path": "./packages/providers"
+    },
+    {
       "path": "./apps/cli"
     }
   ]

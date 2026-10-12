@@ -1,5 +1,6 @@
 import type { OAuthPreset } from "./oauth.js";
 import type { NamedProvider } from "./config.js";
+import type { ProviderAuth, ProviderTransport } from "@actor0/providers";
 
 /**
  * Provider presets — the per-provider data the generic OAuth and transport
@@ -16,9 +17,7 @@ import type { NamedProvider } from "./config.js";
  * one place to update.
  */
 
-export type ProviderTransport = "openai" | "anthropic" | "chatgpt";
-
-export type ProviderAuth = "api-key" | "oauth";
+export type { ProviderAuth, ProviderTransport };
 
 /**
  * Claude Code OAuth → the Anthropic Messages API.

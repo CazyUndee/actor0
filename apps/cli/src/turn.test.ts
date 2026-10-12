@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { HarnessEvent } from "@actor0/harness";
+import { verifyProvider } from "@actor0/providers";
 import {
   runTurn,
   seedSystemPrompt,
@@ -14,7 +15,6 @@ import {
   describeRecovery,
   failedTurnMessages,
   defaultSystemPrompt,
-  verifyProvider,
   INTERRUPT_MARKER,
   FAILED_MARKER,
   PROVIDER_PROMPT_FLOOR_CHARS,
