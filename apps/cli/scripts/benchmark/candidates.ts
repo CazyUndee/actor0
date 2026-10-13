@@ -19,7 +19,7 @@ import { createToolHost } from "../../src/tools.js";
 export type JsonSchema = Record<string, unknown>;
 export type RawTool = { name: string; description: string; input_schema: JsonSchema };
 export type RawCandidate = { id: CandidateId; label: string; tools: RawTool[] };
-export type CandidateId = "A" | "B" | "C" | "D" | "C2";
+export type CandidateId = "A" | "B" | "C" | "D" | "C2" | (string & {});
 
 /** The provider's structured tool-calling representation. */
 export type OpenAiTool = {
@@ -136,7 +136,7 @@ const B_TOOLS: RawTool[] = [
 
 // --- Candidate C: five tools grouped by effect class (verbatim, permissive) -
 
-const C_TOOLS: RawTool[] = [
+export const C_TOOLS: RawTool[] = [
   {
     name: "inspect",
     description: "Perform a read-only local inspection. Choose an operation using op.",
