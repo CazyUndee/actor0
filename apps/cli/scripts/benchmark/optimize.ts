@@ -101,6 +101,31 @@ const plan: RawCandidate[] = [
   CANDIDATE_E,
   ...EAGER_PRESETS.map((preset) => buildCatalogCandidate(`cat-${preset.id}`, preset.eager)),
 ];
+
+/**
+ * Collection order, most decision-relevant first.
+ *
+ * A full sweep is ~297 turns (~1.6M tokens) and the gateway offers windows of a
+ * few turns, so a blind sweep never finishes. The question that decides the
+ * interface is narrow — does beating C require leaving the grouped family at
+ * all? — so the loop collects in the order that answers it soonest: the
+ * cheapest grouped point and the two catalog variants, and only then the rest.
+ * `--full-plan` disables this and runs the sweep in declaration order.
+ */
+const PRIORITY: Record<string, number> = {
+  "g-required-full": 0, // terse args, full pool: the cheapest hardened grouped point
+  "g-none-full": 1, // C itself, the baseline every other point is measured against
+  "cat-read-write": 2, // cheapest catalog point — can deferral beat the family?
+  E: 3,
+  "g-full-full": 4, // C2
+  "cat-read-grep-edit-write": 5,
+  "g-required-trimmed": 6,
+  "g-full-trimmed": 7,
+  "cat-plus-shell-glob": 8,
+};
+const ordered = process.argv.includes("--full-plan")
+  ? plan
+  : [...plan].sort((a, b) => (PRIORITY[a.id] ?? 99) - (PRIORITY[b.id] ?? 99));
 const runFile = (id: string, r: number): string => join(resultsDir, `${id}-r${r}.json`);
 
 const loadValid = (file: string): TaskResult[] => {
@@ -114,7 +139,7 @@ const loadValid = (file: string): TaskResult[] => {
 };
 
 let ran = 0;
-for (const candidate of plan) {
+for (const candidate of ordered) {
   for (let r = 1; r <= repeats; r += 1) {
     const file = runFile(candidate.id, r);
     const done = new Set(loadValid(file).map((x) => x.taskId));
