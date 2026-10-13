@@ -147,7 +147,30 @@ for (const candidate of plan) {
 
 // --- leaderboard: aggregate over repeats, rank by completion then cost ------
 
-type Row = { id: string; n: number; completed: number; tasks: number; usage: number; latency: number; calls: number; firstCall: number | null; costPerCompletion: number | null };
+/**
+ * Spread of a set of numbers: max - min, or null when there is no spread
+ * to report (fewer than two samples). A leaderboard row with a single run
+ * cannot claim a mean is the candidate's behaviour — it is one draw, and the
+ * measured gateway variance is far larger than most interface effects. Showing
+ * the spread next to the mean is what stops a thin dataset being read as a
+ * settled result.
+ */
+const spread = (values: number[]): number | null =>
+  values.length < 2 ? null : Math.max(...values) - Math.min(...values);
+
+type Row = {
+  id: string;
+  n: number;
+  completed: number;
+  tasks: number;
+  usage: number;
+  usageSpread: number | null;
+  calls: number;
+  firstCall: number | null;
+  costPerCompletion: number | null;
+  /** Distinct (run × task) completion outcomes — the completion signal's own spread. */
+  outcomes: string;
+};
 
 const aggregate = (id: string, all: TaskResult[]): Row => {
   const byTask = new Map<string, TaskResult[]>();
@@ -155,22 +178,19 @@ const aggregate = (id: string, all: TaskResult[]): Row => {
   const completed = [...byTask.values()].filter((rs) => rs.some((r) => r.completed)).length;
   const withCalls = all.filter((r) => r.toolCalls > 0);
   const firstValid = withCalls.length > 0 ? withCalls.filter((r) => r.firstCallValid === true).length / withCalls.length : null;
-  // Cost per completed task: every token spent counts, including tokens burned
-  // on tasks that failed. A candidate that flails on a task it eventually
-  // abandons pays for that flailing here, where averaging over successful runs
-  // alone would hide it. This is the metric that separates a cheap interface
-  // from one that is only cheap when it works.
   const totalUsage = all.reduce((sum, r) => sum + r.usageTokens, 0);
+  const usages = all.map((r) => r.usageTokens);
   return {
     id,
     n: all.length,
     completed,
     tasks: byTask.size,
     usage: Math.round(totalUsage / Math.max(1, all.length)),
-    costPerCompletion: completed > 0 ? Math.round(totalUsage / completed) : null,
-    latency: Math.round(all.reduce((s, r) => s + r.latencyMs, 0) / Math.max(1, all.length)),
+    usageSpread: spread(usages),
     calls: Math.round((all.reduce((s, r) => s + r.toolCalls, 0) / Math.max(1, all.length)) * 10) / 10,
     firstCall: firstValid,
+    costPerCompletion: completed > 0 ? Math.round(totalUsage / completed) : null,
+    outcomes: [...byTask.values()].map((rs) => rs.filter((r) => r.completed).length).join("/"),
   };
 };
 
@@ -191,13 +211,16 @@ if (existsSync(refFile)) {
   }
 }
 
-rows.sort((a, b) => b.completed - a.completed || (a.costPerCompletion ?? Infinity) - (b.costPerCompletion ?? Infinity) || a.latency - b.latency);
+rows.sort((a, b) => b.completed - a.completed || (a.costPerCompletion ?? Infinity) - (b.costPerCompletion ?? Infinity) || a.usage - b.usage);
 const pct = (x: number | null): string => (x === null ? "—" : `${Math.round(x * 100)}%`);
-process.stdout.write(`\nleaderboard (completion↓, then tokens-per-completed-task↓, then latency↓):\n`);
+process.stdout.write(`\nleaderboard (completion↓, then tokens-per-completed-task↓, then usage↓)\n`);
+process.stdout.write(`per-task completion shows how many of n repeats passed: 3/1/2 = ran 3, passed 1, passed 2\n`);
 for (const row of rows) {
+  const warn = row.n < 3 ? "  ⚠ n<3, directional only" : "";
   process.stdout.write(
-    `${row.id.padEnd(26)} completed=${row.completed}/${row.tasks}  n=${row.n}  first-call=${pct(row.firstCall)}  ` +
-    `calls=${row.calls}  tok/task=${row.costPerCompletion ?? "—"}  avg-ms=${row.latency}\n`,
+    `${row.id.padEnd(26)} completed=${row.completed}/${row.tasks}  per-task=${row.outcomes}  n=${row.n}  ` +
+    `first-call=${pct(row.firstCall)}  calls=${row.calls}  tok/task=${row.costPerCompletion ?? "—"}  ` +
+    `usage=${row.usage}${row.usageSpread !== null ? `±${row.usageSpread}` : ""}${warn}\n`,
   );
 }
 process.stdout.write(`\nran ${ran} turn(s) this invocation; re-run with --resume to continue across windows.\n`);
