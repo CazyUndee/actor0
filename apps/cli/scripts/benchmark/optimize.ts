@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadConfig, resolveProvider } from "../../src/config.js";
-import type { RawCandidate } from "./candidates.js";
+import { CANDIDATE_E, type RawCandidate } from "./candidates.js";
 import { runCandidateOnTask, type TaskResult } from "./runner.js";
 import { TASKS } from "./tasks.js";
 import { partitionResults } from "./verify-results.js";
@@ -63,7 +63,13 @@ process.on("SIGTERM", () => process.exit(143));
 const PAUSE_MS = Number(flag("--pause") ?? "1500");
 const pause = (): Promise<void> => new Promise((r) => setTimeout(r, PAUSE_MS));
 
-const plan: RawCandidate[] = DEFAULT_PLAN.map(buildGroupedCandidate);
+const plan: RawCandidate[] = [
+  ...DEFAULT_PLAN.map(buildGroupedCandidate),
+  // The deferred-discovery candidate is the one genuinely different breadth
+  // strategy — a small eager set plus find_tool, so the full tool set is never
+  // carried. It runs on equal footing with the grouped variants.
+  CANDIDATE_E,
+];
 const runFile = (id: string, r: number): string => join(resultsDir, `${id}-r${r}.json`);
 
 const loadValid = (file: string): TaskResult[] => {
