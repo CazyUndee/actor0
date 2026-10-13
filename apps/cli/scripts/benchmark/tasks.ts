@@ -119,4 +119,39 @@ export const TASKS: Task[] = [
       return /export function greet/.test(g) && /import .*greet.*from ['"]\.\/greet['"]/.test(i) && /greet\(['"]world['"]\)/.test(i);
     },
   },
+  {
+    id: "multi-step-refactor",
+    prompt:
+      "In src/math.ts the function computeTotal adds 1 to the sum before returning. " +
+      "Fix that bug, then rename computeTotal to calculateTotal everywhere it appears under src/ " +
+      "(both the definition and its call site), then confirm no file still mentions computeTotal.",
+    capabilities: ["read", "edit", "grep", "glob"],
+    setup: miniProject,
+    success: (dir) => {
+      const texts = ["src/index.ts", "src/math.ts"].map((f) =>
+        existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8") : "",
+      );
+      return (
+        texts.every((t) => !t.includes("computeTotal")) &&
+        texts.every((t) => t.includes("calculateTotal")) &&
+        texts[1]!.includes("return sum;") &&
+        !texts[1]!.includes("sum + 1")
+      );
+    },
+  },
+  {
+    id: "find-and-report-multi",
+    prompt:
+      "Find every file under src/ that contains the word TODO, and for each one report its path and " +
+      "the number of TODO lines it has. Then tell me the total count across all files.",
+    capabilities: ["grep", "read"],
+    setup: (dir) => {
+      miniProject(dir);
+      write(dir, "src/extra.md", "# Extra\n\nTODO: one\nTODO: two\nTODO: three\n");
+    },
+    success: (_dir, answer) => {
+      // Three files, five TODO lines total: notes.md has 2, extra.md has 3.
+      return /\b5\b/.test(answer) && /notes\.md/.test(answer) && /extra\.md/.test(answer);
+    },
+  },
 ];

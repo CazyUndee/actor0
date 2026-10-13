@@ -85,3 +85,35 @@ test("a correctly-solved workspace passes each state-based task", () => {
     }
   }
 });
+
+test("the two multi-step tasks are solvable and strict", () => {
+  // multi-step-refactor: fix the bug AND rename, in one conversation.
+  {
+    const task = TASKS.find((t) => t.id === "multi-step-refactor")!;
+    const dir = ws();
+    try {
+      task.setup(dir);
+      assert.equal(task.success(dir, ""), false, "unsolved multi-step-refactor fails");
+      for (const f of ["src/index.ts", "src/math.ts"]) {
+        const p = join(dir, f);
+        writeFileSync(p, readFileSync(p, "utf8").replace(/computeTotal/g, "calculateTotal").replace("return sum + 1;", "return sum;"));
+      }
+      assert.equal(task.success(dir, ""), true, "solved multi-step-refactor passes");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  // find-and-report-multi: the answer must name both files and the total.
+  {
+    const task = TASKS.find((t) => t.id === "find-and-report-multi")!;
+    const dir = ws();
+    try {
+      task.setup(dir);
+      assert.equal(task.success(dir, ""), false, "an empty answer fails");
+      assert.equal(task.success(dir, "notes.md: 2, extra.md: 3, total 5"), true, "the right answer passes");
+      assert.equal(task.success(dir, "notes.md: 2"), false, "a partial answer (no total) fails");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
