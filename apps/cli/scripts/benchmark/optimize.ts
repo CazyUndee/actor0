@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { loadConfig, resolveProvider } from "../../src/config.js";
 import { CANDIDATE_E, buildCatalogCandidate, type RawCandidate } from "./candidates.js";
 import { runCandidateOnTask, type TaskResult } from "./runner.js";
+import { probeGateway } from "./health.js";
 import { TASKS } from "./tasks.js";
 import { partitionResults } from "./verify-results.js";
 import { buildGroupedCandidate, DEFAULT_PLAN, EAGER_PRESETS, variantId, type VariantConfig } from "./variants.js";
@@ -57,11 +58,39 @@ const releaseLock = () => rmSync(lockFile, { force: true });
 process.on("exit", releaseLock);
 process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
+/** Release the lock and stop cleanly — the lock must not outlive the process. */
+const finishLoop = (): void => {
+  releaseLock();
+  process.exit(0);
+};
 
 // A short pause between turns so a serial run never reads as a burst to the
 // gateway's fair-share limiter. Cheap insurance against self-inflicted 429s.
 const PAUSE_MS = Number(flag("--pause") ?? "1500");
 const pause = (): Promise<void> => new Promise((r) => setTimeout(r, PAUSE_MS));
+
+// Probe before each turn and wait out a bad patch instead of burning a measured
+// turn to discover it. This gateway alternates between ~6s and ~69s on a trivial
+// task, and in the slow phase every candidate's first-call validity collapses
+// together — so a blind loop spends turns to learn the gateway is bad, then
+// throws the data away. Probing costs ~5k tokens to protect a ~50k-token turn.
+const NO_PROBE = process.argv.includes("--no-probe");
+const waitForHealthy = async (): Promise<boolean> => {
+  if (NO_PROBE) return true;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const check = await probeGateway();
+    if (check.health === "ok") {
+      return true;
+    }
+    // Exponential backoff capped at two minutes: a bad patch is measured in
+    // minutes, so polling harder than this just spends tokens learning nothing.
+    const waitMs = Math.min(120_000, 5_000 * 2 ** Math.min(attempt, 4));
+    process.stderr.write(`… gateway ${check.health} (${check.reason}); waiting ${Math.round(waitMs / 1000)}s\n`);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+  process.stderr.write("… gateway still unhealthy after 12 probes; stopping so the loop resumes later\n");
+  return false;
+};
 
 const plan: RawCandidate[] = [
   ...DEFAULT_PLAN.map(buildGroupedCandidate),
@@ -96,6 +125,10 @@ for (const candidate of plan) {
     }
     const results = loadValid(file);
     for (const task of remaining) {
+      if (!(await waitForHealthy())) {
+        process.stderr.write("… stopping; re-run with --resume when the gateway recovers\n");
+        finishLoop();
+      }
       process.stderr.write(`… ${candidate.id} r${r} / ${task.id}\n`);
       const result = await runCandidateOnTask({ candidate, task, provider });
       results.push(result);
