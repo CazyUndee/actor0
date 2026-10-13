@@ -71,3 +71,18 @@ export const DEFAULT_PLAN: VariantConfig[] = [
   { desc: "required", pool: "trimmed" }, // terse-args, lean pool
   { desc: "full", pool: "trimmed" },  // verbose, lean pool
 ];
+
+// --- The eager/deferred boundary: how much of the catalog to carry up front ---
+
+/**
+ * How many tools to carry eagerly. Codex's deferred-discovery insight is that
+ * the saving comes from *not* carrying the catalog, so where the boundary sits
+ * is the second axis worth searching: too few eager tools and every task pays a
+ * find_tool round trip; too many and the token cost creeps back toward a flat
+ * interface. These presets span that boundary against a fixed, terse catalog.
+ */
+export const EAGER_PRESETS: { id: string; eager: string[] }[] = [
+  { id: "read-write", eager: ["read", "write"] },
+  { id: "read-grep-edit-write", eager: ["read", "grep", "edit", "write"] },
+  { id: "plus-shell-glob", eager: ["read", "grep", "edit", "write", "shell", "glob"] },
+];

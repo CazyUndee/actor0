@@ -132,6 +132,26 @@ const B_TOOLS: RawTool[] = [
     description: "Delegate a self-contained task to a subagent and return its result.",
     input_schema: obj({ task: { type: "string" } }, ["task"]),
   },
+  {
+    name: "read",
+    description: "Read a text file. Lines are 1-based; offset and limit select a range.",
+    input_schema: obj({ path: { type: "string" }, offset: { type: "integer" }, limit: { type: "integer" } }, ["path"]),
+  },
+  {
+    name: "grep",
+    description: "Search file contents with a regular expression or literal text; returns paths, lines, or counts.",
+    input_schema: obj({ pattern: { type: "string" }, path: { type: "string" }, glob: { type: "string" }, literal: { type: "boolean" } }, ["pattern"]),
+  },
+  {
+    name: "write",
+    description: "Create a file or replace its entire contents with the given content.",
+    input_schema: obj({ path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
+  },
+  {
+    name: "edit",
+    description: "Replace exact text in an existing file. old must match uniquely unless all is true.",
+    input_schema: obj({ path: { type: "string" }, old: { type: "string" }, new: { type: "string" }, all: { type: "boolean" } }, ["path", "old", "new"]),
+  },
 ];
 
 // --- Candidate C: five tools grouped by effect class (verbatim, permissive) -
@@ -311,31 +331,36 @@ const E_CATALOG: RawTool[] = [
     description: "Delegate a self-contained task to a subagent and return its result.",
     input_schema: obj({ task: { type: "string" } }, ["task"]),
   },
-];
-const E_EAGER_SPECS: Record<string, RawTool> = {
-  read: {
+  {
     name: "read",
     description: "Read a text file. Lines are 1-based; offset and limit select a range.",
     input_schema: obj({ path: { type: "string" }, offset: { type: "integer" }, limit: { type: "integer" } }, ["path"]),
   },
-  grep: {
+  {
     name: "grep",
     description: "Search file contents with a regular expression or literal text; returns paths, lines, or counts.",
     input_schema: obj({ pattern: { type: "string" }, path: { type: "string" }, glob: { type: "string" }, literal: { type: "boolean" } }, ["pattern"]),
   },
-  write: {
+  {
     name: "write",
     description: "Create a file or replace its entire contents with the given content.",
     input_schema: obj({ path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
   },
-  edit: {
+  {
     name: "edit",
     description: "Replace exact text in an existing file. old must match uniquely unless all is true.",
     input_schema: obj({ path: { type: "string" }, old: { type: "string" }, new: { type: "string" }, all: { type: "boolean" } }, ["path", "old", "new"]),
   },
+];
+/** The single source of truth for a tool's spec; fails loudly rather than
+ *  yielding `undefined` into the eager set. */
+const specOf = (name: string): RawTool => {
+  const spec = E_CATALOG.find((tool) => tool.name === name);
+  if (!spec) throw new Error(`no tool spec for "${name}" in the E catalog`);
+  return spec;
 };
 const E_TOOLS: RawTool[] = [
-  ...E_EAGER.map((name) => E_EAGER_SPECS[name]!),
+  ...E_EAGER.map((name) => specOf(name)),
   {
     name: "find_tool",
     description:
@@ -346,11 +371,29 @@ const E_TOOLS: RawTool[] = [
 ];
 export const CANDIDATE_E: RawCandidate = { id: "E", label: "small eager set + searchable catalog", tools: E_TOOLS };
 
+/**
+ * Build an E-family candidate with a chosen eager set. Exported so the loop can
+ * search the eager/deferred boundary — the presets in variants.ts call this.
+ */
+export function buildCatalogCandidate(id: string, eagerNames: string[], label?: string): RawCandidate {
+  const tools: RawTool[] = [
+    ...eagerNames.map((name) => specOf(name)),
+    {
+      name: "find_tool",
+      description:
+        "Search the tool catalog by what you want to do (e.g. \"run a command\", \"find files by name\", "
+        + "\"search the web\"). Returns the matching tools' full definitions, then call the one you need.",
+      input_schema: obj({ query: { type: "string" }, limit: { type: "integer" } }, ["query"]),
+    },
+  ];
+  return { id, label: label ?? `catalog, eager=[${eagerNames.join(",")}]`, tools };
+}
+
 /** The deferred catalog candidate E searches, exported for the dispatcher.
  *  Every operation is in it, including the eager ones: Codex's tool_search can
  *  surface any tool, and a model that forgets an eager tool mid-task must be
  *  able to rediscover it. */
-export const E_CATALOG_TOOLS: RawTool[] = [...E_CATALOG, ...E_EAGER.map((name) => E_EAGER_SPECS[name]!)];
+export const E_CATALOG_TOOLS: RawTool[] = E_CATALOG;
 
 /** Convert a candidate's Anthropic-style schemas to the provider's tool format. */
 export function toOpenAiTools(candidate: RawCandidate): OpenAiTool[] {

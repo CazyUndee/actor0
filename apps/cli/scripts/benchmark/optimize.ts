@@ -2,11 +2,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadConfig, resolveProvider } from "../../src/config.js";
-import { CANDIDATE_E, type RawCandidate } from "./candidates.js";
+import { CANDIDATE_E, buildCatalogCandidate, type RawCandidate } from "./candidates.js";
 import { runCandidateOnTask, type TaskResult } from "./runner.js";
 import { TASKS } from "./tasks.js";
 import { partitionResults } from "./verify-results.js";
-import { buildGroupedCandidate, DEFAULT_PLAN, variantId, type VariantConfig } from "./variants.js";
+import { buildGroupedCandidate, DEFAULT_PLAN, EAGER_PRESETS, variantId, type VariantConfig } from "./variants.js";
 
 /**
  * The optimization loop for the grouped-tool interface.
@@ -67,8 +67,10 @@ const plan: RawCandidate[] = [
   ...DEFAULT_PLAN.map(buildGroupedCandidate),
   // The deferred-discovery candidate is the one genuinely different breadth
   // strategy — a small eager set plus find_tool, so the full tool set is never
-  // carried. It runs on equal footing with the grouped variants.
+  // carried. It runs on equal footing with the grouped variants, and the eager
+  // presets search where its boundary should sit.
   CANDIDATE_E,
+  ...EAGER_PRESETS.map((preset) => buildCatalogCandidate(`cat-${preset.id}`, preset.eager)),
 ];
 const runFile = (id: string, r: number): string => join(resultsDir, `${id}-r${r}.json`);
 
