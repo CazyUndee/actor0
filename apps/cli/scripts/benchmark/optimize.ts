@@ -114,7 +114,7 @@ for (const candidate of plan) {
 
 // --- leaderboard: aggregate over repeats, rank by completion then cost ------
 
-type Row = { id: string; n: number; completed: number; tasks: number; usage: number; latency: number; calls: number; firstCall: number | null };
+type Row = { id: string; n: number; completed: number; tasks: number; usage: number; latency: number; calls: number; firstCall: number | null; costPerCompletion: number | null };
 
 const aggregate = (id: string, all: TaskResult[]): Row => {
   const byTask = new Map<string, TaskResult[]>();
@@ -122,12 +122,19 @@ const aggregate = (id: string, all: TaskResult[]): Row => {
   const completed = [...byTask.values()].filter((rs) => rs.some((r) => r.completed)).length;
   const withCalls = all.filter((r) => r.toolCalls > 0);
   const firstValid = withCalls.length > 0 ? withCalls.filter((r) => r.firstCallValid === true).length / withCalls.length : null;
+  // Cost per completed task: every token spent counts, including tokens burned
+  // on tasks that failed. A candidate that flails on a task it eventually
+  // abandons pays for that flailing here, where averaging over successful runs
+  // alone would hide it. This is the metric that separates a cheap interface
+  // from one that is only cheap when it works.
+  const totalUsage = all.reduce((sum, r) => sum + r.usageTokens, 0);
   return {
     id,
     n: all.length,
     completed,
     tasks: byTask.size,
-    usage: Math.round(all.reduce((s, r) => s + r.usageTokens, 0) / Math.max(1, all.length)),
+    usage: Math.round(totalUsage / Math.max(1, all.length)),
+    costPerCompletion: completed > 0 ? Math.round(totalUsage / completed) : null,
     latency: Math.round(all.reduce((s, r) => s + r.latencyMs, 0) / Math.max(1, all.length)),
     calls: Math.round((all.reduce((s, r) => s + r.toolCalls, 0) / Math.max(1, all.length)) * 10) / 10,
     firstCall: firstValid,
@@ -151,13 +158,13 @@ if (existsSync(refFile)) {
   }
 }
 
-rows.sort((a, b) => b.completed - a.completed || a.usage - b.usage || a.latency - b.latency);
+rows.sort((a, b) => b.completed - a.completed || (a.costPerCompletion ?? Infinity) - (b.costPerCompletion ?? Infinity) || a.latency - b.latency);
 const pct = (x: number | null): string => (x === null ? "—" : `${Math.round(x * 100)}%`);
-process.stdout.write(`\nleaderboard (completion↓, then usage↓, then latency↓):\n`);
+process.stdout.write(`\nleaderboard (completion↓, then tokens-per-completed-task↓, then latency↓):\n`);
 for (const row of rows) {
   process.stdout.write(
-    `${row.id.padEnd(16)} completed=${row.completed}/${row.tasks}  n=${row.n}  first-call=${pct(row.firstCall)}  ` +
-    `calls=${row.calls}  usage=${row.usage}  avg-ms=${row.latency}\n`,
+    `${row.id.padEnd(26)} completed=${row.completed}/${row.tasks}  n=${row.n}  first-call=${pct(row.firstCall)}  ` +
+    `calls=${row.calls}  tok/task=${row.costPerCompletion ?? "—"}  avg-ms=${row.latency}\n`,
   );
 }
 process.stdout.write(`\nran ${ran} turn(s) this invocation; re-run with --resume to continue across windows.\n`);
