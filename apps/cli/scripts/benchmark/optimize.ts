@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { loadConfig, resolveProvider } from "../../src/config.js";
 import type { RawCandidate } from "./candidates.js";
 import { runCandidateOnTask, type TaskResult } from "./runner.js";
@@ -34,6 +35,34 @@ const repeats = Math.max(1, Number(flag("--repeats") ?? "2"));
 const provider = resolveProvider(loadConfig());
 mkdirSync(resultsDir, { recursive: true });
 
+// Single-instance lock. Two concurrent loop processes against one rate-limited
+// gateway degrade the model into flailing ("I have no tools", retry storms),
+// which corrupts the very signal being measured — the turns stop reflecting the
+// interface and start reflecting the load. Refuse to run a second copy.
+const lockFile = join(resultsDir, ".lock");
+if (existsSync(lockFile)) {
+  const pid = readFileSync(lockFile, "utf8").trim();
+  const alive =
+    !!pid &&
+    spawnSync(process.platform === "win32" ? "tasklist" : "ps",
+      process.platform === "win32" ? ["/FI", `PID eq ${pid}`] : ["-p", pid],
+      { stdio: "ignore" }).status === 0;
+  if (alive) {
+    console.error(`optimize.ts already running (pid ${pid}); refusing to start a second concurrent loop.`);
+    process.exit(1);
+  }
+}
+writeFileSync(lockFile, String(process.pid));
+const releaseLock = () => rmSync(lockFile, { force: true });
+process.on("exit", releaseLock);
+process.on("SIGINT", () => process.exit(130));
+process.on("SIGTERM", () => process.exit(143));
+
+// A short pause between turns so a serial run never reads as a burst to the
+// gateway's fair-share limiter. Cheap insurance against self-inflicted 429s.
+const PAUSE_MS = Number(flag("--pause") ?? "1500");
+const pause = (): Promise<void> => new Promise((r) => setTimeout(r, PAUSE_MS));
+
 const plan: RawCandidate[] = DEFAULT_PLAN.map(buildGroupedCandidate);
 const runFile = (id: string, r: number): string => join(resultsDir, `${id}-r${r}.json`);
 
@@ -67,6 +96,7 @@ for (const candidate of plan) {
       const { valid } = partitionResults(results);
       writeFileSync(file, JSON.stringify({ variant: candidate.id, repeat: r, results: valid }, null, 2));
       ran += 1;
+      await pause();
     }
   }
 }
