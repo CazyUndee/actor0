@@ -132,26 +132,7 @@ const B_TOOLS: RawTool[] = [
     description: "Delegate a self-contained task to a subagent and return its result.",
     input_schema: obj({ task: { type: "string" } }, ["task"]),
   },
-  {
-    name: "read",
-    description: "Read a text file. Lines are 1-based; offset and limit select a range.",
-    input_schema: obj({ path: { type: "string" }, offset: { type: "integer" }, limit: { type: "integer" } }, ["path"]),
-  },
-  {
-    name: "grep",
-    description: "Search file contents with a regular expression or literal text; returns paths, lines, or counts.",
-    input_schema: obj({ pattern: { type: "string" }, path: { type: "string" }, glob: { type: "string" }, literal: { type: "boolean" } }, ["pattern"]),
-  },
-  {
-    name: "write",
-    description: "Create a file or replace its entire contents with the given content.",
-    input_schema: obj({ path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
-  },
-  {
-    name: "edit",
-    description: "Replace exact text in an existing file. old must match uniquely unless all is true.",
-    input_schema: obj({ path: { type: "string" }, old: { type: "string" }, new: { type: "string" }, all: { type: "boolean" } }, ["path", "old", "new"]),
-  },
+
 ];
 
 // --- Candidate C: five tools grouped by effect class (verbatim, permissive) -
@@ -393,7 +374,7 @@ export function buildCatalogCandidate(id: string, eagerNames: string[], label?: 
  *  Every operation is in it, including the eager ones: Codex's tool_search can
  *  surface any tool, and a model that forgets an eager tool mid-task must be
  *  able to rediscover it. */
-export const E_CATALOG_TOOLS: RawTool[] = E_CATALOG;
+export const E_CATALOG_TOOLS: RawTool[] = [...new Map(E_CATALOG.map((tool) => [tool.name, tool])).values()];
 
 /** Convert a candidate's Anthropic-style schemas to the provider's tool format. */
 export function toOpenAiTools(candidate: RawCandidate): OpenAiTool[] {
