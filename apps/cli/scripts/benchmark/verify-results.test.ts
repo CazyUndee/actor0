@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isInvalid, partitionResults } from "./verify-results.js";
+import { isBadPatch, isInvalid, partitionResults } from "./verify-results.js";
 import type { TaskResult } from "./runner.js";
 
 /**
@@ -29,4 +29,20 @@ test("partition separates artifacts from valid results", () => {
   const { valid, invalid } = partitionResults([base, artifact, realFailure]);
   assert.deepEqual(invalid.map((r) => r.answer), [artifact.answer]);
   assert.equal(valid.length, 2);
+});
+
+test("a bad-patch turn is detected and excluded from comparison", () => {
+  // The gateway's measured signature: a one-call task becomes a retry storm
+  // ("I have no tools", repeat calls) and first-call validity collapses.
+  const badPatch: TaskResult = { ...base, toolCalls: 6, firstCallValid: false, completed: false, answer: "I don't have a working file-reading tool." };
+  assert.equal(isBadPatch(badPatch), true);
+  // A genuine multi-call task with valid calls is NOT a bad patch.
+  const realMultistep: TaskResult = { ...base, toolCalls: 12, firstCallValid: true, completed: true };
+  assert.equal(isBadPatch(realMultistep), false, "many calls with valid first calls is real work, not a bad patch");
+  // A transport failure is invalid, not "bad patch".
+  assert.equal(isBadPatch(artifact), false);
+
+  const { comparable, badPatch: flagged } = partitionResults([base, badPatch, artifact]);
+  assert.deepEqual(flagged.map((r) => r.answer), [badPatch.answer]);
+  assert.equal(comparable.length, 1, "only the clean turn is comparable");
 });

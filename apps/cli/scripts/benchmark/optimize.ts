@@ -76,7 +76,7 @@ const loadValid = (file: string): TaskResult[] => {
   if (!existsSync(file)) return [];
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as { results?: TaskResult[] };
-    return Array.isArray(parsed.results) ? partitionResults(parsed.results).valid : [];
+    return Array.isArray(parsed.results) ? partitionResults(parsed.results).comparable : [];
   } catch {
     return [];
   }
@@ -99,8 +99,11 @@ for (const candidate of plan) {
       results.push(result);
       // Persist only valid results; artifacts are dropped so a later --resume
       // retries exactly them. This keeps the incremental output trustworthy.
-      const { valid } = partitionResults(results);
-      writeFileSync(file, JSON.stringify({ variant: candidate.id, repeat: r, results: valid }, null, 2));
+      // Keep only comparable turns: artifacts and bad-patch turns are dropped
+      // from the saved file, so a later --resume re-runs exactly them and the
+      // leaderboard never averages a degraded turn into a candidate's score.
+      const { comparable } = partitionResults(results);
+      writeFileSync(file, JSON.stringify({ variant: candidate.id, repeat: r, results: comparable }, null, 2));
       ran += 1;
       await pause();
     }
