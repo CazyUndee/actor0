@@ -19,7 +19,7 @@ import { createToolHost } from "../../src/tools.js";
 export type JsonSchema = Record<string, unknown>;
 export type RawTool = { name: string; description: string; input_schema: JsonSchema };
 export type RawCandidate = { id: CandidateId; label: string; tools: RawTool[] };
-export type CandidateId = "A" | "B" | "C" | "D" | "C2" | (string & {});
+export type CandidateId = "A" | "B" | "C" | "D" | "C2" | "E" | (string & {});
 
 /** The provider's structured tool-calling representation. */
 export type OpenAiTool = {
@@ -256,6 +256,101 @@ const C2_TOOLS: RawTool[] = C_TOOLS.map((tool) => ({
   description: C2_DESCRIPTIONS[tool.name] ?? tool.description,
 }));
 export const CANDIDATE_C2: RawCandidate = { id: "C2", label: "grouped tools, hardened descriptions", tools: C2_TOOLS };
+
+// --- Candidate E: small eager set + searchable catalog (Codex tool_search) --
+
+/**
+ * Candidate E: the deferred-tool-discovery pattern, adapted from Codex.
+ *
+ * A small eager set (the ops a coding turn reaches for constantly) is sent up
+ * front; everything else lives in a catalog reachable only through
+ * `find_tool(query)`, which returns the matching tool's full definition as text
+ * for the model to call next turn. Codex instead uses the Responses API's
+ * `defer_loading`; our provider has no such feature, so the definition is
+ * returned as text — an extra round trip this candidate is measured on.
+ */
+const E_EAGER = ["read", "grep", "edit", "write"];
+const E_CATALOG: RawTool[] = [
+  {
+    name: "glob",
+    description: "Find files matching a glob pattern, e.g. \"**/*.test.ts\". Use to locate files by name.",
+    input_schema: obj({ pattern: { type: "string" }, path: { type: "string" } }, ["pattern"]),
+  },
+  {
+    name: "shell",
+    description: "Run a shell command in the workspace. Each call starts a fresh process. Optional timeout in seconds.",
+    input_schema: obj({ command: { type: "string" }, timeout: { type: "integer" } }, ["command"]),
+  },
+  {
+    name: "tree",
+    description: "Show the repository directory tree, up to `depth` levels (default 3). Use to understand project layout.",
+    input_schema: obj({ path: { type: "string" }, depth: { type: "integer" } }, []),
+  },
+  {
+    name: "index",
+    description: "Search the repository file index by name or path substring. Use to find where something lives.",
+    input_schema: obj({ query: { type: "string" } }, ["query"]),
+  },
+  {
+    name: "skill",
+    description: "Load a reusable skill by name, returning its instructions.",
+    input_schema: obj({ name: { type: "string" } }, ["name"]),
+  },
+  {
+    name: "web_search",
+    description: "Search the web and return ranked results with titles, URLs and snippets.",
+    input_schema: obj({ query: { type: "string" }, limit: { type: "integer" } }, ["query"]),
+  },
+  {
+    name: "fetch",
+    description: "Fetch a URL and return its content as clean markdown for reading.",
+    input_schema: obj({ url: { type: "string" } }, ["url"]),
+  },
+  {
+    name: "delegate",
+    description: "Delegate a self-contained task to a subagent and return its result.",
+    input_schema: obj({ task: { type: "string" } }, ["task"]),
+  },
+];
+const E_EAGER_SPECS: Record<string, RawTool> = {
+  read: {
+    name: "read",
+    description: "Read a text file. Lines are 1-based; offset and limit select a range.",
+    input_schema: obj({ path: { type: "string" }, offset: { type: "integer" }, limit: { type: "integer" } }, ["path"]),
+  },
+  grep: {
+    name: "grep",
+    description: "Search file contents with a regular expression or literal text; returns paths, lines, or counts.",
+    input_schema: obj({ pattern: { type: "string" }, path: { type: "string" }, glob: { type: "string" }, literal: { type: "boolean" } }, ["pattern"]),
+  },
+  write: {
+    name: "write",
+    description: "Create a file or replace its entire contents with the given content.",
+    input_schema: obj({ path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
+  },
+  edit: {
+    name: "edit",
+    description: "Replace exact text in an existing file. old must match uniquely unless all is true.",
+    input_schema: obj({ path: { type: "string" }, old: { type: "string" }, new: { type: "string" }, all: { type: "boolean" } }, ["path", "old", "new"]),
+  },
+};
+const E_TOOLS: RawTool[] = [
+  ...E_EAGER.map((name) => E_EAGER_SPECS[name]!),
+  {
+    name: "find_tool",
+    description:
+      "Search the tool catalog by what you want to do (e.g. \"run a command\", \"find files by name\", "
+      + "\"search the web\"). Returns the matching tools' full definitions, then call the one you need.",
+    input_schema: obj({ query: { type: "string" }, limit: { type: "integer" } }, ["query"]),
+  },
+];
+export const CANDIDATE_E: RawCandidate = { id: "E", label: "small eager set + searchable catalog", tools: E_TOOLS };
+
+/** The deferred catalog candidate E searches, exported for the dispatcher.
+ *  Every operation is in it, including the eager ones: Codex's tool_search can
+ *  surface any tool, and a model that forgets an eager tool mid-task must be
+ *  able to rediscover it. */
+export const E_CATALOG_TOOLS: RawTool[] = [...E_CATALOG, ...E_EAGER.map((name) => E_EAGER_SPECS[name]!)];
 
 /** Convert a candidate's Anthropic-style schemas to the provider's tool format. */
 export function toOpenAiTools(candidate: RawCandidate): OpenAiTool[] {

@@ -3,6 +3,8 @@ import { createToolHost } from "../../src/tools.js";
 import { createTaskDelegate } from "../../src/subagent.js";
 import { formatRepoTree, getRepoIndex, queryRepoIndex } from "../../src/repo-index.js";
 import { formatWebResults, openUrl, webSearch } from "../../src/web-search.js";
+import { E_CATALOG_TOOLS } from "./candidates.js";
+import { renderToolDefinition, searchCatalog } from "./catalog.js";
 import type { ResolvedProvider } from "../../src/config.js";
 
 /**
@@ -19,7 +21,8 @@ import type { ResolvedProvider } from "../../src/config.js";
 
 export type OperationName =
   | "read" | "grep" | "glob" | "tree" | "index" | "skill"
-  | "web_search" | "fetch" | "write" | "edit" | "delete" | "shell" | "delegate";
+  | "web_search" | "fetch" | "write" | "edit" | "delete" | "shell" | "delegate"
+  | "find_tool";
 
 /** Required arguments per operation — the schema-level check, never auto-filled. */
 export const OPERATION_REQUIRED: Record<OperationName, string[]> = {
@@ -36,6 +39,7 @@ export const OPERATION_REQUIRED: Record<OperationName, string[]> = {
   delete: ["path"],
   shell: ["command"],
   delegate: ["task"],
+  find_tool: ["query"],
 };
 
 /** The fields each operation accepts (besides `op`), for the strict no-extra-field check. */
@@ -53,11 +57,12 @@ export const OPERATION_FIELDS: Record<OperationName, string[]> = {
   delete: ["path"],
   shell: ["command", "timeout"],
   delegate: ["task"],
+  find_tool: ["query", "limit"],
 };
 
 /** Operations Actor0 can actually execute. `delete` is not among them. */
 export const SUPPORTED_OPERATIONS: OperationName[] = [
-  "read", "grep", "glob", "tree", "index", "skill", "web_search", "fetch", "write", "edit", "shell", "delegate",
+  "read", "grep", "glob", "tree", "index", "skill", "web_search", "fetch", "write", "edit", "shell", "delegate", "find_tool",
 ];
 
 /** Operation name → production tool name, where they differ. */
@@ -97,6 +102,15 @@ export function createUnderlying(options: { cwd: string; provider?: ResolvedProv
         }
         case "fetch":
           return openUrl(String(args.url ?? ""), { signal });
+        case "find_tool": {
+          const limit = typeof args.limit === "number" ? args.limit : 5;
+          const hits = searchCatalog(E_CATALOG_TOOLS, String(args.query ?? ""), limit);
+          if (hits.length === 0) {
+            return `No catalog tool matches "${String(args.query ?? "")}". ` +
+              "Available: " + E_CATALOG_TOOLS.map((t) => t.name).join(", ") + ".";
+          }
+          return hits.map(renderToolDefinition).join("\n\n");
+        }
         default: {
           const name = PRODUCTION_NAME[operation] ?? operation;
           const call: ToolCall = { id: "bench", type: "function", function: { name, arguments: JSON.stringify(args) } };

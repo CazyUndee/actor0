@@ -107,10 +107,20 @@ function resolve(candidate: CandidateId, call: ToolCall): Resolution {
     return { op: null, required: [], strict: false, error: `unknown tool "${tool}"` };
   }
   // Candidate D — one universal `act` tool with a oneOf union.
-  if (tool !== "act") return { op: null, required: [], strict: true, error: `unknown tool "${tool}" (candidate D exposes only "act")` };
-  if (!(opValue in OPERATION_REQUIRED)) return { op: null, required: [], strict: true, error: `act op "${opValue}" is not a known operation` };
-  const op = opValue as OperationName;
-  return { op, required: OPERATION_REQUIRED[op], strict: true };
+  if (candidate === "D") {
+    if (tool !== "act") return { op: null, required: [], strict: true, error: `unknown tool "${tool}" (candidate D exposes only "act")` };
+    if (!(opValue in OPERATION_REQUIRED)) return { op: null, required: [], strict: true, error: `act op "${opValue}" is not a known operation` };
+    const op = opValue as OperationName;
+    return { op, required: OPERATION_REQUIRED[op], strict: true };
+  }
+  // Candidate E — small eager set plus a searchable catalog via find_tool.
+  if (candidate === "E") {
+    if (tool === "find_tool") return { op: "find_tool", required: ["query"], strict: true };
+    if (!(tool in OPERATION_REQUIRED)) return { op: null, required: [], strict: true, error: `unknown tool "${tool}". Use find_tool to discover it.` };
+    const op = tool as OperationName;
+    return { op, required: OPERATION_REQUIRED[op], strict: true };
+  }
+  return { op: null, required: [], strict: false, error: `no dispatcher for candidate ${candidate}` };
 }
 
 export function createDispatcher(candidate: RawCandidate, underlying: Underlying): Dispatcher {
