@@ -3,6 +3,7 @@ import { loadConfig, resolveProvider } from "../../src/config.js";
 import { CANDIDATE_B, CANDIDATE_C, CANDIDATE_C2, CANDIDATE_D, captureCandidateA } from "./candidates.js";
 import { buildReport } from "./report.js";
 import { runCandidateOnTask, type TaskResult } from "./runner.js";
+import { partitionResults } from "./verify-results.js";
 import { TASKS } from "./tasks.js";
 
 /**
@@ -30,12 +31,17 @@ const flag = (name: string): string | undefined => {
 };
 const has = (name: string): boolean => process.argv.includes(name);
 
-const out = flag("--out") ?? "benchmark-results.json";
 const onlyCandidate = flag("--candidate");
 const onlyTask = flag("--task");
 const resume = has("--resume");
-
 const providerName = flag("--provider");
+// --pause: seconds between turns so a serial sweep never reads as a burst to a
+// fair-share limiter. --ref: write the report to the reference file the loop
+// leaderboard reads for this provider (benchmark-results-<provider>.json).
+const PAUSE_S = Number(flag("--pause") ?? "0");
+const ref = has("--ref");
+const outPath = flag("--out") ?? (ref ? `benchmark-results-${providerName ?? "active"}.json` : "benchmark-results.json");
+
 const provider = resolveProvider(providerName ? { ...loadConfig(), activeProvider: providerName } : loadConfig());
 const all = [captureCandidateA(process.cwd()), CANDIDATE_B, CANDIDATE_C, CANDIDATE_C2, CANDIDATE_D];
 const candidates = onlyCandidate ? all.filter((c) => c.id === onlyCandidate) : all;
@@ -60,16 +66,20 @@ const metadata = {
 // Keep any results already in the output file when resuming.
 const key = (r: TaskResult): string => `${r.candidate}:${r.taskId}`;
 let results: TaskResult[] = [];
-if (resume && existsSync(out)) {
+if (resume && existsSync(outPath)) {
   try {
-    const prior = JSON.parse(readFileSync(out, "utf8")) as { results?: TaskResult[] };
-    if (Array.isArray(prior.results)) results = prior.results;
+    const prior = JSON.parse(readFileSync(outPath, "utf8")) as { results?: TaskResult[] };
+    if (Array.isArray(prior.results)) {
+      // A resume rebuilds the set from kept files; drop transport artifacts, bad-patch
+      // turns, and harness-miswired turns so a re-run covers exactly the gaps.
+      results = partitionResults(prior.results).comparable;
+    }
   } catch {
     // A corrupt prior file is ignored; we start fresh rather than crash.
   }
 }
 const writeReport = (): void => {
-  writeFileSync(out, JSON.stringify(buildReport(results, all, metadata), null, 2));
+  writeFileSync(outPath, JSON.stringify(buildReport(results, all, metadata), null, 2));
 };
 
 for (const candidate of candidates) {
@@ -86,6 +96,7 @@ for (const candidate of candidates) {
     // so a rate-limited interruption keeps every candidate that finished.
     results = [...results.filter((r) => key(r) !== key(result)), result];
     writeReport();
+    if (PAUSE_S > 0) await new Promise((r) => setTimeout(r, PAUSE_S * 1000));
   }
 }
 
@@ -98,4 +109,4 @@ for (const s of buildReport(results, all, metadata).summaries) {
     `usage-tok=${s.usageTokens}  tooldef-tok=${s.toolDefTokens}  avg-ms=${s.avgLatencyMs}\n`,
   );
 }
-process.stdout.write(`\nwrote ${out}\n`);
+process.stdout.write(`\nwrote ${outPath}\n`);

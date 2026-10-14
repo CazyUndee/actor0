@@ -149,15 +149,24 @@ test("every candidate in the loop plan dispatches a valid call", async () => {
     ...DEFAULT_PLAN.map(buildGroupedCandidate),
     CANDIDATE_E,
     ...EAGER_PRESETS.map((preset) => buildCatalogCandidate(`cat-${preset.id}`, preset.eager)),
+    CANDIDATE_D,
   ];
   await withWorkspace(async (dir) => {
     for (const candidate of plan) {
       // A call valid for the candidate's tool shape: grouped variants use the
-      // C-family tools, catalog variants use the flat operation names.
+      // C-family tools, catalog/flat variants use the flat operation names, and
+      // D exposes only the oneOf `act` union.
+      const isD = candidate.id === "D";
       const isGrouped = candidate.id.startsWith("g-");
       const dispatcher = createDispatcher(candidate, createUnderlying({ cwd: dir }));
+      const toolName = isD ? "act" : isGrouped ? "inspect" : "read";
+      const toolArgs = isD
+        ? { op: "read", path: "note.txt" }
+        : isGrouped
+          ? { op: "read", path: "note.txt" }
+          : { path: "note.txt" };
       const output = await dispatcher.execute(
-        call(isGrouped ? "inspect" : "read", isGrouped ? { op: "read", path: "note.txt" } : { path: "note.txt" }),
+        call(toolName, toolArgs),
         new AbortController().signal,
       );
       const record = dispatcher.records[dispatcher.records.length - 1]!;

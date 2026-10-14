@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadConfig, resolveProvider } from "../../src/config.js";
-import { CANDIDATE_B, CANDIDATE_E, buildCatalogCandidate, captureCandidateA, type RawCandidate } from "./candidates.js";
+import { CANDIDATE_B, CANDIDATE_D, CANDIDATE_E, buildCatalogCandidate, captureCandidateA, type RawCandidate } from "./candidates.js";
 import { schemaHash } from "./candidates.js";
 import { runCandidateOnTask, type TaskResult } from "./runner.js";
 import { probeGateway } from "./health.js";
@@ -132,6 +132,7 @@ const plan: RawCandidate[] = [
   // set — the references the grouped family is judged against. A is re-captured
   // at each loop start: production is a moving target, and the run file embeds
   // the exact definitions it measured with.
+  CANDIDATE_D,
   captureCandidateA(process.cwd()),
   CANDIDATE_B,
 ];
@@ -156,8 +157,9 @@ const PRIORITY: Record<string, number> = {
   "g-required-trimmed": 6,
   "g-full-trimmed": 7,
   "cat-plus-shell-glob": 8,
-  A: 9, // production capture: the baseline the family is judged against
-  B: 10, // flat set: the other family reference
+  D: 9, // oneOf: accepted by some providers, flailing on others — measured, not assumed
+  A: 10, // production capture: the baseline the family is judged against
+  B: 11, // flat set: the other family reference
 };
 const ordered = process.argv.includes("--full-plan")
   ? plan
