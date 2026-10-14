@@ -30,11 +30,16 @@ export type HealthCheck = {
 export const SLOW_PROBE_MS = 20_000;
 
 /** Drive one trivial turn through the real provider and time it. */
-export async function probeGateway(options: { timeoutMs?: number } = {}): Promise<HealthCheck> {
+export async function probeGateway(options: { timeoutMs?: number; providerName?: string } = {}): Promise<HealthCheck> {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? 45_000;
   try {
-    const provider = resolveProvider(loadConfig());
+    const config = loadConfig();
+    // Probe the provider the caller will measure on, not just the active one: a
+    // loop that overrides providers must not gate on a gateway it is not using.
+    const provider = resolveProvider(
+      options.providerName ? { ...config, activeProvider: options.providerName } : config,
+    );
     const client = createModel(provider);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);

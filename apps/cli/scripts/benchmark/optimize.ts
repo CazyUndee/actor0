@@ -26,14 +26,23 @@ import { buildGroupedCandidate, DEFAULT_PLAN, EAGER_PRESETS, variantId, type Var
  * point; only the built candidate's descriptions and field pool differ.
  */
 
-const resultsDir = join(process.cwd(), "benchmark", "optimize");
 const flag = (name: string): string | undefined => {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : undefined;
 };
+const resultsDir = join(process.cwd(), "benchmark", flag("--out") ?? "optimize");
 const repeats = Math.max(1, Number(flag("--repeats") ?? "2"));
 
-const provider = resolveProvider(loadConfig());
+// `--provider <name>` measures against a specific registered provider instead of
+// the active one. The model under test is a variable in its own right — results
+// across models are not comparable — so it is printed up front, not assumed.
+const providerName = flag("--provider");
+const provider = resolveProvider(
+  providerName ? { ...loadConfig(), activeProvider: providerName } : loadConfig(),
+);
+process.stderr.write(
+  `measuring: ${provider.model} @ ${provider.baseUrl}${providerName ? ` (override: ${providerName})` : ""}\n`,
+);
 mkdirSync(resultsDir, { recursive: true });
 
 // Single-instance lock. Two concurrent loop processes against one rate-limited
@@ -78,7 +87,7 @@ const NO_PROBE = process.argv.includes("--no-probe");
 const waitForHealthy = async (): Promise<boolean> => {
   if (NO_PROBE) return true;
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    const check = await probeGateway();
+    const check = await probeGateway({ providerName });
     if (check.health === "ok") {
       return true;
     }
@@ -227,7 +236,11 @@ for (const candidate of plan) {
 }
 
 // Reference points from the committed full comparison (A/B/C/C2/D, one run each).
-const refFile = "benchmark-results-full.json";
+// Those numbers were produced on the default provider; under a --provider
+// override they would sit next to results from a different model in the same
+// leaderboard — a cross-model comparison this harness does not make. An
+// override looks for its own reference file instead.
+const refFile = providerName ? `benchmark-results-${providerName}.json` : "benchmark-results-full.json";
 if (existsSync(refFile)) {
   const ref = JSON.parse(readFileSync(refFile, "utf8")) as { results: TaskResult[] };
   for (const id of ["A", "B", "C", "C2", "D"]) {
@@ -238,7 +251,7 @@ if (existsSync(refFile)) {
 
 rows.sort((a, b) => b.completed - a.completed || (a.costPerCompletion ?? Infinity) - (b.costPerCompletion ?? Infinity) || a.usage - b.usage);
 const pct = (x: number | null): string => (x === null ? "—" : `${Math.round(x * 100)}%`);
-process.stdout.write(`\nleaderboard (completion↓, then tokens-per-completed-task↓, then usage↓)\n`);
+process.stdout.write(`\nleaderboard — ${provider.model} @ ${provider.baseUrl} (completion↓, then tokens-per-completed-task↓, then usage↓)\n`);
 process.stdout.write(`per-task completion shows how many of n repeats passed: 3/1/2 = ran 3, passed 1, passed 2\n`);
 for (const row of rows) {
   const warn = row.n < 3 ? "  ⚠ n<3, directional only" : "";

@@ -35,7 +35,8 @@ const onlyCandidate = flag("--candidate");
 const onlyTask = flag("--task");
 const resume = has("--resume");
 
-const provider = resolveProvider(loadConfig());
+const providerName = flag("--provider");
+const provider = resolveProvider(providerName ? { ...loadConfig(), activeProvider: providerName } : loadConfig());
 const all = [captureCandidateA(process.cwd()), CANDIDATE_B, CANDIDATE_C, CANDIDATE_C2, CANDIDATE_D];
 const candidates = onlyCandidate ? all.filter((c) => c.id === onlyCandidate) : all;
 const tasks = onlyTask ? TASKS.filter((t) => t.id === onlyTask) : TASKS;
@@ -44,6 +45,8 @@ if (tasks.length === 0) throw new Error(`no such task: ${onlyTask}`);
 
 const metadata = {
   model: provider.model,
+  provider: providerName ?? "active",
+  baseUrl: provider.baseUrl,
   date: new Date().toISOString(),
   tokenizerNote: "tool-definition tokens approximated at ~4 chars/token; the target model's tokenizer was not available",
   providerLimitations: [
