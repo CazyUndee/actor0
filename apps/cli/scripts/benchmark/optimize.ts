@@ -315,4 +315,4 @@ for (const row of rows) {
     `usage=${row.usage}${row.usageSpread !== null ? `±${row.usageSpread}` : ""}${warn}\n`,
   );
 }
-process.stdout.write(`\nran ${ran} turn(s) this invocation; re-run with --resume to continue across windows.\n`);
+if (!STATUS_MODE) process.stdout.write(`\nran ${ran} turn(s) this invocation; re-run with --resume to continue across windows.\n`);
