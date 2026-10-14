@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadConfig, resolveProvider } from "../../src/config.js";
 import { CANDIDATE_E, buildCatalogCandidate, type RawCandidate } from "./candidates.js";
+import { schemaHash } from "./candidates.js";
 import { runCandidateOnTask, type TaskResult } from "./runner.js";
 import { probeGateway } from "./health.js";
 import { TASKS } from "./tasks.js";
@@ -172,7 +173,14 @@ for (const candidate of ordered) {
       // from the saved file, so a later --resume re-runs exactly them and the
       // leaderboard never averages a degraded turn into a candidate's score.
       const { comparable } = partitionResults(results);
-      writeFileSync(file, JSON.stringify({ variant: candidate.id, repeat: r, results: comparable }, null, 2));
+      writeFileSync(file, JSON.stringify({
+        variant: candidate.id,
+        repeat: r,
+        model: provider.model,
+        schemaHash: schemaHash(candidate),
+        definitions: candidate.tools,
+        results: comparable,
+      }, null, 2));
       ran += 1;
       await pause();
     }

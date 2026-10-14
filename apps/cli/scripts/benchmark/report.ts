@@ -60,7 +60,15 @@ export type BenchmarkReport = {
     tokenizerNote: string;
     providerLimitations: string[];
   };
-  schemas: { candidate: CandidateId; label: string; hash: string; toolCount: number; operations: string[] }[];
+  schemas: {
+    candidate: CandidateId;
+    label: string;
+    hash: string;
+    toolCount: number;
+    operations: string[];
+    /** The exact definitions, not just their hash — the record must stand alone. */
+    definitions: RawCandidate["tools"];
+  }[];
   summaries: CandidateSummary[];
   results: TaskResult[];
 };
@@ -78,6 +86,7 @@ export function buildReport(
       hash: schemaHash(c),
       toolCount: c.tools.length,
       operations: exposedOperations(c),
+      definitions: c.tools,
     })),
     summaries: candidates.map((c) => summarize(results, c)),
     results,
