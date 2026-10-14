@@ -428,3 +428,36 @@ The tests write `$$`, `$&` and `$'` into a file and read it back.
 - The project context a session sends is bounded; a cut file says in its own
   text that it was cut, because a model told to follow half a rules file will
   follow it as if it were all of them.
+## The benchmark variant must resolve, or the loop measures its own bug
+
+The tool-interface benchmark (`apps/cli/scripts/benchmark/`) measures model
+turns through a dispatcher that turns a candidate’s tool calls into
+underlying operations. `resolve()` in `dispatch.ts` switches on the
+candidate id, and it only knew the six static ids (A, B, C, C2, D, E). Every
+dynamically built variant id (the g-* grouped variants, the cat-* catalog
+presets) fell through to "no dispatcher for candidate <id>".
+
+That was silent in two ways. First, the error surfaced *inside the tool result
+the model sees*, so the model dutifully reported "my tools are broken" and the
+turn recorded a failure that looked like model behaviour. Second, the
+verifier’s bad-patch detector (retry storm: many calls, none valid)
+did not fire, because most of these turns failed in 2-3 calls — under the
+storm threshold — so the garbage was **comparable**. The optimization loop
+therefore collected two providers’ worth of runs that measured the
+dispatcher, not the interface.
+
+Two disciplines keep this class of bug from recurring:
+
+- **A plan-coverage test.** `dispatch.test.ts` runs *every candidate the loop
+  plans to measure* through a real dispatcher and asserts none falls through.
+  Add a variant family and that test fails immediately, offline, for free —
+  instead of after a 12-variant sweep of contaminated data.
+- **Record the failure at the source.** `TaskResult.harnessError` is set from
+  the dispatcher’s own records, not from pattern-matching the model’s
+  paraphrase, and `verify-results.ts` has a harness-error category that
+  excludes such turns from comparison and lets `--clean` + `--resume`
+  re-run exactly them.
+
+The commit that found and fixed this is `14c3df2`; the 34 surviving loop
+turns are the ones that were never contaminated.
+
