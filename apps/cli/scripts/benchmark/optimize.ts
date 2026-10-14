@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadConfig, resolveProvider } from "../../src/config.js";
-import { CANDIDATE_E, buildCatalogCandidate, type RawCandidate } from "./candidates.js";
+import { CANDIDATE_B, CANDIDATE_E, buildCatalogCandidate, captureCandidateA, type RawCandidate } from "./candidates.js";
 import { schemaHash } from "./candidates.js";
 import { runCandidateOnTask, type TaskResult } from "./runner.js";
 import { probeGateway } from "./health.js";
@@ -51,7 +51,10 @@ mkdirSync(resultsDir, { recursive: true });
 // which corrupts the very signal being measured — the turns stop reflecting the
 // interface and start reflecting the load. Refuse to run a second copy.
 const lockFile = join(resultsDir, ".lock");
-if (existsSync(lockFile)) {
+// --status is read-only: it reports on the running loop, so it must not be
+// excluded by the single-instance lock.
+const STATUS_MODE = process.argv.includes("--status");
+if (!STATUS_MODE && existsSync(lockFile)) {
   const pid = readFileSync(lockFile, "utf8").trim();
   const alive =
     !!pid &&
@@ -62,9 +65,13 @@ if (existsSync(lockFile)) {
     console.error(`optimize.ts already running (pid ${pid}); refusing to start a second concurrent loop.`);
     process.exit(1);
   }
+} else if (!STATUS_MODE) {
+  writeFileSync(lockFile, String(process.pid));
 }
-writeFileSync(lockFile, String(process.pid));
-const releaseLock = () => rmSync(lockFile, { force: true });
+const releaseLock = (): void => {
+  if (STATUS_MODE) return;
+  rmSync(lockFile, { force: true });
+};
 process.on("exit", releaseLock);
 process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
@@ -85,21 +92,32 @@ const pause = (): Promise<void> => new Promise((r) => setTimeout(r, PAUSE_MS));
 // together — so a blind loop spends turns to learn the gateway is bad, then
 // throws the data away. Probing costs ~5k tokens to protect a ~50k-token turn.
 const NO_PROBE = process.argv.includes("--no-probe");
+// After a failed probe burst the gateway may be dark for a long while. Instead of
+// dying and asking a human to restart, fall back to deep sleep and keep going:
+// that is what "collects across as many windows as it needs" actually means.
+// --max-idle caps how many 300s deep-sleep cycles to survive (default 48).
+const MAX_IDLE = Math.max(1, Number(flag("--max-idle") ?? "48"));
 const waitForHealthy = async (): Promise<boolean> => {
   if (NO_PROBE) return true;
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    const check = await probeGateway({ providerName });
-    if (check.health === "ok") {
-      return true;
+  let idle = 0;
+  for (;;) {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const check = await probeGateway({ providerName });
+      if (check.health === "ok") {
+        return true;
+      }
+      const waitMs = Math.min(120_000, 5_000 * 2 ** Math.min(attempt, 4));
+      process.stderr.write(`… gateway ${check.health} (${check.reason}); waiting ${Math.round(waitMs / 1000)}s\n`);
+      await new Promise((r) => setTimeout(r, waitMs));
     }
-    // Exponential backoff capped at two minutes: a bad patch is measured in
-    // minutes, so polling harder than this just spends tokens learning nothing.
-    const waitMs = Math.min(120_000, 5_000 * 2 ** Math.min(attempt, 4));
-    process.stderr.write(`… gateway ${check.health} (${check.reason}); waiting ${Math.round(waitMs / 1000)}s\n`);
-    await new Promise((r) => setTimeout(r, waitMs));
+    idle += 1;
+    if (idle > MAX_IDLE) {
+      process.stderr.write(`… gateway still dark after ${idle - 1} deep-sleep cycles; stopping; --resume later\n`);
+      return false;
+    }
+    process.stderr.write(`… gateway dark; deep sleep 300s (cycle ${idle}/${MAX_IDLE})\n`);
+    await new Promise((r) => setTimeout(r, 300_000));
   }
-  process.stderr.write("… gateway still unhealthy after 12 probes; stopping so the loop resumes later\n");
-  return false;
 };
 
 const plan: RawCandidate[] = [
@@ -110,6 +128,12 @@ const plan: RawCandidate[] = [
   // presets search where its boundary should sit.
   CANDIDATE_E,
   ...EAGER_PRESETS.map((preset) => buildCatalogCandidate(`cat-${preset.id}`, preset.eager)),
+  // The spec's full candidate set includes the production capture and the flat
+  // set — the references the grouped family is judged against. A is re-captured
+  // at each loop start: production is a moving target, and the run file embeds
+  // the exact definitions it measured with.
+  captureCandidateA(process.cwd()),
+  CANDIDATE_B,
 ];
 
 /**
@@ -132,6 +156,8 @@ const PRIORITY: Record<string, number> = {
   "g-required-trimmed": 6,
   "g-full-trimmed": 7,
   "cat-plus-shell-glob": 8,
+  A: 9, // production capture: the baseline the family is judged against
+  B: 10, // flat set: the other family reference
 };
 const ordered = process.argv.includes("--full-plan")
   ? plan
@@ -148,8 +174,23 @@ const loadValid = (file: string): TaskResult[] => {
   }
 };
 
+// --- read-only dashboard: collection progress without touching the gateway
+if (process.argv.includes("--status")) {
+  for (const candidate of ordered) {
+    for (let r = 1; r <= repeats; r += 1) {
+      const { valid, comparable } = partitionResults(loadValid(runFile(candidate.id, r)));
+      const excluded = valid.length - comparable.length;
+      const complete = comparable.length === TASKS.length;
+      process.stdout.write(
+        `  ${candidate.id.padEnd(22)} r${r}  ${comparable.length}/${TASKS.length} comparable (file kept ${comparable.length} of ${comparable.length + excluded})${complete ? "  complete" : ""}\n`,
+      );
+    }
+  }
+  process.stdout.write(`\nmodel: ${provider.model} @ ${provider.baseUrl} | dir: ${resultsDir}\n`);
+}
+
 let ran = 0;
-for (const candidate of ordered) {
+if (!STATUS_MODE) for (const candidate of ordered) {
   for (let r = 1; r <= repeats; r += 1) {
     const file = runFile(candidate.id, r);
     const done = new Set(loadValid(file).map((x) => x.taskId));
@@ -212,6 +253,10 @@ type Row = {
   costPerCompletion: number | null;
   /** Distinct (run × task) completion outcomes — the completion signal's own spread. */
   outcomes: string;
+  /** Every measurement model in this row. A run resumed under a different provider
+   *  appends its results to the same file; a mixed row breaks the one-provider-
+   *  per-run fairness invariant, so it is flagged, never averaged silently. */
+  models: string[];
 };
 
 const aggregate = (id: string, all: TaskResult[]): Row => {
@@ -233,6 +278,7 @@ const aggregate = (id: string, all: TaskResult[]): Row => {
     firstCall: firstValid,
     costPerCompletion: completed > 0 ? Math.round(totalUsage / completed) : null,
     outcomes: [...byTask.values()].map((rs) => rs.filter((r) => r.completed).length).join("/"),
+    models: [...new Set(all.map((r) => r.model).filter((m): m is string => typeof m === "string"))],
   };
 };
 
@@ -253,7 +299,7 @@ if (existsSync(refFile)) {
   const ref = JSON.parse(readFileSync(refFile, "utf8")) as { results: TaskResult[] };
   for (const id of ["A", "B", "C", "C2", "D"]) {
     const all = ref.results.filter((r) => r.candidate === id);
-    if (all.length > 0) rows.push({ ...aggregate(id, all), n: 1 });
+    if (all.length > 0) rows.push({ ...aggregate(id, all), n: 1, models: [] });
   }
 }
 
@@ -262,7 +308,7 @@ const pct = (x: number | null): string => (x === null ? "—" : `${Math.round(x 
 process.stdout.write(`\nleaderboard — ${provider.model} @ ${provider.baseUrl} (completion↓, then tokens-per-completed-task↓, then usage↓)\n`);
 process.stdout.write(`per-task completion shows how many of n repeats passed: 3/1/2 = ran 3, passed 1, passed 2\n`);
 for (const row of rows) {
-  const warn = row.n < 3 ? "  ⚠ n<3, directional only" : "";
+  const warn = (row.n < 3 ? "  ⚠ n<3, directional only" : "") + (row.models.length > 1 ? `  ⚠ mixed models (${row.models.join(", ")})` : "");
   process.stdout.write(
     `${row.id.padEnd(26)} completed=${row.completed}/${row.tasks}  per-task=${row.outcomes}  n=${row.n}  ` +
     `first-call=${pct(row.firstCall)}  calls=${row.calls}  tok/task=${row.costPerCompletion ?? "—"}  ` +
