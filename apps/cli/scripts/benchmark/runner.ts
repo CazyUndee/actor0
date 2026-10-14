@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ResolvedProvider } from "../../src/config.js";
 import { runTurn } from "../../src/turn.js";
-import { type CandidateId, type RawCandidate } from "./candidates.js";
+import { type CandidateId, type RawCandidate, schemaHash } from "./candidates.js";
 import { createDispatcher } from "./dispatch.js";
 import type { Task } from "./tasks.js";
 import { createUnderlying } from "./underlying.js";
@@ -25,6 +25,8 @@ import { createUnderlying } from "./underlying.js";
 export type TaskResult = {
   candidate: CandidateId;
   taskId: string;
+  /** Hash of the exact schemas this run used — a result is meaningless without it. */
+  schemaHash: string;
   completed: boolean;
   /** Was the model's first tool call schema-valid? null if it made none. */
   firstCallValid: boolean | null;
@@ -97,6 +99,7 @@ export async function runCandidateOnTask(options: {
   const result: TaskResult = {
     candidate: candidate.id,
     taskId: task.id,
+    schemaHash: schemaHash(candidate),
     completed,
     firstCallValid: first ? first.schemaValid : null,
     recovered: firstInvalid >= 0 ? records.slice(firstInvalid + 1).some((r) => r.schemaValid) : null,

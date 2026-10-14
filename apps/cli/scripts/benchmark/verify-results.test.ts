@@ -11,7 +11,7 @@ import type { TaskResult } from "./runner.js";
  */
 
 const base: TaskResult = {
-  candidate: "B", taskId: "t", completed: false, firstCallValid: true, recovered: null,
+  candidate: "B", taskId: "t", schemaHash: "abc123", completed: false, firstCallValid: true, recovered: null,
   toolCalls: 1, schemaInvalid: 0, semanticInvalid: 0, unsupported: 0,
   usageTokens: 100, toolDefTokens: 10, latencyMs: 50, answer: "a real answer",
 };
