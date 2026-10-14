@@ -1,0 +1,2233 @@
+{
+  "metadata": {
+    "model": "agnes-3.0-flash",
+    "provider": "sapiens",
+    "baseUrl": "https://apihub.agnes-ai.com/v1",
+    "date": "2026-10-14T19:06:45.541Z",
+    "tokenizerNote": "tool-definition tokens approximated at ~4 chars/token; the target model's tokenizer was not available",
+    "providerLimitations": [
+      "Candidate D exposes a oneOf/const union; if the provider's structured tool-calling rejects it, D's turns fail and that is recorded, not masked.",
+      "delete is an unsupported capability (Actor0 has no delete); every candidate fails it and it is documented, not invented.",
+      "Candidate A is the exact production interface, which does not expose tree/index/web tools; the report does not adjust for that.",
+      "The gateway enforces a fair-share rate limit (~214s window); a run interrupted by it records failed turns, so build a full comparison with --resume one candidate per window."
+    ]
+  },
+  "schemas": [
+    {
+      "candidate": "A",
+      "label": "current production interface",
+      "hash": "82cfe81e082a2688",
+      "toolCount": 8,
+      "operations": [
+        "read",
+        "write",
+        "edit",
+        "glob",
+        "shell",
+        "task",
+        "skill",
+        "rg"
+      ],
+      "definitions": [
+        {
+          "name": "read",
+          "description": "Read a text file. Files are capped at 2000 lines / 50KB, and any single line longer than 500 characters is cut with a marker saying so; when either cap bites, the output ends with the exact offset=N to pass next. Prefer this over shelling out to `cat` — it is cheaper and it pages deterministically.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "File path, relative to the working directory."
+              },
+              "offset": {
+                "type": "number",
+                "description": "First line to return, 1-based. Use the offset named in a truncation note to continue a large file."
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of lines to return. Optional."
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        },
+        {
+          "name": "write",
+          "description": "Create a file or replace its entire contents. Parent directories are created automatically. Overwrites without asking. Use for new files or deliberate whole-file rewrites; use edit to change part of an existing file.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "File path, relative to the working directory."
+              },
+              "content": {
+                "type": "string",
+                "description": "The complete new contents of the file."
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ]
+          }
+        },
+        {
+          "name": "edit",
+          "description": "Replace an exact string in one file. old_string must appear exactly once unless replace_all is true; on zero or multiple matches nothing is written and the error says the count. CRLF line endings and a UTF-8 BOM are handled for you: quote the text as it looked when you read it. Prefer this over write for any change to part of a file.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "File path, relative to the working directory."
+              },
+              "old_string": {
+                "type": "string",
+                "description": "Exact text to replace, including indentation. Keep it as small as possible while still unique in the file."
+              },
+              "new_string": {
+                "type": "string",
+                "description": "Replacement text."
+              },
+              "replace_all": {
+                "type": "boolean",
+                "description": "Replace every occurrence. Defaults to false."
+              }
+            },
+            "required": [
+              "path",
+              "old_string",
+              "new_string"
+            ]
+          }
+        },
+        {
+          "name": "glob",
+          "description": "List files and directories by name pattern, without reading any of them. Prefer this to ls, dir, fd or find in the shell: it is the same listing on every platform, it needs no quoting, and it starts the walk at the fixed part of the pattern instead of at the whole tree. Directories come back with a trailing slash, so a bare name lists what is in a directory. A doubled star crosses directories and a single star does not; a pattern with no slash in it also matches the file name, so *.ts reaches apps/cli/ui/parts.tsx. Results are sorted by path, and the number matched is always reported, so a capped list cannot read as a complete one. Skips .git and node_modules.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Glob to match paths against, e.g. \"*.ts\", \"**/*.test.ts\" or \"apps/cli/src\"."
+              },
+              "path": {
+                "type": "string",
+                "description": "A directory to search. Defaults to the whole working directory."
+              },
+              "head_limit": {
+                "type": "number",
+                "description": "Stop after this many paths. Defaults to 100."
+              }
+            },
+            "required": [
+              "pattern"
+            ]
+          }
+        },
+        {
+          "name": "shell",
+          "description": "Run a command in the user's shell, in the working directory. This is PowerShell, not bash: use cmdlets and PowerShell operators. `Get-ChildItem`, `Get-Content`, `Select-String`, `Test-Path` exist; `ls` and `cat` are aliases for two of them. `find` does NOT exist — use `Get-ChildItem`. Quote paths in single quotes. Chain commands with `&&`. Returns stdout and stderr, then the exit code on the last line. Use for git, listing, searching, package managers, test runners — everything that is not a plain read/write/edit of one file. No timeout by default; pass timeout (seconds, max 3600) for anything that could hang. Output is capped, keeping the tail where errors are.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "The command line to run."
+              },
+              "timeout": {
+                "type": "number",
+                "description": "Kill the command after this many seconds. Optional; no default timeout."
+              }
+            },
+            "required": [
+              "command"
+            ]
+          }
+        },
+        {
+          "name": "task",
+          "description": "Delegate a self-contained subtask to a sub-agent that runs with the same tools and endpoint and returns its final answer. Use it to keep long research or multi-step work out of this conversation's context; the sub-agent cannot see this conversation, so the prompt must contain everything it needs. It returns the sub-agent's answer, or a note that it produced none.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "prompt": {
+                "type": "string",
+                "description": "The complete task for the sub-agent, in full — it cannot see this conversation, so include all context, file paths and goals it needs."
+              },
+              "description": {
+                "type": "string",
+                "description": "A short label for what the sub-agent is doing, shown on the activity line."
+              }
+            },
+            "required": [
+              "prompt"
+            ]
+          }
+        },
+        {
+          "name": "skill",
+          "description": "Load a skill's instructions by name. Skills are reusable playbooks; the system prompt lists their names and one-line descriptions, and this returns the full body to follow. Pass args to fill $ARGUMENTS in the body. Use it when a listed skill matches the task.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "The skill's name, exactly as listed in the prompt."
+              },
+              "args": {
+                "type": "string",
+                "description": "Optional text substituted for $ARGUMENTS in the skill body."
+              }
+            },
+            "required": [
+              "name"
+            ]
+          }
+        },
+        {
+          "name": "rg",
+          "description": "Search file contents with ripgrep and get back matching paths, matching lines with context, or match counts. Respects .gitignore and skips binaries. The pattern is a Rust regular expression (ripgrep syntax), not a glob. An include glob with no slash matches the file name, so *.ts reaches apps/cli/ui/parts.tsx. Prefer this to grepping in the shell.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Rust regular expression to search for."
+              },
+              "path": {
+                "type": "string",
+                "description": "A file or directory to search. Defaults to the whole working directory."
+              },
+              "include": {
+                "type": "string",
+                "description": "Only search paths matching this glob, e.g. \"*.ts\" or \"apps/**/test.ts\"."
+              },
+              "output_mode": {
+                "type": "string",
+                "enum": [
+                  "files_with_matches",
+                  "content",
+                  "count"
+                ],
+                "description": "matching paths (the default), matching lines with context, or the number of matching lines per file."
+              },
+              "context": {
+                "type": "number",
+                "description": "Lines either side of each match, for output_mode \"content\". Defaults to 0."
+              },
+              "case_insensitive": {
+                "type": "boolean",
+                "description": "Match without regard to case. Defaults to false."
+              },
+              "multiline": {
+                "type": "boolean",
+                "description": "Let the pattern cross line ends. Defaults to false."
+              },
+              "head_limit": {
+                "type": "number",
+                "description": "Stop after this many results. Defaults to 250."
+              }
+            },
+            "required": [
+              "pattern"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "candidate": "B",
+      "label": "flat specialised tools",
+      "hash": "473a6dadc38c9158",
+      "toolCount": 13,
+      "operations": [
+        "read",
+        "grep",
+        "glob",
+        "tree",
+        "index",
+        "skill",
+        "web_search",
+        "fetch",
+        "write",
+        "edit",
+        "delete",
+        "shell",
+        "delegate"
+      ],
+      "definitions": [
+        {
+          "name": "read",
+          "description": "Read a text file. Lines are 1-based; use offset and limit to select a range.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "offset": {
+                "type": "integer",
+                "description": "First line, default 1"
+              },
+              "limit": {
+                "type": "integer",
+                "description": "Maximum lines to return"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "grep",
+          "description": "Search file contents using a regex or literal pattern.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string",
+                "description": "File or directory, default workspace root"
+              },
+              "glob": {
+                "type": "string",
+                "description": "Optional file-matching glob"
+              },
+              "literal": {
+                "type": "boolean",
+                "description": "Treat pattern as literal text"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "glob",
+          "description": "Find files matching a glob pattern.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string",
+                "description": "Base directory, default workspace root"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "tree",
+          "description": "Show the directory tree.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Directory, default workspace root"
+              },
+              "depth": {
+                "type": "integer",
+                "description": "Maximum depth, default 2"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "index",
+          "description": "Query the repository index.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "skill",
+          "description": "Load a skill by name.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "web_search",
+          "description": "Search the web and return relevant results.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "integer",
+                "description": "Maximum results"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "fetch",
+          "description": "Fetch a URL and return its content as text.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "description": "Create a file or replace its entire contents.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string",
+                "description": "Exact file contents"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "edit",
+          "description": "Replace exact text in an existing file.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "old": {
+                "type": "string",
+                "description": "Exact existing text"
+              },
+              "new": {
+                "type": "string",
+                "description": "Replacement text"
+              },
+              "all": {
+                "type": "boolean",
+                "description": "Replace all matches instead of requiring a unique match"
+              }
+            },
+            "required": [
+              "path",
+              "old",
+              "new"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "delete",
+          "description": "Delete a file or directory.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "shell",
+          "description": "Run a shell command in the workspace. Each call starts a fresh process.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "timeout": {
+                "type": "integer",
+                "description": "Timeout in seconds, default 120"
+              }
+            },
+            "required": [
+              "command"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "delegate",
+          "description": "Delegate a self-contained task to a subagent and return its result.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "candidate": "C",
+      "label": "five tools grouped by effect class",
+      "hash": "8b1d5c518bae527e",
+      "toolCount": 5,
+      "operations": [
+        "read",
+        "grep",
+        "glob",
+        "tree",
+        "index",
+        "skill",
+        "write",
+        "edit",
+        "delete",
+        "shell",
+        "search",
+        "fetch",
+        "delegate"
+      ],
+      "definitions": [
+        {
+          "name": "inspect",
+          "description": "Perform a read-only local inspection. Choose an operation using op.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "read",
+                  "grep",
+                  "glob",
+                  "tree",
+                  "index",
+                  "skill"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "pattern": {
+                "type": "string"
+              },
+              "glob": {
+                "type": "string"
+              },
+              "query": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "offset": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "depth": {
+                "type": "integer"
+              },
+              "literal": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "modify",
+          "description": "Create, replace, edit, or delete files. Choose an operation using op.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "write",
+                  "edit",
+                  "delete"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "old": {
+                "type": "string"
+              },
+              "new": {
+                "type": "string"
+              },
+              "all": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "op",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "shell",
+          "description": "Execute a shell command.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "timeout": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "command"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "web",
+          "description": "Search the web or fetch a URL. Choose an operation using op.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "search",
+                  "fetch"
+                ]
+              },
+              "query": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "delegate",
+          "description": "Delegate a task to a subagent.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "candidate": "C2",
+      "label": "grouped tools, hardened descriptions",
+      "hash": "617bbfd24cca9dcb",
+      "toolCount": 5,
+      "operations": [
+        "read",
+        "grep",
+        "glob",
+        "tree",
+        "index",
+        "skill",
+        "write",
+        "edit",
+        "delete",
+        "shell",
+        "search",
+        "fetch",
+        "delegate"
+      ],
+      "definitions": [
+        {
+          "name": "inspect",
+          "description": "Read-only local inspection. Pick op and supply that op's argument: read→path; grep→pattern (optional path, glob); glob→pattern (optional path); tree→path, depth (both optional); index→query; skill→name.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "read",
+                  "grep",
+                  "glob",
+                  "tree",
+                  "index",
+                  "skill"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "pattern": {
+                "type": "string"
+              },
+              "glob": {
+                "type": "string"
+              },
+              "query": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "offset": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "depth": {
+                "type": "integer"
+              },
+              "literal": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "modify",
+          "description": "Change one file. Pick op and supply that op's arguments: write→path + content; edit→path + old + new (optional all); delete→path.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "write",
+                  "edit",
+                  "delete"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "old": {
+                "type": "string"
+              },
+              "new": {
+                "type": "string"
+              },
+              "all": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "op",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "shell",
+          "description": "Execute a shell command.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "timeout": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "command"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "web",
+          "description": "Search the web or fetch a URL. op=search→query (optional limit); op=fetch→url.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "search",
+                  "fetch"
+                ]
+              },
+              "query": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "delegate",
+          "description": "Delegate a task to a subagent.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "candidate": "D",
+      "label": "one universal structured action tool",
+      "hash": "7223fdc1d4ea0581",
+      "toolCount": 1,
+      "operations": [
+        "read",
+        "grep",
+        "glob",
+        "tree",
+        "index",
+        "skill",
+        "web_search",
+        "fetch",
+        "write",
+        "edit",
+        "delete",
+        "shell",
+        "delegate"
+      ],
+      "definitions": [
+        {
+          "name": "act",
+          "description": "Perform exactly one operation. Choose op and provide that operation's arguments.",
+          "input_schema": {
+            "type": "object",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "read"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "offset": {
+                    "type": "integer"
+                  },
+                  "limit": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "op",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "grep"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "glob": {
+                    "type": "string"
+                  },
+                  "literal": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "op",
+                  "pattern"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "glob"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "pattern"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "tree"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "depth": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "index"
+                  },
+                  "query": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "query"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "skill"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "web_search"
+                  },
+                  "query": {
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "op",
+                  "query"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "fetch"
+                  },
+                  "url": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "url"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "write"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "path",
+                  "content"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "edit"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "old": {
+                    "type": "string"
+                  },
+                  "new": {
+                    "type": "string"
+                  },
+                  "all": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "op",
+                  "path",
+                  "old",
+                  "new"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "shell"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "timeout": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "op",
+                  "command"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delegate"
+                  },
+                  "task": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "task"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "summaries": [
+    {
+      "candidate": "A",
+      "schemaHash": "82cfe81e082a2688",
+      "tasks": 11,
+      "completed": 4,
+      "completionRate": 0.36363636363636365,
+      "firstCallValidRate": 1,
+      "recoveryRate": 0.5,
+      "toolCalls": 18,
+      "schemaInvalid": 4,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 48142,
+      "toolDefTokens": 1767,
+      "avgLatencyMs": 13364
+    },
+    {
+      "candidate": "B",
+      "schemaHash": "473a6dadc38c9158",
+      "tasks": 11,
+      "completed": 3,
+      "completionRate": 0.2727272727272727,
+      "firstCallValidRate": 1,
+      "recoveryRate": null,
+      "toolCalls": 12,
+      "schemaInvalid": 0,
+      "semanticInvalid": 1,
+      "unsupported": 0,
+      "usageTokens": 39305,
+      "toolDefTokens": 998,
+      "avgLatencyMs": 11265
+    },
+    {
+      "candidate": "C",
+      "schemaHash": "8b1d5c518bae527e",
+      "tasks": 11,
+      "completed": 2,
+      "completionRate": 0.18181818181818182,
+      "firstCallValidRate": 0.75,
+      "recoveryRate": 0,
+      "toolCalls": 6,
+      "schemaInvalid": 1,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 15252,
+      "toolDefTokens": 442,
+      "avgLatencyMs": 11630
+    },
+    {
+      "candidate": "C2",
+      "schemaHash": "617bbfd24cca9dcb",
+      "tasks": 11,
+      "completed": 6,
+      "completionRate": 0.5454545454545454,
+      "firstCallValidRate": 1,
+      "recoveryRate": null,
+      "toolCalls": 14,
+      "schemaInvalid": 0,
+      "semanticInvalid": 2,
+      "unsupported": 0,
+      "usageTokens": 44434,
+      "toolDefTokens": 495,
+      "avgLatencyMs": 10408
+    },
+    {
+      "candidate": "D",
+      "schemaHash": "7223fdc1d4ea0581",
+      "tasks": 11,
+      "completed": 4,
+      "completionRate": 0.36363636363636365,
+      "firstCallValidRate": 1,
+      "recoveryRate": null,
+      "toolCalls": 15,
+      "schemaInvalid": 0,
+      "semanticInvalid": 4,
+      "unsupported": 0,
+      "usageTokens": 5198,
+      "toolDefTokens": 581,
+      "avgLatencyMs": 12088
+    }
+  ],
+  "results": [
+    {
+      "candidate": "A",
+      "taskId": "read-and-report",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 7388,
+      "toolDefTokens": 1767,
+      "latencyMs": 2080,
+      "answer": "4242"
+    },
+    {
+      "candidate": "A",
+      "taskId": "create-file",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 1767,
+      "latencyMs": 10176,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014190728745312125eFwkZ5P8). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "A",
+      "taskId": "edit-file",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 1767,
+      "latencyMs": 8867,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014190741633667807OaJmWArQ). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "A",
+      "taskId": "search-and-report",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 1767,
+      "latencyMs": 8720,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014190754358978637ZjBvp2ZQ). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "A",
+      "taskId": "list-and-report",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 7370,
+      "toolDefTokens": 1767,
+      "latencyMs": 32047,
+      "answer": "Yes"
+    },
+    {
+      "candidate": "A",
+      "taskId": "rename-symbol",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": true,
+      "recovered": false,
+      "toolCalls": 4,
+      "schemaInvalid": 2,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 1767,
+      "latencyMs": 23862,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014190858292729558BAzFcyv9). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "A",
+      "taskId": "fix-off-by-one",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 1767,
+      "latencyMs": 8944,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014190911239390007Xb0BbxvS). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "A",
+      "taskId": "count-todos",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 1767,
+      "latencyMs": 8871,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014190924135658944sDcvjkkr). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "A",
+      "taskId": "create-and-wire",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 2,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 1767,
+      "latencyMs": 13944,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 2026101419094293198334Q3nnr1ti). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "A",
+      "taskId": "multi-step-refactor",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": true,
+      "toolCalls": 8,
+      "schemaInvalid": 2,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 33384,
+      "toolDefTokens": 1767,
+      "latencyMs": 19022,
+      "answer": "Done.\n\n- **Bug fixed**: `computeTotal` no longer adds 1 to the sum — it now returns `sum` directly.\n- **Renamed**: `computeTotal` → `calculateTotal` in both the definition (`src/math.ts`) and its call site/import (`src/index.ts`).\n- **Confirmed**: `rg -n 'computeTotal' src` returns no matches, so nothing under `src/` still mentions `computeTotal`."
+    },
+    {
+      "candidate": "A",
+      "taskId": "find-and-report-multi",
+      "schemaHash": "82cfe81e082a2688",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 1767,
+      "latencyMs": 10476,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191019612867462z2UxcubG). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "B",
+      "taskId": "read-and-report",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 998,
+      "latencyMs": 8836,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191032453571629d2g7mx8I). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "B",
+      "taskId": "create-file",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 998,
+      "latencyMs": 8789,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191045267276998xzVHXvSR). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "B",
+      "taskId": "edit-file",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 5,
+      "schemaInvalid": 0,
+      "semanticInvalid": 1,
+      "unsupported": 0,
+      "usageTokens": 19319,
+      "toolDefTokens": 998,
+      "latencyMs": 12112,
+      "answer": "Done — changed the word DRAFT to FINAL in config.txt, nothing else."
+    },
+    {
+      "candidate": "B",
+      "taskId": "search-and-report",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 6138,
+      "toolDefTokens": 998,
+      "latencyMs": 6086,
+      "answer": "src/b.txt"
+    },
+    {
+      "candidate": "B",
+      "taskId": "list-and-report",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 998,
+      "latencyMs": 9031,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191124530355602r2okNf2B). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "B",
+      "taskId": "rename-symbol",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 998,
+      "latencyMs": 8711,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191137241404029cCZ9PuA1). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "B",
+      "taskId": "fix-off-by-one",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 998,
+      "latencyMs": 8467,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191149715978788uKQgS9rx). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "B",
+      "taskId": "count-todos",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 3,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 998,
+      "latencyMs": 22394,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191216122541229R71TrLAx). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "B",
+      "taskId": "create-and-wire",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 998,
+      "latencyMs": 8541,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191228677578423YXqU5SF2). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "B",
+      "taskId": "multi-step-refactor",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 998,
+      "latencyMs": 9127,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191241816115655jQQviV7J). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "B",
+      "taskId": "find-and-report-multi",
+      "schemaHash": "473a6dadc38c9158",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 3,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 13848,
+      "toolDefTokens": 998,
+      "latencyMs": 21820,
+      "answer": "Here are the files under `src/` containing the word **TODO**:\n\n| File | TODO lines |\n|---|---|\n| `src/extra.md` | 3 |\n| `src/notes.md` | 2 |\n\n**Total TODO count across all files: 5**\n\nFor reference, the matching lines are:\n- `src/extra.md`: `TODO: one`, `TODO: two`, `TODO: three`\n- `src/notes.md`: `TODO: add more functions`, `TODO: write tests`"
+    },
+    {
+      "candidate": "C",
+      "taskId": "read-and-report",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 442,
+      "latencyMs": 14105,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 2026101419132576853234504uND7nG). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C",
+      "taskId": "create-file",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 442,
+      "latencyMs": 8957,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191338729935578DPfsejvq). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C",
+      "taskId": "edit-file",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 442,
+      "latencyMs": 8690,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191351444659308WarYsiSQ). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C",
+      "taskId": "search-and-report",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 3,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 10325,
+      "toolDefTokens": 442,
+      "latencyMs": 18867,
+      "answer": "src/b.txt"
+    },
+    {
+      "candidate": "C",
+      "taskId": "list-and-report",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 442,
+      "latencyMs": 9164,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191427454077657Z2ifQACX). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C",
+      "taskId": "rename-symbol",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 442,
+      "latencyMs": 9154,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 202610141914406646874431eJB2KM7). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C",
+      "taskId": "fix-off-by-one",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 442,
+      "latencyMs": 8868,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191453550139747ARmZB94Z). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C",
+      "taskId": "count-todos",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 4927,
+      "toolDefTokens": 442,
+      "latencyMs": 3822,
+      "answer": "2"
+    },
+    {
+      "candidate": "C",
+      "taskId": "create-and-wire",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": false,
+      "recovered": false,
+      "toolCalls": 1,
+      "schemaInvalid": 1,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 442,
+      "latencyMs": 28499,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191533895441824TIujTfbm). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C",
+      "taskId": "multi-step-refactor",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 442,
+      "latencyMs": 9264,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 202610141915471626192666doqQjLp). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C",
+      "taskId": "find-and-report-multi",
+      "schemaHash": "8b1d5c518bae527e",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 442,
+      "latencyMs": 8545,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191559720403666tWK34hAt). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C2",
+      "taskId": "read-and-report",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 5018,
+      "toolDefTokens": 495,
+      "latencyMs": 5622,
+      "answer": "4242"
+    },
+    {
+      "candidate": "C2",
+      "taskId": "create-file",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 5077,
+      "toolDefTokens": 495,
+      "latencyMs": 2164,
+      "answer": "Created hello.txt containing the single line `hi there`."
+    },
+    {
+      "candidate": "C2",
+      "taskId": "edit-file",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 3,
+      "schemaInvalid": 0,
+      "semanticInvalid": 1,
+      "unsupported": 0,
+      "usageTokens": 10444,
+      "toolDefTokens": 495,
+      "latencyMs": 12390,
+      "answer": "Changed `DRAFT` to `FINAL` in config.txt."
+    },
+    {
+      "candidate": "C2",
+      "taskId": "search-and-report",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 4994,
+      "toolDefTokens": 495,
+      "latencyMs": 2871,
+      "answer": "src/b.txt"
+    },
+    {
+      "candidate": "C2",
+      "taskId": "list-and-report",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 495,
+      "latencyMs": 8383,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 202610141916512044728464vvRELiU). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C2",
+      "taskId": "rename-symbol",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 495,
+      "latencyMs": 8852,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 2026101419170472946255nClHDWKj). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C2",
+      "taskId": "fix-off-by-one",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 4,
+      "schemaInvalid": 0,
+      "semanticInvalid": 1,
+      "unsupported": 0,
+      "usageTokens": 13545,
+      "toolDefTokens": 495,
+      "latencyMs": 22585,
+      "answer": "Fixed `src/math.ts` — `computeTotal` now returns the plain sum.\n\n```ts\nexport function computeTotal(nums: number[]): number {\n  let sum = 0;\n  for (const n of nums) sum += n;\n  return sum;\n}\n```"
+    },
+    {
+      "candidate": "C2",
+      "taskId": "count-todos",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 3,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 495,
+      "latencyMs": 18043,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191752718028653LSmAeVdm). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C2",
+      "taskId": "create-and-wire",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 495,
+      "latencyMs": 8178,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191804915896550ERvZeOyR). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C2",
+      "taskId": "multi-step-refactor",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 495,
+      "latencyMs": 9785,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191818716633544kTUmygQd). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "C2",
+      "taskId": "find-and-report-multi",
+      "schemaHash": "617bbfd24cca9dcb",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 5356,
+      "toolDefTokens": 495,
+      "latencyMs": 15611,
+      "answer": "Two files under `src/` contain the word `TODO`:\n\n- `src/extra.md` — 3 TODO lines\n- `src/notes.md` — 2 TODO lines\n\nTotal: 5 TODO lines across all files."
+    },
+    {
+      "candidate": "D",
+      "taskId": "read-and-report",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 5198,
+      "toolDefTokens": 581,
+      "latencyMs": 2713,
+      "answer": "4242"
+    },
+    {
+      "candidate": "D",
+      "taskId": "create-file",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 1,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 581,
+      "latencyMs": 10681,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 2026101419185976397483901Z3aWUe). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "D",
+      "taskId": "edit-file",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 581,
+      "latencyMs": 8710,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191912484701139dmOuRJFG). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "D",
+      "taskId": "search-and-report",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 581,
+      "latencyMs": 8315,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191924818848440c43kt02a). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "D",
+      "taskId": "list-and-report",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 581,
+      "latencyMs": 9399,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014191938210171723t7rNnCD4). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "D",
+      "taskId": "rename-symbol",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 7,
+      "schemaInvalid": 0,
+      "semanticInvalid": 2,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 581,
+      "latencyMs": 20953,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 202610141920031761868572ot2FLQk). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "D",
+      "taskId": "fix-off-by-one",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 581,
+      "latencyMs": 8948,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 202610141920161419088369dew2Yqo). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "D",
+      "taskId": "count-todos",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 581,
+      "latencyMs": 8991,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 202610141920291354721083z8MJNGa). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "D",
+      "taskId": "create-and-wire",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": true,
+      "firstCallValid": true,
+      "recovered": null,
+      "toolCalls": 6,
+      "schemaInvalid": 0,
+      "semanticInvalid": 2,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 581,
+      "latencyMs": 36854,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 202610141921102775043T8TkzlRR). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "D",
+      "taskId": "multi-step-refactor",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 581,
+      "latencyMs": 8688,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014192122703339948OaLP2MJB). The harness will retry with backoff.)"
+    },
+    {
+      "candidate": "D",
+      "taskId": "find-and-report-multi",
+      "schemaHash": "7223fdc1d4ea0581",
+      "model": "agnes-3.0-flash",
+      "harnessError": false,
+      "completed": false,
+      "firstCallValid": null,
+      "recovered": null,
+      "toolCalls": 0,
+      "schemaInvalid": 0,
+      "semanticInvalid": 0,
+      "unsupported": 0,
+      "usageTokens": 0,
+      "toolDefTokens": 581,
+      "latencyMs": 8713,
+      "answer": "(turn failed: HTTP 429 Too Many Requests from https://apihub.agnes-ai.com/v1/chat/completions (application/json; charset=utf-8): You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20261014192135436339977Pj6MqkW3). The harness will retry with backoff.)"
+    }
+  ]
+}
