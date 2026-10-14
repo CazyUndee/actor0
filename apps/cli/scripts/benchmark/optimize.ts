@@ -95,8 +95,10 @@ const NO_PROBE = process.argv.includes("--no-probe");
 // After a failed probe burst the gateway may be dark for a long while. Instead of
 // dying and asking a human to restart, fall back to deep sleep and keep going:
 // that is what "collects across as many windows as it needs" actually means.
-// --max-idle caps how many 300s deep-sleep cycles to survive (default 48).
-const MAX_IDLE = Math.max(1, Number(flag("--max-idle") ?? "48"));
+// --max-idle caps how many 300s deep-sleep cycles to survive; default 0 = run
+// until the gateway returns, which is the point: collection spans however many
+// windows it needs, and a stopped loop is just a later --resume.
+const MAX_IDLE = Number(flag("--max-idle") ?? "0"); // 0 = unbounded
 const waitForHealthy = async (): Promise<boolean> => {
   if (NO_PROBE) return true;
   let idle = 0;
@@ -111,7 +113,7 @@ const waitForHealthy = async (): Promise<boolean> => {
       await new Promise((r) => setTimeout(r, waitMs));
     }
     idle += 1;
-    if (idle > MAX_IDLE) {
+    if (MAX_IDLE > 0 && idle > MAX_IDLE) {
       process.stderr.write(`… gateway still dark after ${idle - 1} deep-sleep cycles; stopping; --resume later\n`);
       return false;
     }
