@@ -29,6 +29,10 @@ export type TaskResult = {
   schemaHash: string;
   /** The model that produced this result. Across-model results are not comparable. */
   model: string;
+  /** True when the harness itself miswired a tool call this turn — the
+   *  dispatcher recorded an error that is a defect of the benchmark, not of the
+   *  model or the interface. Such turns are never comparable. */
+  harnessError?: boolean;
   completed: boolean;
   /** Was the model's first tool call schema-valid? null if it made none. */
   firstCallValid: boolean | null;
@@ -103,6 +107,7 @@ export async function runCandidateOnTask(options: {
     taskId: task.id,
     schemaHash: schemaHash(candidate),
     model: provider.model,
+    harnessError: records.some((r) => r.error?.startsWith("no dispatcher")),
     completed,
     firstCallValid: first ? first.schemaValid : null,
     recovered: firstInvalid >= 0 ? records.slice(firstInvalid + 1).some((r) => r.schemaValid) : null,

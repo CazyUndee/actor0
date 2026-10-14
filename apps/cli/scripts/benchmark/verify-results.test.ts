@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isBadPatch, isInvalid, partitionResults } from "./verify-results.js";
+import { isBadPatch, isHarnessError, isInvalid, partitionResults } from "./verify-results.js";
 import type { TaskResult } from "./runner.js";
 
 /**
@@ -45,4 +45,25 @@ test("a bad-patch turn is detected and excluded from comparison", () => {
   const { comparable, badPatch: flagged } = partitionResults([base, badPatch, artifact]);
   assert.deepEqual(flagged.map((r) => r.answer), [badPatch.answer]);
   assert.equal(comparable.length, 1, "only the clean turn is comparable");
+});
+
+/**
+ * A harness-error turn: the benchmark itself was miswired for that turn (the
+ * dispatcher could not resolve the candidate), so the answer describes the
+ * tooling failure, not the model or the interface. Such a turn is comparable
+ * to nothing. Old files carry the echo of the error in the answer; new ones
+ * carry the field.
+ */
+const legacyTainted: TaskResult = { ...base, completed: false, answer: "My tools are returning \"no dispatcher for candidate g-none-full\" errors on every call." };
+const freshTainted: TaskResult = { ...base, completed: false, harnessError: true, answer: "I was unable to read the file." };
+
+test("a harness-miswired turn is excluded from comparison", () => {
+  assert.equal(isHarnessError(legacyTainted), true, "legacy files: the model echoes the dispatcher error");
+  assert.equal(isHarnessError(freshTainted), true, "new files: the field says so directly");
+  assert.equal(isHarnessError(base), false);
+  assert.equal(isHarnessError(artifact), false, "transport failures are invalid, not harness errors");
+
+  const { comparable, harnessError } = partitionResults([base, legacyTainted, freshTainted]);
+  assert.equal(comparable.length, 1, "only the clean turn is comparable");
+  assert.equal(harnessError.length, 2);
 });

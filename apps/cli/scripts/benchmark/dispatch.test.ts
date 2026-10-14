@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolCall } from "@actor0/harness";
-import { CANDIDATE_B, CANDIDATE_C, CANDIDATE_D, captureCandidateA, schemaHash } from "./candidates.js";
+import { CANDIDATE_B, CANDIDATE_C, CANDIDATE_D, CANDIDATE_E, buildCatalogCandidate, captureCandidateA, schemaHash } from "./candidates.js";
 import { createDispatcher, type CallRecord } from "./dispatch.js";
 import { createUnderlying } from "./underlying.js";
 
@@ -131,5 +131,38 @@ test("delete is a real, well-formed operation Actor0 cannot perform — recorded
     const d = await run("D", dir, call("act", { op: "delete", path: "note.txt" }));
     assert.equal(d.record.unsupported, true);
     assert.match(d.output, /not a capability/);
+  });
+});
+
+import { buildGroupedCandidate, DEFAULT_PLAN, EAGER_PRESETS } from "./variants.js";
+
+/**
+ * Plan coverage: every candidate the optimization loop measures must be
+ * dispatchable. This is the regression the loop wasted its data on: resolve()
+ * knew the six static candidate ids but let the g-* grouped variants and the
+ * cat-* catalog variants fall through to "no dispatcher", so every tool call in
+ * every loop turn failed and the failures read as model behaviour. A new family
+ * of variant ids must fail here, not in a 12-variant sweep of garbage.
+ */
+test("every candidate in the loop plan dispatches a valid call", async () => {
+  const plan = [
+    ...DEFAULT_PLAN.map(buildGroupedCandidate),
+    CANDIDATE_E,
+    ...EAGER_PRESETS.map((preset) => buildCatalogCandidate(`cat-${preset.id}`, preset.eager)),
+  ];
+  await withWorkspace(async (dir) => {
+    for (const candidate of plan) {
+      // A call valid for the candidate's tool shape: grouped variants use the
+      // C-family tools, catalog variants use the flat operation names.
+      const isGrouped = candidate.id.startsWith("g-");
+      const dispatcher = createDispatcher(candidate, createUnderlying({ cwd: dir }));
+      const output = await dispatcher.execute(
+        call(isGrouped ? "inspect" : "read", isGrouped ? { op: "read", path: "note.txt" } : { path: "note.txt" }),
+        new AbortController().signal,
+      );
+      const record = dispatcher.records[dispatcher.records.length - 1]!;
+      assert.ok(!/no dispatcher/i.test(output), `${candidate.id}: fell through the dispatcher: ${output}`);
+      assert.equal(record.schemaValid, true, `${candidate.id}: the call must be schema-valid`);
+    }
   });
 });

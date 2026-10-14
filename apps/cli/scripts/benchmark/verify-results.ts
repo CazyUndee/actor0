@@ -43,18 +43,30 @@ export const isBadPatch = (result: TaskResult): boolean =>
  * A result is comparable only if it is real (not a transport failure) and was
  * not taken during a gateway bad patch. Everything else is re-runnable.
  */
-export const isComparable = (result: TaskResult): boolean => !isInvalid(result) && !isBadPatch(result);
+/**
+ * True when the harness itself miswired a tool call during the turn: the
+ * dispatcher recorded an error that is a defect of the benchmark, not of the
+ * model or the interface. Recorded at the source (TaskResult.harnessError)
+ * when the field exists; for older files the tell is the model echoing the
+ * dispatcher error in its answer.
+ */
+export const isHarnessError = (result: TaskResult): boolean =>
+  !isInvalid(result) && (result.harnessError === true || /no dispatcher/i.test(result.answer));
+
+export const isComparable = (result: TaskResult): boolean => !isInvalid(result) && !isBadPatch(result) && !isHarnessError(result);
 
 export function partitionResults(results: TaskResult[]): {
   valid: TaskResult[];
   invalid: TaskResult[];
   badPatch: TaskResult[];
+  harnessError: TaskResult[];
   comparable: TaskResult[];
 } {
   return {
     valid: results.filter((r) => !isInvalid(r)),
     invalid: results.filter(isInvalid),
     badPatch: results.filter(isBadPatch),
+    harnessError: results.filter(isHarnessError),
     comparable: results.filter(isComparable),
   };
 }
@@ -69,16 +81,17 @@ if (isMain()) {
   }
   const clean = process.argv.includes("--clean");
   const report = JSON.parse(readFileSync(file, "utf8")) as { results: TaskResult[] };
-  const { valid, invalid, badPatch, comparable } = partitionResults(report.results);
+  const { valid, invalid, badPatch, harnessError, comparable } = partitionResults(report.results);
   for (const r of report.results) {
-    const flag = isInvalid(r) ? "INVALID " : isBadPatch(r) ? "BAD-PATCH" : "valid   ";
+    const flag = isInvalid(r) ? "INVALID " : isHarnessError(r) ? "HARNESS " : isBadPatch(r) ? "BADPATCH" : "valid   ";
     console.log(`${r.candidate}  ${r.taskId.padEnd(20)} ${flag}  completed=${r.completed}  calls=${r.toolCalls}`);
   }
-  console.log(`\n${valid.length} valid, ${invalid.length} invalid (rate-limit / transport), ${badPatch.length} bad-patch (gateway degraded)`);
-  console.log(`${comparable.length} comparable (valid and not bad-patch)`);
-  if (clean && invalid.length + badPatch.length > 0) {
+  console.log(`\n${valid.length} valid, ${invalid.length} invalid (rate-limit / transport), ${badPatch.length} bad-patch (gateway degraded), ${harnessError.length} harness-error (miswired)`);
+  console.log(`${comparable.length} comparable (valid, not bad-patch, no harness error)`);
+  const removed = invalid.length + badPatch.length + harnessError.length;
+  if (clean && removed > 0) {
     report.results = comparable;
     writeFileSync(file, JSON.stringify(report, null, 2));
-    console.log(`removed ${invalid.length + badPatch.length}; a --resume run re-runs exactly those.`);
+    console.log(`removed ${removed}; a --resume run re-runs exactly those.`);
   }
 }
