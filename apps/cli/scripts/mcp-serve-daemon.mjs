@@ -1,38 +1,45 @@
 /**
- * Run the Actor0 MCP server ("the ChatGPT plugin") as a background service.
+ * Run the Actor0 MCP service — the "ChatGPT plugin" — as a background service.
  *
- * MCP's native transport is stdio, where the client (ChatGPT's connector,
- * Codex) spawns the server itself. This script is for the other case: keeping
- * a single long-lived instance up so it can be talked to and inspected on
- * demand. It wraps `mcp-serve.ts` in a small bridge that holds the server's
- * stdin open for its whole life and forwards JSON lines between the server
- * and a localhost TCP socket — every response line is broadcast to all
- * connected clients, every request line fed to the server's stdin.
+ * One script manages the two things that keep the harness reachable:
+ *
+ * 1. The local bridge: spawns `mcp-serve.ts` with its stdin held open for the
+ *    daemon's whole life and forwards JSON lines between it and a localhost
+ *    TCP socket. This is for local inspection and testing — talk to it with
+ *    any MCP client over TCP.
+ * 2. The OpenAI Secure MCP Tunnel: spawns `tunnel-client run --profile actor0`
+ *    so ChatGPT's connector (chatgpt.com → Plugins → actor0) can reach the
+ *    same tools through OpenAI's control plane. The tunnel profile's own
+ *    mcp.command spawns the MCP server for ChatGPT — this script only keeps
+ *    the daemon alive.
  *
  *   node apps/cli/scripts/mcp-serve-daemon.mjs [start|status|stop] [--port N]
  *
- *   start   launch if not already up (idempotent; the default when no command
- *           is given)
- *   status  report whether the bridge is answering, and which pids own it
- *   stop    shut the whole tree down
+ *   start   launch both if not already up (idempotent; the default when no
+ *           command is given). The tunnel half needs CONTROL_PLANE_API_KEY in
+ *           the environment; without it the bridge still comes up and start
+ *           reports the missing key (exit 2).
+ *   status  report the bridge and the tunnel daemon
+ *   stop    shut both down
  *
- * `daemon` is a hidden mode: the spawned child runs it so it executes the
- * bridge in-process and never re-spawns itself. It is not a user command.
+ * `daemon` and `tunnel` are hidden modes the spawned children run so they
+ * execute in-process and never re-spawn themselves. They are not user
+ * commands.
  *
- * State lives outside the checkout: a pid file and a log under $HOME
- * (.mcp-serve-daemon-<port>.{pid,log}).
+ * State lives outside the checkout: pid files and logs under $HOME
+ * (.mcp-serve-daemon-<port>.pid, .mcp-serve-tunnel.pid, .mcp-serve-tunnel.log).
  */
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { existsSync, writeFileSync, readFileSync, rmSync, appendFileSync } from "node:fs";
+import { existsSync, writeFileSync, readFileSync, rmSync, appendFileSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 
 const args = process.argv.slice(2);
-const command = args.includes("daemon")
-  ? "daemon"
+const command = args.includes("daemon") || args.includes("tunnel")
+  ? (args.includes("tunnel") ? "tunnel" : "daemon")
   : (["start", "status", "stop"].find((a) => args.includes(a)) ?? "start");
 const portFlag = args.indexOf("--port");
 const port = portFlag !== -1 ? Number(args[portFlag + 1]) : Number(process.env.MCP_SERVE_PORT ?? 47501);
@@ -41,10 +48,19 @@ const port = portFlag !== -1 ? Number(args[portFlag + 1]) : Number(process.env.M
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(join(scriptDir, "..", "..", ".."));
 const tsx = join(repo, "node_modules", "tsx", "dist", "cli.mjs");
+
+// --- shared state ----------------------------------------------------------
 const stateBase = join(homedir(), `.mcp-serve-daemon-${port}`);
 const pidFile = `${stateBase}.pid`;
 const logFile = `${stateBase}.log`;
 const note = (message) => appendFileSync(logFile, `${new Date().toISOString()} ${message}\n`);
+
+// Tunnel daemon state (independent of the bridge port; one tunnel profile).
+const tunnelExe = join(homedir(), ".cache", "tunnel-client", "tunnel-client.exe");
+const tunnelProfile = process.env.MCP_TUNNEL_PROFILE ?? "actor0";
+const tunnelPidFile = join(homedir(), ".mcp-serve-tunnel.pid");
+const tunnelLogFile = join(homedir(), ".mcp-serve-tunnel.log");
+const tunnelHealthPort = 8080; // health.listen_addr in AppData\\Roaming\\tunnel-client\\actor0.yaml
 
 /** Is a process with this pid alive on this platform? */
 function alive(pid) {
@@ -54,6 +70,10 @@ function alive(pid) {
   } catch (error) {
     return error.code === "EPERM"; // exists but not ours to signal
   }
+}
+
+function wait(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
 /** Does anything accept TCP connections on this port? */
@@ -90,6 +110,18 @@ function bridgeHandshakes(port) {
     socket.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })}\n`);
   });
 }
+
+/** Is the tunnel daemon answering its health endpoint? */
+async function tunnelIsUp() {
+  try {
+    const response = await fetch(`http://127.0.0.1:${tunnelHealthPort}/readyz`, { signal: AbortSignal.timeout(4000) });
+    return response.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+// --- the bridge (local inspection) -----------------------------------------
 
 /** The bridge itself: spawn the server, hold its stdin open, serve it over TCP. */
 function runDaemon() {
@@ -145,51 +177,108 @@ function runDaemon() {
   bridge.on("error", (error) => { note(`bridge error ${error.message}`); process.exit(1); });
 }
 
-function wait(ms) {
-  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+// --- the tunnel (ChatGPT) ---------------------------------------------------
+
+/** Start the tunnel daemon detached; true if it is answering health after 20s. */
+async function startTunnel() {
+  if (await tunnelIsUp()) {
+    console.log(`tunnel already up: 127.0.0.1:${tunnelHealthPort}/readyz answers (pid ${existsSync(tunnelPidFile) ? readFileSync(tunnelPidFile, "utf8").trim() : "?"})`);
+    return true;
+  }
+  const recorded = existsSync(tunnelPidFile) ? Number(readFileSync(tunnelPidFile, "utf8").trim()) : NaN;
+  if (alive(recorded)) {
+    console.log(`a tunnel daemon claims this machine (pid ${recorded}) but ${tunnelHealthPort} is not answering. Investigate before restarting: ${tunnelLogFile}`);
+    process.exitCode = Math.max(process.exitCode ?? 0, 1);
+    return false;
+  }
+  if (!process.env.CONTROL_PLANE_API_KEY) {
+    console.log(`tunnel skipped: CONTROL_PLANE_API_KEY is not set. Set it for this shell (or make it persistent with: setx CONTROL_PLANE_API_KEY "sk-…") and re-run start. The key is at platform.openai.com → API keys (runtime key for this tunnel).`);
+    process.exitCode = Math.max(process.exitCode ?? 0, 2);
+    return false;
+  }
+  rmSync(tunnelPidFile, { force: true });
+  const logStream = openSync(tunnelLogFile, "a");
+  const tunnel = spawn(tunnelExe, ["run", "--profile", tunnelProfile], {
+    detached: true,
+    stdio: ["ignore", logStream, logStream],
+  });
+  writeFileSync(tunnelPidFile, `${tunnel.pid}\n`);
+  tunnel.unref();
+  appendFileSync(tunnelLogFile, `${new Date().toISOString()} started detached tunnel-client (pid ${tunnel.pid}, profile ${tunnelProfile})\n`);
+
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (await tunnelIsUp()) {
+      console.log(`tunnel up: pid ${readFileSync(tunnelPidFile, "utf8").trim()}, health http://127.0.0.1:${tunnelHealthPort}/ui — refresh the ChatGPT connector and open a new conversation`);
+      return true;
+    }
+    await wait(1000);
+  }
+  console.log(`tunnel-client launched (pid ${tunnel.pid}) but /readyz did not answer within 20s — see ${tunnelLogFile} (first-start may take longer: the cloudflared companion has to report ready)`);
+  process.exitCode = Math.max(process.exitCode ?? 0, 2);
+  return false;
 }
+
+/** Stop the tunnel daemon if one of ours is running. */
+async function stopTunnel() {
+  const recorded = existsSync(tunnelPidFile) ? Number(readFileSync(tunnelPidFile, "utf8").trim()) : NaN;
+  if (!Number.isNaN(recorded) && alive(recorded)) {
+    // A plain kill would orphan the cloudflared companion; take the tree.
+    if (process.platform === "win32") spawn("taskkill", ["/pid", String(recorded), "/T", "/F"], { stdio: "ignore" });
+    else process.kill(recorded, "SIGKILL");
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline && (await tunnelIsUp())) await wait(300);
+  }
+  rmSync(tunnelPidFile, { force: true });
+}
+
+// --- user commands -----------------------------------------------------------
 
 async function start() {
   if (await bridgeHandshakes(port)) {
-    console.log(`already running: 127.0.0.1:${port} answers MCP handshakes (pid ${existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim() : "?"}). Stop it with: node ${process.argv[1]} stop --port ${port}`);
-    return;
-  }
-  const recorded = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim()) : NaN;
-  if (alive(recorded)) {
-    console.log(`a daemon claims this port (pid ${recorded}) but ${port} is not answering. Investigate before restarting; force it with: stop, then start.`);
-    process.exitCode = 1;
-    return;
-  }
-  rmSync(pidFile, { force: true });
-  const daemon = spawn(process.execPath, [process.argv[1], "daemon", "--port", String(port)], { detached: true, stdio: "ignore" });
-  daemon.unref();
-  note(`started detached daemon (spawn pid ${daemon.pid})`);
+    console.log(`bridge already running: 127.0.0.1:${port} answers MCP handshakes (pid ${existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim() : "?"})`);
+  } else {
+    const recorded = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim()) : NaN;
+    if (alive(recorded)) {
+      console.log(`a daemon claims this port (pid ${recorded}) but ${port} is not answering. Investigate before restarting; force it with: stop, then start.`);
+      process.exitCode = 1;
+      return;
+    }
+    rmSync(pidFile, { force: true });
+    const daemon = spawn(process.execPath, [process.argv[1], "daemon", "--port", String(port)], { detached: true, stdio: "ignore" });
+    daemon.unref();
+    note(`started detached daemon (spawn pid ${daemon.pid})`);
 
-  const deadline = Date.now() + 20_000;
-  let listening = false;
-  while (Date.now() < deadline) {
-    listening = await portIsListening(port);
-    if (listening) break;
-    await wait(500);
+    let listening = false;
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      listening = await portIsListening(port);
+      if (listening) break;
+      await wait(500);
+    }
+    if (!listening || !(await bridgeHandshakes(port))) {
+      console.log(`bridge launched but did not come up on ${port} within 20s — see ${logFile}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`bridge up: pid ${readFileSync(pidFile, "utf8").trim()}, 127.0.0.1:${port} (tools: read, write, edit, glob, shell, rg)`);
   }
-  if (!listening || !(await bridgeHandshakes(port))) {
-    console.log(`daemon launched but the bridge did not come up on ${port} within 20s — see ${logFile}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`up: daemon pid ${readFileSync(pidFile, "utf8").trim()}, bridge on 127.0.0.1:${port} (tools: read, write, edit, glob, shell, rg). Stop with: node ${process.argv[1]} stop --port ${port}`);
+  await startTunnel();
 }
 
 async function status() {
   const recorded = existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim() : "(no pid file)";
   const listening = await portIsListening(port);
   const answering = listening ? await bridgeHandshakes(port) : false;
-  console.log(`bridge 127.0.0.1:${port}: ${answering ? "answering" : listening ? "listening but not answering" : "down"}`);
-  if (Number.isNaN(Number(recorded))) console.log(`pid file: ${recorded}`);
-  else console.log(`daemon pid ${recorded}: ${alive(Number(recorded)) ? "alive" : "dead"}`);
+  console.log(`bridge 127.0.0.1:${port}: ${answering ? "answering" : listening ? "listening but not answering" : "down"}${answering ? "" : Number.isNaN(Number(recorded)) ? "" : alive(Number(recorded)) ? " (pid file points at a live process)" : " (pid file points at a dead process)"}`);
+  const tunnelUp = await tunnelIsUp();
+  const tunnelRecorded = existsSync(tunnelPidFile) ? readFileSync(tunnelPidFile, "utf8").trim() : "(no pid file)";
+  console.log(`tunnel ${tunnelHealthPort}/readyz: ${tunnelUp ? "up" : "down"} (profile ${tunnelProfile}, pid ${tunnelRecorded}${Number.isNaN(Number(tunnelRecorded)) ? "" : alive(Number(tunnelRecorded)) ? ", alive" : ", dead"})${process.env.CONTROL_PLANE_API_KEY ? "" : ", CONTROL_PLANE_API_KEY not set in this shell"}`);
+  if (tunnelUp) console.log(`health UI: http://127.0.0.1:${tunnelHealthPort}/ui`);
 }
 
 async function stop() {
+  await stopTunnel();
   const recorded = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim()) : NaN;
   if (!Number.isNaN(recorded) && alive(recorded)) {
     process.kill(recorded, "SIGTERM");
@@ -198,11 +287,11 @@ async function stop() {
   }
   rmSync(pidFile, { force: true });
   if (await portIsListening(port)) {
-    console.log(`stopped daemon but ${port} is still listening (a stale process may hold it)`);
+    console.log(`stopped what I could, but ${port} is still listening (a stale process may hold it)`);
     process.exitCode = 1;
   } else {
-    console.log(`stopped${Number.isNaN(recorded) ? " (nothing to stop)" : ` (pid ${recorded} and its tree)`}`);
+    console.log("stopped: tunnel-client and bridge");
   }
 }
 
-void (command === "start" ? start() : command === "daemon" ? runDaemon() : command === "status" ? status() : stop());
+void (command === "start" ? start() : command === "daemon" ? runDaemon() : command === "tunnel" ? startTunnel() : command === "status" ? status() : stop());
