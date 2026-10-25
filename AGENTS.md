@@ -461,3 +461,25 @@ Two disciplines keep this class of bug from recurring:
 The commit that found and fixed this is `14c3df2`; the 34 surviving loop
 turns are the ones that were never contaminated.
 
+
+## A new model gets a battery, not a sweep
+
+The benchmark measures model turns on a fixed task set, and the cost of a
+full answer per model (one-shot reference + the whole optimization loop) is
+~480 turns — the same number against every model we ever add, which is not
+sustainable. So a new model is onboarded with the *breadth* question only:
+
+1. `battery.ts --provider <name>` — 24 turns. The battery tasks are selected
+   from the committed reference sweep as the tasks where candidates actually
+   disagree; selection is data, not taste.
+2. `verdict.ts --provider <name>` — states the breadth decision, and its
+   decisiveness is gap-aware: two completed tasks apart decides at any repeat
+   count; a one-task gap or a completion tie needs 3 repeats before the cost
+   column can choose.
+3. The optimization loop (grouped-family knobs, 11 tasks x 3 repeats) runs
+   **only for the family that survives**, so most models never pay for the
+   search they do not need.
+
+The two invariants that keep this honest: verdicts are per-model, never
+averaged across models, and a verdict states its own sample ("1/3 repeats,
+directional") instead of presenting one draw as settled.
