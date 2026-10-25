@@ -108,13 +108,24 @@ function verdictFor(name: string, refFile: string | undefined, resultsDir: strin
   }
   }
 
+  const runnerUp = rank[1];
+  const gap = runnerUp ? top.completed - runnerUp.completed : 0;
+
+  // Decisiveness, and why it is the shape it is:
+  // - two tasks apart is decisive at any repeat count (one fluky turn cannot
+  //   bridge it in either direction);
+  // - a one-task gap is decisive only once the repeats can measure it;
+  // - a completion tie is a cost tie-break, and the cost axis is only
+  //   trustworthy at REPEATS_NEEDED.
+  const decisive = (hi: Row, lo: Row): boolean =>
+    hi.completed >= lo.completed + 2 ||
+    (hi.completed > lo.completed && Math.min(hi.repeats, lo.repeats) >= REPEATS_NEEDED);
+
   let text: string;
-  if (top.repeats < REPEATS_NEEDED || top.completed === 0) {
-    if (top.completed === 0) {
-      text = "no candidate completes any task on this model. That is a model-capability result, not an interface ranking — the benchmark measures the interface, and a model that cannot complete the tasks cannot rank interfaces.";
-    } else {
-      text = `${top.id} leads (${top.completed}/${top.tasks} completed @ ${top.costPerCompletion} tok/task) but on only ${top.repeats}/${REPEATS_NEEDED} repeats — directional, not a verdict. Keep collecting.`;
-    }
+  if (top.completed === 0) {
+    text = "no candidate completes any task on this model. That is a model-capability result, not an interface ranking — the benchmark measures the interface, and a model that cannot complete the tasks cannot rank interfaces.";
+  } else if (gap === 0 && top.repeats < REPEATS_NEEDED) {
+    text = `${top.id} and ${runnerUp!.id} tie on completions; the decision rests on the cost axis, which needs ${REPEATS_NEEDED} repeats to read — currently ${top.repeats}. Directional only; keep collecting.`;
   } else {
     const detail: string[] = [];
     if (c) detail.push(`C ${c.completed}/${c.tasks}@${c.costPerCompletion ?? "—"}`);
@@ -122,17 +133,20 @@ function verdictFor(name: string, refFile: string | undefined, resultsDir: strin
     if (e) detail.push(`E ${e.completed}/${e.tasks}@${e.costPerCompletion ?? "—"}`);
     let decision: string;
     if (c && c2 && e) {
-      if (e.completed > c2.completed && e.completed > c.completed) {
-        decision = "leave the grouped family: the deferred-discovery catalog (E) beats both grouped points, and deferral is the only breadth strategy that did.";
-      } else if (c2.completed > c.completed && e.completed <= c2.completed) {
-        decision = "stay in the grouped family and harden it: C2 beats C on completions, and nothing measured beats C2 — the loop's remaining knobs (trimmed pools, required-args descriptions) search around that point.";
-      } else if (c.completed >= (c2.completed || 0) && c.completed >= (e.completed || 0)) {
-        decision = "keep C as-is: neither the hardened point nor the catalog beat the permissive grouped tool on this model; its token edge is worth the first-call cost.";
+      const bestGrouped = Math.max(c.completed, c2.completed);
+      const contenders = [c, c2, e];
+      const cheapest = contenders.filter((x) => x.completed > 0).sort((a, b) => (a.costPerCompletion ?? Infinity) - (b.costPerCompletion ?? Infinity))[0];
+      if (decisive(e, c2) && decisive(e, c)) {
+        decision = `leave the grouped family: E completes ${e.completed} vs ${bestGrouped} — a decisive gap; deferral is the only breadth strategy that wins here${cheapest && cheapest.id !== "E" ? `, at ${e.costPerCompletion ?? "—"} tok/task (cost data: ${cheapest.id} ${cheapest.costPerCompletion ?? "—"})` : ""}.`;
+      } else if (decisive(c2, c) && !decisive(e, c2)) {
+        decision = `stay in the grouped family and harden it: C2 decisively beats C (${c2.completed} vs ${c.completed}) and nothing beats C2; the loop's remaining knobs (description detail, trimmed pools) search around that point, not the breadth question.`;
+      } else if (!decisive(c2, c) && !decisive(e, c)) {
+        decision = `no family is decisively ahead: the points sit within one task at ${top.repeats}/${REPEATS_NEEDED} repeats${cheapest ? `; cost currently favours ${cheapest.id} (${cheapest.costPerCompletion ?? "—"} tok/task)` : ""}. Keep collecting before swapping interfaces.`;
       } else {
-        decision = "no candidate decisively dominates — the gap between the top two is within repeat noise; collect more repeats before committing an interface.";
+        decision = `a one-task lead (${top.id} at ${top.completed}/${top.tasks}) is inside the noise at ${top.repeats}/${REPEATS_NEEDED} repeats — keep collecting; the cost column (${cheapest ? `${cheapest.id} ${cheapest.costPerCompletion ?? "—"}` : "n/a"}) is the tie-break to watch.`;
       }
     } else {
-      decision = "incomplete reference set (need C, C2, and E together to decide the breadth strategy); the loop covers the missing points.";
+      decision = "incomplete candidate set (need C, C2, and E together to decide the breadth strategy); the remaining points are still collecting.";
     }
     text = `verdict: ${decision} [evidence: ${detail.join(", ")}]`;
   }
