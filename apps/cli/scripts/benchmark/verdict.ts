@@ -58,8 +58,12 @@ function aggregate(id: string, all: TaskResult[]): Row | undefined {
   };
 }
 
-function loadAll(refFile: string | undefined, resultsDir: string | undefined, id: string): TaskResult[] {
+function loadAll(refFile: string | undefined, resultsDir: string | undefined, batteryFile: string | undefined, id: string): TaskResult[] {
   const out: TaskResult[] = [];
+  if (batteryFile && existsSync(batteryFile)) {
+    const rep = JSON.parse(readFileSync(batteryFile, "utf8")) as { results?: TaskResult[] };
+    out.push(...partitionResults(rep.results ?? []).comparable.filter((r) => r.candidate === id));
+  }
   if (refFile && existsSync(refFile)) {
     const rep = JSON.parse(readFileSync(refFile, "utf8")) as { results?: TaskResult[] };
     out.push(...partitionResults(rep.results ?? []).comparable.filter((r) => r.candidate === id));
@@ -74,10 +78,10 @@ function loadAll(refFile: string | undefined, resultsDir: string | undefined, id
   return out;
 }
 
-function verdictFor(name: string, refFile: string | undefined, resultsDir: string | undefined, quiet: boolean): string | null {
+function verdictFor(name: string, refFile: string | undefined, resultsDir: string | undefined, batteryFile: string | undefined, quiet: boolean): string | null {
   const rows: Row[] = [];
   for (const id of ["A", "B", "C", "C2", "D", "E"]) {
-    const row = aggregate(id, loadAll(refFile, resultsDir, id));
+    const row = aggregate(id, loadAll(refFile, resultsDir, batteryFile, id));
     if (row) rows.push(row);
   }
   if (rows.length === 0) return null;
@@ -140,5 +144,6 @@ const quiet = process.argv.includes("--quiet");
 const name = flag("--provider") ?? "active";
 const ref = name === "active" ? "benchmark-results-full.json" : `benchmark-results-${name}.json`;
 const dir = name === "active" ? "benchmark/optimize" : `benchmark/optimize-${name}`;
-const text = verdictFor(name, ref, dir, quiet);
+const batteryFile = name === "active" ? undefined : `benchmark-battery-${name}.json`;
+const text = verdictFor(name, ref, dir, batteryFile, quiet);
 if (quiet) process.stdout.write(`${name}: ${text ?? "no data yet; keep collecting"}\n`);
