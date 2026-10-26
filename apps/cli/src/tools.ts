@@ -983,6 +983,16 @@ const MAX_SEARCH_FILES = 20_000;
 /** Results before the answer is cut, unless the caller asked for more. */
 const DEFAULT_HEAD_LIMIT = 250;
 
+/**
+ * A whole-tree search is the one call that can cost minutes, so it is the only
+ * tool that defaults a timeout: generous (30s covers any scoped search this
+ * tool exists for) but short enough that a runaway cannot hang a bridge. An
+ * explicit `timeout` (seconds) overrides it; 0 disables the cap. Hard-capped
+ * at 3600s to match the shell tool.
+ */
+const RG_DEFAULT_TIMEOUT_MS = 30_000;
+const RG_MAX_TIMEOUT_MS = 3_600_000;
+
 /** What `rg` was asked to hand back. */
 type GrepMode = "files_with_matches" | "content" | "count";
 
@@ -1065,6 +1075,7 @@ const rgTool: CliTool = {
           case_insensitive: { type: "boolean", description: "Match without regard to case. Defaults to false." },
           multiline: { type: "boolean", description: "Let the pattern cross line ends. Defaults to false." },
           head_limit: { type: "number", description: `Stop after this many results. Defaults to ${DEFAULT_HEAD_LIMIT}.` },
+          timeout: { type: "number", description: `Seconds before the search is killed. Defaults to 30, capped at 3600; 0 disables the cap. A search that outruns it returns its partial results, tagged as timed out.` },
         },
         required: ["pattern"],
       },
@@ -1084,6 +1095,17 @@ const rgTool: CliTool = {
     const multiline = args.multiline === true;
     const asked = Math.floor(Number(args.head_limit ?? DEFAULT_HEAD_LIMIT));
     const headLimit = Number.isFinite(asked) && asked > 0 ? asked : DEFAULT_HEAD_LIMIT;
+
+    // A whole-tree search is the one call that can run for minutes, so rg is
+    // the only tool with a default timeout. An explicit `timeout` (seconds)
+    // overrides the default; 0 disables the cap entirely.
+    const askedTimeout = args.timeout === undefined || args.timeout === null ? undefined : Number(args.timeout);
+    const timeoutMs =
+      askedTimeout === undefined
+        ? RG_DEFAULT_TIMEOUT_MS
+        : askedTimeout === 0
+          ? undefined
+          : Math.min(Math.max(1, Math.floor(askedTimeout)) * 1_000, RG_MAX_TIMEOUT_MS);
 
     // Confine the search to the working directory; rg is then handed the
     // relative scope so its output paths are the cwd-relative ones the model
@@ -1110,11 +1132,19 @@ const rgTool: CliTool = {
     let stdout = "";
     let stderr = "";
     let killed = false;
+    let timedOut = false;
     const onAbort = () => {
       killed = true;
       killTree(child);
     };
     ctx.signal.addEventListener("abort", onAbort, { once: true });
+    const timer =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+          timedOut = true;
+          killTree(child);
+        }, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
       if (stdout.length <= MAX_OUTPUT_BYTES + 4_096) stdout += chunk.toString("utf8");
     });
@@ -1138,9 +1168,12 @@ const rgTool: CliTool = {
         resolve(c);
       });
     });
+    if (timer) clearTimeout(timer);
     if (killed || ctx.signal.aborted) throw new Error("cancelled");
-    // rg exits 2 on a real error (a bad pattern, an unreadable path).
-    if (code === 2) throw new Error(`rg failed: ${stderr.trim() || "unknown error"}`);
+    // A timed-out search is partial output, not an error: return what was found
+    // before the kill and say the answer is incomplete. Only a *real* rg error
+    // (exit 2 with no timeout) is a hard failure.
+    if (code === 2 && !timedOut) throw new Error(`rg failed: ${stderr.trim() || "unknown error"}`);
     // rg exits 1 for "no matches"; otherwise the answer is the lines. A binary
     // match is reported by rg as "binary file matches" — filtered out so binary
     // noise never reaches the model, and a pattern found only in a binary reads
@@ -1149,7 +1182,9 @@ const rgTool: CliTool = {
       .split("\n")
       .filter((line) => line.length > 0 && !line.includes("binary file matches"))
       .map((line) => line.replace(/^\.\//, ""));
-    if (all.length === 0) return `No matches for ${pattern}.`;
+    if (all.length === 0) return timedOut
+      ? `No matches found within the ${Math.round((timeoutMs ?? 0) / 1_000)}s budget for ${pattern} (search was cut short — try a narrower path or include).`
+      : `No matches for ${pattern}.`;
     const shown = all.slice(0, headLimit);
     const notes: string[] = [];
     if (all.length > shown.length) {
@@ -1161,6 +1196,7 @@ const rgTool: CliTool = {
       body = body.slice(0, at > 0 ? at : MAX_OUTPUT_BYTES);
       notes.unshift(`[output truncated at ${MAX_OUTPUT_BYTES.toLocaleString("en-US")} characters]`);
     }
+    if (timedOut) notes.unshift(`[search stopped after ${Math.round((timeoutMs ?? 0) / 1_000)}s; results are partial. Narrow the path or include, or raise timeout.]`);
     return notes.length > 0 ? withNotice(body, notes.join("\n")) : body;
   },
 };
