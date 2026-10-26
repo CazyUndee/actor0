@@ -48,10 +48,13 @@ const port = portFlag !== -1 ? Number(args[portFlag + 1]) : Number(process.env.M
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(join(scriptDir, "..", "..", ".."));
 const tsx = join(repo, "node_modules", "tsx", "dist", "cli.mjs");
-// Drive the file tools are confined to: the whole drive the repo lives on
-// (not one project), matching the tunnel's `repo-drive` sentinel. On Windows
-// that is the two-letter drive root (e.g. `D:/`); elsewhere the filesystem root.
-const driveRoot = process.platform === "win32" ? repo.slice(0, 2) + "/" : "/";
+// Drive the file tools are confined to: the *projects* folder that holds the
+// repo (not the whole drive), matching the tunnel's `repo-projects` sentinel.
+// Confining to <drive>/projects keeps every project reachable while making
+// rg/glob scans seconds instead of minutes (a whole-drive scan is the killer).
+const projectsRoot = process.platform === "win32"
+  ? repo.slice(0, 2) + "/projects/"
+  : "/projects/";
 
 // --- shared state ----------------------------------------------------------
 const stateBase = join(homedir(), `.mcp-serve-daemon-${port}`);
@@ -129,7 +132,7 @@ async function tunnelIsUp() {
 
 /** The bridge itself: spawn the server, hold its stdin open, serve it over TCP. */
 function runDaemon() {
-  const server = spawn(process.execPath, [tsx, "apps/cli/scripts/mcp-serve.ts", "--tools", "read,write,edit,glob,shell,rg", "--cwd", driveRoot], {
+  const server = spawn(process.execPath, [tsx, "apps/cli/scripts/mcp-serve.ts", "--tools", "read,write,edit,glob,shell,rg", "--cwd", projectsRoot], {
     cwd: repo,
     stdio: ["pipe", "pipe", "inherit"],
   });
