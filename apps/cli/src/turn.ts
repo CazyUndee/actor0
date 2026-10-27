@@ -76,9 +76,20 @@ const SHELL_VERBS: Record<ShellFamily, string> = {
  * that same value — so the tool's description and the prompt cannot disagree
  * about what machine this is.
  */
-export function defaultSystemPrompt(shell: ResolvedShell = resolveShell()): string {
+export function defaultSystemPrompt(shell: ResolvedShell = resolveShell(), model?: string): string {
   const verbs = SHELL_VERBS[shell.family];
+  const identity = model
+    ? [
+      "# Identity",
+      "",
+      `You are actor0, a terminal coding agent, currently running the \`${model}\` model.`,
+      "When asked who you are, say you are actor0. Do not claim to be any",
+      "other product, and do not hide the model name.",
+    ].join("\n")
+    : "# Identity\n\nYou are actor0, a terminal coding agent. When asked who you are, say you are actor0.";
   return [
+  identity,
+  "",
   "You are a coding agent running in a terminal on the user's machine, with",
   `${TOOL_COUNT} tools that execute immediately and without confirmation. Paths are`,
   "relative to the working directory; nothing outside it is reachable.",
@@ -296,18 +307,6 @@ export type Recovery = {
 };
 
 /**
- * How many tool rounds one turn may spend.
- *
- * The harness defaults to unbounded, which is right for a server that bills by
- * the hour and wrong for a terminal on someone's laptop: a model that keeps
- * re-issuing the same failing call will otherwise run until the user kills it,
- * burning the user's tokens and hiding the work it already finished. The
- * harness stops with `needs_user` at the limit and keeps every result, so the
- * budget costs a tail of the answer, not the whole turn.
- */
-export const MAX_TOOL_ROUNDS = 24;
-
-/**
  * Tokens the history is cut to when the model says it is too big.
  *
  * The request path has no standing budget — a live session resends the
@@ -429,6 +428,12 @@ export type TurnOptions = {
    * is a seam, not a setting: nothing the user can set reaches it.
    */
   client?: ModelClient;
+  /**
+   * Cap a turn's tool rounds. Unset means unbounded — a turn that needs to
+   * keep working keeps working. Set it (e.g. via `CliConfig.maxToolRounds`)
+   * when a caller pays per round or wants CI to stay bounded.
+   */
+  maxToolRounds?: number;
 };
 
 /**
@@ -440,14 +445,20 @@ export type TurnOptions = {
  * observer events to the UI.
  */
 export async function runTurn(options: TurnOptions): Promise<TurnOutcome> {
-  const base = options.systemPrompt ?? defaultSystemPrompt();
+  const base = options.systemPrompt ?? defaultSystemPrompt(resolveShell(), options.model.model);
   const cwd = options.cwd ?? process.cwd();
   // A caller-supplied prompt (config.json systemPrompt) is still the prompt;
   // project context is appended to either. Re-seeding an existing session
   // picks up new AGENTS.md rules the same way it picks up a new prompt.
   const messages = seedSystemPrompt(options.messages, withProjectContext(base, cwd));
   const model = options.client ?? createModel(options.model);
-  const config = { ...DEFAULT_HARNESS_CONFIG, maxToolRounds: MAX_TOOL_ROUNDS };
+  // Unbounded by default: a turn that needs to keep working keeps working.
+  // A caller that wants a budget (CI, per-call billing) opts in via
+  // `options.maxToolRounds`; the harness's `round_limit` stop is unchanged.
+  const config =
+    options.maxToolRounds === undefined
+      ? DEFAULT_HARNESS_CONFIG
+      : { ...DEFAULT_HARNESS_CONFIG, maxToolRounds: options.maxToolRounds };
 
   // Whether this turn has put anything on screen. The recovery replays the
   // request, so it is only safe while the answer is still empty: a token

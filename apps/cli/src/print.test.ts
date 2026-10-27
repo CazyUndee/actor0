@@ -277,16 +277,21 @@ test("a turn that runs out of tool rounds says so, and fails a run that got no a
   // Claude Code learned this one from a blank line: `-p` mode used to treat
   // any turn that did not throw as success, so a turn whose last message was
   // not an answer — a stop hook's progress row, a budget cut-off — emitted
-  // nothing and exited 0. Here it was quieter still. Twenty-four rounds of
-  // tool calls, no prose anywhere, no `needs_user` line on any channel, exit
-  // 0: a script read an empty file and a clean run for a turn that never
-  // answered. The stop is a real event and now it reaches stderr.
+  // nothing and exited 0. Here it was quieter still. A capped number of
+  // rounds of tool calls, no prose anywhere, no `needs_user` line on any
+  // channel, exit 0: a script read an empty file and a clean run for a turn
+  // that never answered. The stop is a real event and now it reaches stderr.
+  //
+  // The cap is explicit here: the default is unbounded (a long turn is a
+  // feature), and this test's client never answers, so without a cap it would
+  // loop forever. Capping it is the test's business, not the CLI's.
   scratch();
+  const capped = { ...config, maxToolRounds: 5 };
   const { code, out, err } = await captureBoth((sinks) =>
     runPrintTurn({
       prompt: "sweep the tree",
       cwd: scratch(),
-      config,
+      config: capped,
       messages: [],
       client: toolOnlyClient(),
       ...sinks,
@@ -298,15 +303,18 @@ test("a turn that runs out of tool rounds says so, and fails a run that got no a
 });
 
 test("a turn that stops after answering is not a failure", async () => {
-  // The other half of the same rule. The round budget is a stop, not an
+  // The other half of the same rule. A round budget is a stop, not an
   // error: the work happened and prose reached the caller, so the exit code
-  // stays 0 — the stop is on stderr either way.
+  // stays 0 — the stop is on stderr either way. The cap is explicit: the
+  // default is unbounded, and this client never finishes, so the test says
+  // "stop after N" itself.
   scratch();
+  const capped = { ...config, maxToolRounds: 5 };
   const { code, out, err } = await captureBoth((sinks) =>
     runPrintTurn({
       prompt: "sweep the tree",
       cwd: scratch(),
-      config,
+      config: capped,
       messages: [],
       client: toolOnlyClient("Reading the tree.\n"),
       ...sinks,

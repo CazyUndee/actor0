@@ -130,7 +130,7 @@ test("a blocked banner retires the moment the user replies", () => {
   // clears `blocked`, so a turn that stopped once used to wear the banner for
   // the rest of the session.
   let state = feed([
-    { type: "needs_user", reason: "round_limit", message: "stopped after 24 tool rounds" },
+    { type: "needs_user", reason: "round_limit", message: "stopped after 5 tool rounds" },
   ]);
   assert.ok(state.blocked, "the banner is up after needs_user");
   state = withUserInput(state, "keep going");

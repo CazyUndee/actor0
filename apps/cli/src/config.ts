@@ -97,6 +97,11 @@ export type CliConfig = {
    * UI degrades to absolute tokens for a model that is not here yet.
    */
   contextWindows?: Record<string, number>;
+  /**
+   * Cap a turn's tool rounds. Unset means unbounded — the default. Set it when
+   * a caller pays per round or wants a bounded run (CI, scripted use).
+   */
+  maxToolRounds?: number;
 };
 
 export type { ResolvedProvider };
@@ -329,6 +334,11 @@ export function readConfigFile(): CliConfig {
     ...(effectiveProviders.length ? { providers: effectiveProviders } : {}),
     ...(effectiveActive ? { activeProvider: effectiveActive } : {}),
     ...(contextWindowsOf(stored.contextWindows) ? { contextWindows: contextWindowsOf(stored.contextWindows) } : {}),
+    // A positive integer only: the default is unbounded, so a 0 or a garbage
+    // value means "unset" rather than a turn that stops after zero rounds.
+    ...(typeof stored.maxToolRounds === "number" && Number.isFinite(stored.maxToolRounds) && stored.maxToolRounds > 0
+      ? { maxToolRounds: Math.floor(stored.maxToolRounds) }
+      : {}),
     ...(typeof stored.systemPrompt === "string" && stored.systemPrompt.trim()
       ? { systemPrompt: stored.systemPrompt }
       : {}),
@@ -346,6 +356,7 @@ export function loadConfig(): CliConfig {
     ...(file.providers ? { providers: file.providers } : {}),
     ...(file.activeProvider ? { activeProvider: file.activeProvider } : {}),
     ...(file.systemPrompt ? { systemPrompt: file.systemPrompt } : {}),
+    ...(file.maxToolRounds ? { maxToolRounds: file.maxToolRounds } : {}),
   };
 }
 

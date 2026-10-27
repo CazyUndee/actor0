@@ -130,6 +130,7 @@ export async function runPrintTurn(options: PrintOptions): Promise<number> {
       toolHost,
       signal: controller.signal,
       cwd: options.cwd,
+      ...(options.config.maxToolRounds ? { maxToolRounds: options.config.maxToolRounds } : {}),
       onEvent: (event) => {
         const next = applyEvent(state, event);
         state.entries = next.entries;
