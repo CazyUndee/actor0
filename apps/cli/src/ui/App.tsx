@@ -227,6 +227,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const active = activeNamedProvider(config);
   const endpoint = active ? providerLabel(active) : "not configured";
   const activeModel = active?.model;
+  // The models `/model` may offer: the active provider's own list, never the
+  // flat one. A name that belongs to another gateway is not a model this one
+  // can serve, and offering it is how a request went to an endpoint that had
+  // never heard of it. No provider active means the flat list is the endpoint.
+  const pickerModels = active ? (active.models?.length ? active.models : active.model ? [active.model] : []) : config.models;
   const contextWindow = activeModel ? config.contextWindows?.[activeModel] : undefined;
   const { branch, tokensToday } = useMemo(
     () => ({ branch: gitBranch(cwd), tokensToday: usageSince(readUsage(), startOfDay()).tokens }),
@@ -302,11 +307,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           notice("info", `model set to ${command.model}`);
           return;
         }
-        if (config.models.length === 0) {
+        if (pickerModels.length === 0) {
           notice("info", `model is ${config.model || provider?.model || "(none)"} — switch with /model <name>`);
           return;
         }
-        setModelCursor(Math.max(0, config.models.indexOf(provider?.model ?? config.model)));
+        setModelCursor(Math.max(0, pickerModels.indexOf(provider?.model ?? config.model)));
         setModelQuery("");
         setMode("model");
         return;
@@ -405,6 +410,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           signal: controller.signal,
           cwd,
           ...(config.systemPrompt ? { systemPrompt: config.systemPrompt } : {}),
+          ...(config.maxToolRounds ? { maxToolRounds: config.maxToolRounds } : {}),
           onEvent: (event) =>
             setConversation((state) => {
               const next = applyEvent(state, event);
@@ -537,7 +543,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // rather than registering a new endpoint.
     if (add.existingProvider) {
       const picked = [...new Set(chosen)];
-      let next = addModels(config, picked, add.windows);
+      // Name the provider explicitly: the manage flow can target a provider
+      // that is not the active one, and `addModels` must not guess.
+      let next = addModels(config, picked, add.windows, add.existingProvider);
       const active = activeNamedProvider(next);
       if (active && !active.model && picked[0]) next = withModel(next, picked[0]!);
       setConfig(next);
@@ -548,11 +556,17 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       return;
     }
     const activeModelName = chosen[0] ?? add.models[add.cursor];
-    const providerToAdd: NamedProvider = { ...(add.base as object), name: providerName(String(add.base.baseUrl ?? "")), ...(activeModelName ? { model: activeModelName } : {}) } as NamedProvider;
+    const remembered = [...new Set([activeModelName, ...chosen].filter((m): m is string => Boolean(m)))];
+    // The chosen models belong to the provider being added, not to the flat
+    // list — that one is the built-in endpoint's and another gateway's names
+    // must not appear in it.
+    const providerToAdd: NamedProvider = {
+      ...(add.base as object),
+      name: providerName(String(add.base.baseUrl ?? "")),
+      ...(activeModelName ? { model: activeModelName } : {}),
+      ...(remembered.length ? { models: remembered.slice(0, 20) } : {}),
+    } as NamedProvider;
     let next = addProvider(config, providerToAdd);
-    const remembered = [...new Set([providerToAdd.model, ...chosen].filter((m): m is string => Boolean(m)))];
-    const rest = next.models.filter((m) => !remembered.includes(m));
-    next = { ...next, models: [...remembered, ...rest].slice(0, 20) };
     for (const [model, win] of Object.entries(add.windows)) next = withContextWindow(next, model, win);
     setConfig(next);
     saveConfig(next);
@@ -626,7 +640,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const slashMatches = slashEngaged ? matchSlashCommands(slashToken!) : [];
   const slashSel = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
   // The model picker filters on a search query; an empty query is every model.
-  const filteredModels = modelQuery ? config.models.filter((m) => m.toLowerCase().includes(modelQuery.toLowerCase())) : config.models;
+  const filteredModels = modelQuery ? pickerModels.filter((m) => m.toLowerCase().includes(modelQuery.toLowerCase())) : pickerModels;
   // Every picker filters the same way — provider, reasoning effort, add-kind.
   const allProviders = namedProviders(config);
   const filteredProviders = providerQuery ? allProviders.filter((p) => `${p.name} ${providerLabel(p)}`.toLowerCase().includes(providerQuery.toLowerCase())) : allProviders;
