@@ -69,6 +69,13 @@ export type ProviderConfig = {
 export type NamedProvider = ProviderConfig & {
   /** Stable identifier within `providers`; also what the menu shows. */
   name: string;
+  /**
+   * Models this endpoint offers, most recent first. Each provider keeps its
+   * own set: a model name means nothing without the endpoint that serves it,
+   * and a shared list is how `/model` came to offer a model the active
+   * provider had never heard of. Absent means "only `model`, if any".
+   */
+  models?: string[];
 };
 
 export type CliConfig = {
@@ -107,6 +114,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).map((entry) => entry.trim()))];
 }
 
 function stringMap(value: unknown): Record<string, string> | undefined {
@@ -168,6 +180,9 @@ function parseProviders(value: unknown): NamedProvider[] {
       baseUrl,
       ...(nonEmptyString(entry.path) ? { path: nonEmptyString(entry.path)! } : {}),
       ...(nonEmptyString(entry.model) ? { model: nonEmptyString(entry.model)! } : {}),
+      ...(stringList(entry.models).length || nonEmptyString(entry.model)
+        ? { models: stringList(entry.models).length ? stringList(entry.models) : [nonEmptyString(entry.model)!] }
+        : {}),
       ...(isTransport(entry.transport) ? { transport: entry.transport } : {}),
       ...(isAuth(entry.auth) ? { auth: entry.auth } : {}),
       ...(nonEmptyString(entry.apiKey) ? { apiKey: nonEmptyString(entry.apiKey)! } : {}),
@@ -475,18 +490,29 @@ export function saveConfig(config: CliConfig): void {
  * have, and cannot silently ignore the model the user just chose.
  */
 export function withModel(config: CliConfig, model: string): CliConfig {
-  const models = config.models.includes(model) ? config.models : [model, ...config.models];
-  const trimmed = { ...config, models: models.slice(0, 20) };
-
-  // A named provider is active: record the model on it, so switching endpoints
-  // afterwards cannot carry a name across that the new one does not have.
+  // A named provider is active: record the model on it — both as the current
+  // model and at the head of *its own* list. Nothing is written to the flat
+  // list, which is the built-in endpoint's alone; a provider's model names
+  // are meaningless to any other endpoint.
   const active = activeNamedProvider(config);
   if (active && config.providers) {
     return {
-      ...trimmed,
-      providers: config.providers.map((entry) => (entry.name === active.name ? { ...entry, model } : entry)),
+      ...config,
+      model,
+      providers: config.providers.map((entry) =>
+        entry.name === active.name
+          ? {
+              ...entry,
+              model,
+              models: [model, ...(entry.models ?? (entry.model ? [entry.model] : [])).filter((m) => m !== model)].slice(0, 20),
+            }
+          : entry,
+      ),
     };
   }
+
+  const models = config.models.includes(model) ? config.models : [model, ...config.models];
+  const trimmed = { ...config, models: models.slice(0, 20) };
 
   // Legacy single-endpoint config, custom: the same rule, on the old field.
   const custom = process.env.ACTOR0_BASE_URL?.trim() || config.provider?.baseUrl;
@@ -503,9 +529,26 @@ export function withModel(config: CliConfig, model: string): CliConfig {
  * capping at 20 like `withModel`. Records any known context windows. Used to
  * grow an already-configured provider's model set without re-adding it.
  */
-export function addModels(config: CliConfig, models: string[], windows: Record<string, number> = {}): CliConfig {
-  const merged = [...new Set([...models, ...config.models])].slice(0, 20);
-  let next: CliConfig = { ...config, models: merged };
+export function addModels(config: CliConfig, models: string[], windows: Record<string, number> = {}, provider?: string): CliConfig {
+  const target = provider ?? activeNamedProvider(config)?.name;
+  const entry = target && config.providers ? config.providers.find((p) => p.name === target) : undefined;
+
+  // Add to the named provider's own list when one is in play. Falling back to
+  // the flat list here would put one endpoint's models in front of another —
+  // the bug this per-provider list exists to end.
+  let next: CliConfig;
+  if (entry && config.providers) {
+    next = {
+      ...config,
+      providers: config.providers.map((p) =>
+        p.name === entry.name
+          ? { ...p, models: [...new Set([...models, ...(p.models ?? (p.model ? [p.model] : []))])].slice(0, 20) }
+          : p,
+      ),
+    };
+  } else {
+    next = { ...config, models: [...new Set([...models, ...config.models])].slice(0, 20) };
+  }
   for (const [model, win] of Object.entries(windows)) next = withContextWindow(next, model, win);
   return next;
 }
@@ -573,7 +616,14 @@ export function addProvider(
   const list = namedProviders(config);
   const base = entry.name?.trim() || providerName(entry.baseUrl);
   const name = uniqueProviderName(base, list.map((p) => p.name));
-  const named: NamedProvider = { ...entry, name };
+  // Seed the provider's own model list from its lone `model`, if any, so a
+  // provider added with `{ model: "m-a" }` already has one entry and does not
+  // look empty in the `/model` picker until something is chosen.
+  const named: NamedProvider = {
+    ...entry,
+    name,
+    ...(entry.models?.length ? { models: entry.models } : entry.model ? { models: [entry.model] } : {}),
+  };
   return { ...config, providers: [...list.filter((p) => p.name !== name), named], activeProvider: name };
 }
 

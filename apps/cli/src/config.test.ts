@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   activeNamedProvider,
+  addModels,
   addProvider,
   describeProvider,
   endpointUrl,
@@ -437,6 +438,47 @@ test("a model set while a named provider is active is recorded on that provider"
   config = withModel(config, "chosen-for-a");
   assert.equal(activeNamedProvider(config)?.model, "chosen-for-a");
   assert.equal(resolveProvider(config).model, "chosen-for-a");
+  assert.deepEqual(activeNamedProvider(config)?.models, ["chosen-for-a"], "and at the head of its own list");
+  assert.deepEqual(config.models, [], "the flat list belongs to the built-in endpoint and is untouched");
+});
+
+test("each provider keeps its own model list", () => {
+  // The bug this exists for: a single shared list offered one gateway's models
+  // while another was active, so `/model` could pick a name that endpoint had
+  // never heard of. Two providers, two lists, no bleed.
+  let config = addProvider({ model: MODEL, models: [] }, { baseUrl: "https://a.example.com/v1", model: "m-a" });
+  config = addProvider(config, { baseUrl: "https://b.example.com/v1", model: "m-b" });
+  config = withModel(config, "b-only");
+  config = addModels(config, ["b-two"]);
+  config = setActiveProvider(config, "a.example.com");
+
+  const a = namedProviders(config).find((p) => p.name === "a.example.com");
+  const b = namedProviders(config).find((p) => p.name === "b.example.com");
+  assert.deepEqual(b?.models, ["b-two", "b-only", "m-b"], "b keeps what was chosen and added for it");
+  assert.deepEqual(a?.models, ["m-a"], "a's list is its own and unchanged");
+  assert.deepEqual(config.models, [], "nothing leaked to the flat list");
+});
+
+test("a provider's models migrate from its lone model, on load", () => {
+  withConfigDir((dir) => {
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({
+        model: "m",
+        models: ["stale-flat"],
+        providers: [{ name: "a", baseUrl: "https://a.example.com/v1", model: "m-a" }],
+        activeProvider: "a",
+      }),
+    );
+    assert.deepEqual(namedProviders(readConfigFile())[0]?.models, ["m-a"], "the lone model becomes a one-entry list");
+  });
+});
+
+test("addModels on a provider leaves the flat list alone, and names its target", () => {
+  let config = addProvider({ model: MODEL, models: ["flat-1"] }, { baseUrl: "https://a.example.com/v1", model: "m-a" });
+  config = addModels(config, ["m-x"], {}, "a.example.com");
+  assert.deepEqual(namedProviders(config)[0]?.models, ["m-x", "m-a"]);
+  assert.deepEqual(config.models, ["flat-1"], "the built-in list is not a dumping ground for provider models");
 });
 
 test("a stale active pointer resolves to nothing, not to some other endpoint", () => {
