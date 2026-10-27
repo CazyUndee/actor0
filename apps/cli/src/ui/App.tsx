@@ -35,6 +35,8 @@ import { contextWindowTokens } from "@actor0/harness";
 import { parseSlash, matchSlashCommands, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { Screen } from "./term.js";
+import { begin, emptySelection, extend, finish, hasSelection, selectedText, spans, type SelectionState } from "./selection.js";
+import { copyToClipboard } from "./clipboard.js";
 import { parseInput, type InputEvent } from "./input.js";
 
 // The turn machinery is loaded lazily (bundled as turn.mjs) so the boot never
@@ -72,6 +74,7 @@ import {
   bottomFrameBorder,
   paint,
   fitWidth,
+  highlight,
   type Face,
   type Seg,
 } from "./render.js";
@@ -166,6 +169,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [onboarding, setOnboarding] = useState(false);
   const [contextTokens, setContextTokens] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
+  // The selection lives in terminal coordinates, like the mouse events that
+  // set it, and is drawn over the finished grid rather than stored in it.
+  const [selection, setSelection] = useState<SelectionState>(emptySelection);
+  const plainRowsRef = useRef<string[]>([]);
   const [justFinished, setJustFinished] = useState(false);
   const finishedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -696,6 +703,33 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   dispatchRef.current = dispatch;
 
   const handleMouse = (event: InputEvent & { type: "mouse" }): void => {
+    // A left press starts a selection; motion extends it; release copies it.
+    // This is what makes native copy-paste unnecessary: mouse capture (which
+    // the wheel needs) takes it away, so the app reimplements the gesture.
+    // Coordinates arrive 1-based from the terminal.
+    const rows = screen.size.rows;
+    const cols = screen.size.cols;
+    const point = { col: event.x - 1, row: event.y - 1 };
+    if (event.button === "left") {
+      if (event.drag) {
+        setSelection((s) => extend(s, point, rows, cols));
+        return;
+      }
+      if (!event.release) {
+        setSelection(() => begin(point, rows, cols));
+        return;
+      }
+      setSelection((s) => {
+        const done = finish(s);
+        const text = selectedText(done, plainRowsRef.current);
+        if (text.trim()) {
+          copyToClipboard(text);
+          notice("info", `copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"}`);
+        }
+        return done;
+      });
+      return;
+    }
     if (event.button !== "wheel-up" && event.button !== "wheel-down") return;
     const dir = event.button === "wheel-up" ? -1 : 1;
     // In chat the wheel scrolls the transcript; in a menu it moves the cursor
@@ -1101,7 +1135,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // ---- build the screen and draw it ----
   const entryRowList = useMemo(() => conversation.entries.flatMap((entry) => entryLines(entry, frameInnerWidth(screen.size.cols), expandReasoning)), [conversation.entries, screen.size.cols, expandReasoning]);
 
-  const buildGrid = (): { grid: string[] } => {
+  const buildGrid = (): { grid: string[]; plain: string[] } => {
     const cols = screen.size.cols;
     const rows = screen.size.rows;
     const innerW = frameInnerWidth(cols);
@@ -1148,16 +1182,35 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const inner: Seg[][] = panelMenu
       ? [...top, ...blockedRow, blankRow, ...composer]
       : [...top, ...blockedRow, ...transcript, ...slashPopup, ...composer];
-    const innerPainted = inner.map((r) => paint(fitWidth(r, innerW)));
     const contentH = rows - 2;
-    // The disclaimer owns the last row; fill everything above it.
-    while (innerPainted.length < contentH - 1) innerPainted.push(paint(blankRow));
-    innerPainted.push(paint(fitWidth(disclaimerRow, innerW)));
+    // The disclaimer owns the last row; fill everything above it. Padding is
+    // applied before the highlight so column offsets are the visible ones.
+    const fitted: Seg[][] = inner.map((r) => fitWidth(r, innerW));
+    while (fitted.length < contentH - 1) fitted.push(fitWidth(blankRow, innerW));
+    fitted.push(fitWidth(disclaimerRow, innerW));
+    const visible = fitted.slice(0, contentH);
+
+    // Terminal row 0 is the top border; content starts one row down, and each
+    // content row is `│ ` (2 columns) before the inner text. The selection is
+    // in terminal coordinates, so shift it into this inner space once, here,
+    // where both numbers are known.
+    const sel = selection;
+    const selRows = hasSelection(sel)
+      ? spans(sel, cols).map((sp) => ({ row: sp.row - 1, from: sp.from - 2, to: sp.to - 2 }))
+      : [];
+    const painted = visible.map((row, i) => {
+      const sp = selRows.find((x) => x.row === i);
+      if (!sp) return paint(row);
+      const from = Math.max(0, sp.from);
+      const to = Math.min(innerW - 1, sp.to);
+      return to >= from ? paint(highlight(row, from, to, color.selectionBg)) : paint(row);
+    });
+    const plain = visible.map((row) => row.map((s) => s.text).join(""));
     const grid: string[] = [topFrameBorder("actor0", version, cols)];
-    for (const line of innerPainted.slice(0, contentH)) grid.push(`│ ${line} │`);
+    for (const line of painted) grid.push(`│ ${line} │`);
     grid.push(bottomFrameBorder(cols));
 
-    return { grid };
+    return { grid, plain };
   };
 
   function menuRows(height: number): Seg[][] {
@@ -1213,7 +1266,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // The blinking terminal caret is never shown: the composer draws its own
   // block cursor into the grid, so the app owns the whole frame like a GUI.
   useEffect(() => {
-    const { grid } = buildGrid();
+    const { grid, plain } = buildGrid();
+    plainRowsRef.current = plain;
     screen.render(grid);
     screen.hideCaret();
   });

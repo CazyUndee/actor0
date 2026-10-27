@@ -30,6 +30,12 @@ export const color = {
   surface: cronix.color.surface2,
   /** The frame's border grey. */
   border: cronix.color.border,
+  /**
+   * Text-selection background. The surface tokens are all dark fills meant to
+   * sit under text; a selection has to be legible the other way, so it reuses
+   * the accent's fill at low saturation rather than inventing a token.
+   */
+  selectionBg: cronix.color.surface3,
 } as const;
 
 export const space = cronix.space;

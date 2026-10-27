@@ -30,7 +30,7 @@ export type KeyName =
 export type InputEvent =
   | { type: "text"; text: string }
   | { type: "key"; key: KeyName; ctrl?: boolean }
-  | { type: "mouse"; x: number; y: number; button: "left" | "wheel-up" | "wheel-down"; release: boolean };
+  | { type: "mouse"; x: number; y: number; button: "left" | "wheel-up" | "wheel-down"; release: boolean; drag: boolean };
 
 // eslint-disable-next-line no-control-regex -- matches the ESC that begins every SGR mouse report
 const MOUSE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
@@ -80,8 +80,13 @@ export function parseInput(buffer: string): { events: InputEvent[]; rest: string
     const m = MOUSE.exec(buffer);
     if (m && m.index === i) {
       const b = Number(m[1]);
-      const button = b === 64 ? "wheel-up" : b === 65 ? "wheel-down" : "left";
-      events.push({ type: "mouse", x: Number(m[2]), y: Number(m[3]), button, release: m[4] === "m" });
+      // SGR encodes the button in the low two bits and modifiers in the high
+      // bits, so 32 (motion) and 34 (motion with the left button held) are
+      // drags, not fresh presses — comparing the whole number made a drag
+      // arrive as `left` and restart the selection at every cell.
+      const base = b & 0b1100011;
+      const button = base === 64 ? "wheel-up" : base === 65 ? "wheel-down" : "left";
+      events.push({ type: "mouse", x: Number(m[2]), y: Number(m[3]), button, release: m[4] === "m", drag: (b & 32) !== 0 });
       i += m[0].length;
       continue;
     }

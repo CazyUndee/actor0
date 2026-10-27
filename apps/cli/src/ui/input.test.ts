@@ -24,5 +24,16 @@ test("ESC followed by a printable char is Escape then the char", () => {
 
 test("a mouse wheel event parses", () => {
   const { events } = parseInput("\x1b[<64;10;5M");
-  assert.deepEqual(events, [{ type: "mouse", x: 10, y: 5, button: "wheel-up", release: false }]);
+  assert.deepEqual(events, [{ type: "mouse", x: 10, y: 5, button: "wheel-up", release: false, drag: false }]);
+});
+
+test("a press, a drag and a release are three different events", () => {
+  // The motion bit is what separates a drag from a second press. Without it
+  // every cell of a drag restarted the selection, so a drag selected nothing.
+  const press = parseInput("\x1b[<0;3;4M").events;
+  const drag = parseInput("\x1b[<32;6;4M").events;
+  const release = parseInput("\x1b[<0;6;4m").events;
+  assert.deepEqual(press, [{ type: "mouse", x: 3, y: 4, button: "left", release: false, drag: false }]);
+  assert.deepEqual(drag, [{ type: "mouse", x: 6, y: 4, button: "left", release: false, drag: true }]);
+  assert.deepEqual(release, [{ type: "mouse", x: 6, y: 4, button: "left", release: true, drag: false }]);
 });
