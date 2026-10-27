@@ -29,7 +29,7 @@
  * State lives outside the checkout: pid files and logs under $HOME
  * (.mcp-serve-daemon-<port>.pid, .mcp-serve-tunnel.pid, .mcp-serve-tunnel.log).
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import net from "node:net";
 import { existsSync, writeFileSync, readFileSync, rmSync, appendFileSync, openSync } from "node:fs";
 import { homedir } from "node:os";
@@ -76,6 +76,29 @@ function alive(pid) {
     return true;
   } catch (error) {
     return error.code === "EPERM"; // exists but not ours to signal
+  }
+}
+
+/**
+ * The tunnel's runtime key. Read from the user-registered environment as a
+ * fallback, because a Startup-folder batch file may run with a stale or empty
+ * process env: `setx`-ed user vars do not always materialize in the logon
+ * session that launches startup programs. On Windows the persistent value is
+ * in the registry; elsewhere the caller's env is authoritative.
+ */
+function controlPlaneKey() {
+  if (process.env.CONTROL_PLANE_API_KEY) return process.env.CONTROL_PLANE_API_KEY;
+  if (process.platform !== "win32") return undefined;
+  try {
+    const output = spawnSync(
+      "reg",
+      ["query", "HKCU\\Environment", "/v", "CONTROL_PLANE_API_KEY"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const match = output.stdout.match(/CONTROL_PLANE_API_KEY\s+REG_(?:EXPAND_)?SZ\s+(.+)\s*$/m);
+    return match ? match[1] : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -198,8 +221,9 @@ async function startTunnel() {
     process.exitCode = Math.max(process.exitCode ?? 0, 1);
     return false;
   }
-  if (!process.env.CONTROL_PLANE_API_KEY) {
-    console.log(`tunnel skipped: CONTROL_PLANE_API_KEY is not set. Set it for this shell (or make it persistent with: setx CONTROL_PLANE_API_KEY "sk-…") and re-run start. The key is at platform.openai.com → API keys (runtime key for this tunnel).`);
+  const key = controlPlaneKey();
+  if (!key) {
+    console.log(`tunnel skipped: CONTROL_PLANE_API_KEY is not set in this shell or the user environment. Set it persistently with: setx CONTROL_PLANE_API_KEY "sk-…" (the key is at platform.openai.com → API keys, the runtime key for this tunnel), then re-run start.`);
     process.exitCode = Math.max(process.exitCode ?? 0, 2);
     return false;
   }
@@ -207,6 +231,7 @@ async function startTunnel() {
   const logStream = openSync(tunnelLogFile, "a");
   const tunnel = spawn(tunnelExe, ["run", "--profile", tunnelProfile], {
     detached: true,
+    env: { ...process.env, CONTROL_PLANE_API_KEY: key },
     stdio: ["ignore", logStream, logStream],
   });
   writeFileSync(tunnelPidFile, `${tunnel.pid}\n`);
@@ -271,6 +296,21 @@ async function start() {
     console.log(`bridge up: pid ${readFileSync(pidFile, "utf8").trim()}, 127.0.0.1:${port} (tools: read, write, edit, glob, shell, rg)`);
   }
   await startTunnel();
+  // Start a detached watchdog so a real tunnel failure self-heals.
+  const watchdogPidFile = `${stateBase}-watchdog.pid`;
+  const watchdogRecorded = existsSync(watchdogPidFile) ? Number(readFileSync(watchdogPidFile, "utf8").trim()) : NaN;
+  if (alive(watchdogRecorded)) {
+    console.log(`watchdog already running (pid ${watchdogRecorded})`);
+  } else {
+    rmSync(watchdogPidFile, { force: true });
+    const watchdog = spawn(process.execPath, [process.argv[1], "watchdog", "--port", String(port)], {
+      detached: true,
+      stdio: "ignore",
+    });
+    watchdog.unref();
+    note(`started detached watchdog (spawn pid ${watchdog.pid})`);
+    console.log(`watchdog up: pid ${watchdog.pid}`);
+  }
 }
 
 async function status() {
@@ -280,7 +320,7 @@ async function status() {
   console.log(`bridge 127.0.0.1:${port}: ${answering ? "answering" : listening ? "listening but not answering" : "down"}${answering ? "" : Number.isNaN(Number(recorded)) ? "" : alive(Number(recorded)) ? " (pid file points at a live process)" : " (pid file points at a dead process)"}`);
   const tunnelUp = await tunnelIsUp();
   const tunnelRecorded = existsSync(tunnelPidFile) ? readFileSync(tunnelPidFile, "utf8").trim() : "(no pid file)";
-  console.log(`tunnel ${tunnelHealthPort}/readyz: ${tunnelUp ? "up" : "down"} (profile ${tunnelProfile}, pid ${tunnelRecorded}${Number.isNaN(Number(tunnelRecorded)) ? "" : alive(Number(tunnelRecorded)) ? ", alive" : ", dead"})${process.env.CONTROL_PLANE_API_KEY ? "" : ", CONTROL_PLANE_API_KEY not set in this shell"}`);
+  console.log(`tunnel ${tunnelHealthPort}/readyz: ${tunnelUp ? "up" : "down"} (profile ${tunnelProfile}, pid ${tunnelRecorded}${Number.isNaN(Number(tunnelRecorded)) ? "" : alive(Number(tunnelRecorded)) ? ", alive" : ", dead"})${controlPlaneKey() ? "" : ", CONTROL_PLANE_API_KEY not set anywhere"}`);
   if (tunnelUp) console.log(`health UI: http://127.0.0.1:${tunnelHealthPort}/ui`);
 }
 
@@ -301,4 +341,51 @@ async function stop() {
   }
 }
 
-void (command === "start" ? start() : command === "daemon" ? runDaemon() : command === "tunnel" ? startTunnel() : command === "status" ? status() : stop());
+/**
+ * Keep the tunnel alive: poll the health endpoint, and when it stops answering
+ * for longer than the grace period, restart tunnel-client. This closes the gap
+ * where tunnel-client's own response to a dead stdio MCP command is to shut
+ * itself down — without a watchdog the tunnel stays down until a reboot or a
+ * manual `start`.
+ *
+ * A normal control-plane re-handshake keeps `readyz` answering, so it is never
+ * mistaken for a real failure; the health check is the only signal that matters.
+ */
+async function watchdog() {
+  const graceMs = 15_000;
+  const intervalMs = 5_000;
+  note(`watchdog started (pid ${process.pid}, port ${port})`);
+  let downSince = null;
+  writeFileSync(`${stateBase}-watchdog.pid`, `${process.pid}\n`);
+
+  while (true) {
+    const up = await tunnelIsUp();
+    if (up) {
+      if (downSince !== null) note(`watchdog: tunnel back up`);
+      downSince = null;
+    } else {
+      if (downSince === null) {
+        downSince = Date.now();
+        note(`watchdog: tunnel health failed; grace period starts`);
+      } else if (Date.now() - downSince >= graceMs) {
+        note(`watchdog: tunnel down for ${Date.now() - downSince}ms; restarting`);
+        await stopTunnel();
+        await startTunnel();
+        downSince = null;
+      }
+    }
+    await wait(intervalMs);
+  }
+}
+
+/** Stop the watchdog if one of ours is running. */
+function stopWatchdog() {
+  const file = `${stateBase}-watchdog.pid`;
+  const recorded = existsSync(file) ? Number(readFileSync(file, "utf8").trim()) : NaN;
+  if (!Number.isNaN(recorded) && alive(recorded)) {
+    process.kill(recorded, "SIGTERM");
+  }
+  rmSync(file, { force: true });
+}
+
+void (command === "start" ? start() : command === "daemon" ? runDaemon() : command === "tunnel" ? startTunnel() : command === "status" ? status() : command === "watchdog" ? watchdog() : stop());
