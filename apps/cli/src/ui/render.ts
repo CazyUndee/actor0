@@ -90,6 +90,36 @@ export function fitWidth(segs: Seg[], width: number): Seg[] {
   return out;
 }
 
+/**
+ * Give the columns in [from, to] a background, splitting segments as needed.
+ *
+ * The row is already padded to exactly its width by `fitWidth`, so a segment's
+ * offset is a running sum of the text before it and no screen buffer is
+ * needed. Segments are split rather than replaced so the text keeps the colour
+ * it had — the highlight is a background, exactly like native terminal
+ * selection, which is why syntax-highlighted code does not fragment into a
+ * stripe per colour.
+ */
+export function highlight(segs: Seg[], from: number, to: number, bg: string): Seg[] {
+  const out: Seg[] = [];
+  let col = 0;
+  for (const s of segs) {
+    const start = col;
+    const end = col + s.text.length - 1;
+    col += s.text.length;
+    if (end < from || start > to) {
+      out.push(s);
+      continue;
+    }
+    const lo = Math.max(from, start) - start;
+    const hi = Math.min(to, end) - start;
+    if (lo > 0) out.push({ ...s, text: s.text.slice(0, lo) });
+    out.push({ ...s, text: s.text.slice(lo, hi + 1), bg });
+    if (hi + 1 < s.text.length) out.push({ ...s, text: s.text.slice(hi + 1) });
+  }
+  return out;
+}
+
 const plain = (text: string, tone?: string, dim?: boolean): Seg[] => [{ text, ...(tone ? { color: tone } : {}), ...(dim ? { dim: true } : {}) }];
 const blank = (): Seg[] => [{ text: " " }];
 

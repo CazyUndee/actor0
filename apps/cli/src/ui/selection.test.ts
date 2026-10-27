@@ -11,6 +11,7 @@ import {
   selectedText,
   spans,
 } from "./selection.js";
+import { highlight } from "./render.js";
 
 const ROWS = 3;
 const COLS = 10;
@@ -71,6 +72,30 @@ test("finishing keeps the selection visible and clears the drag flag", () => {
   const done = finish(dragged);
   assert.equal(done.dragging, false);
   assert.equal(hasSelection(done), true, "the highlight is the receipt — it stays");
+});
+
+test("the highlight splits segments and keeps their colour", () => {
+  // Syntax-highlighted text must not fragment: a background over columns 2..4
+  // of a two-colour row stays two runs, each keeping its own foreground.
+  const row = [
+    { text: "ab", color: "#111111" },
+    { text: "cdef", color: "#222222" },
+  ];
+  // Columns 2..4 sit inside the second segment (which covers 2..5), so it
+  // splits once: "cde" highlighted, "f" untouched, and the first segment whole.
+  const out = highlight(row, 2, 4, "#444444");
+  assert.deepEqual(out, [
+    { text: "ab", color: "#111111" },
+    { text: "cde", color: "#222222", bg: "#444444" },
+    { text: "f", color: "#222222" },
+  ]);
+  assert.equal(out.map((s) => s.text).join(""), "abcdef", "no character is lost or duplicated");
+});
+
+test("the highlight leaves rows it does not touch alone", () => {
+  const row = [{ text: "abcd" }];
+  assert.deepEqual(highlight(row, 10, 12, "#444444"), row);
+  assert.deepEqual(highlight(row, 0, 3, "#444444"), [{ text: "abcd", bg: "#444444" }]);
 });
 
 test("extending without an anchor is a no-op", () => {
