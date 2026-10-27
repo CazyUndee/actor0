@@ -55,8 +55,11 @@ function manyModels(): CliConfig {
   const models = Array.from({ length: 42 }, (_, i) => `example-provider/model-${String(i + 1).padStart(2, "0")}-preview`);
   models[3] = "example-provider/claude-opus-4-6";
   const active = models[3]!;
+  // The picker offers the *active provider's* own model list (the flat
+  // `config.models` is only the fallback when no provider is active), so the
+  // long list has to live on the provider entry or the picker sees one model.
   return addProvider(withModel({ model: active, models }, active), {
-    name: "claude", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "api-key", apiKey: "k", model: active,
+    name: "claude", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "api-key", apiKey: "k", model: active, models,
   });
 }
 
