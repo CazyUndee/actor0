@@ -163,66 +163,95 @@ function rule(): Seg[] {
   return [{ text: "─".repeat(200), color: color.dim }];
 }
 
-/** The provider list, as a modal panel: a search bar, structured entries, add, footer. */
-export function providerPanelRows(providers: { name: string; label: string; active: boolean }[], cursor: number, query: string, width?: number): Seg[][] {
+/** The provider list: search box, list box (with inline expand), add box, footer. */
+export function providerPanelRows(
+  providers: { name: string; label: string; active: boolean }[],
+  cursor: number,
+  query: string,
+  width?: number,
+  expandedIndex?: number | null,
+  actionCursor?: number,
+  height?: number,
+): Seg[][] {
   const contentW = width ?? 60;
-  // A divider spans the full inner width; it is also what separates the list
-  // from the Add row, so it is emitted after every entry.
-  const divider = (): Seg[] => [{ text: "─".repeat(contentW), color: color.border }];
   const rows: Seg[][] = [];
 
-  // Search field: a flat grey bar integrated into the panel (no nested card),
-  // magnifier on the left, white typed text, a visible caret. Mirrors the
-  // model picker's "search" prefix so the two menus read the same.
+  // Search box: rounded, magnifier, white text on grey.
   const searchLabel = query ? query : "providers…";
-  const prefix = "⌕ search ";
-  const searchPad = Math.max(0, contentW - prefix.length - searchLabel.length - 1);
-  rows.push([
-    { text: prefix, color: color.dim, bg: color.surface },
+  const searchPrefix = "⌕ search ";
+  const searchPad = Math.max(0, contentW - searchPrefix.length - searchLabel.length - 1);
+  rows.push(...box([[
+    { text: searchPrefix, color: color.dim, bg: color.surface },
     { text: searchLabel, color: query ? color.text : color.dim, bold: Boolean(query), bg: color.surface },
     { text: "▏", color: color.accent, bg: color.surface },
     { text: " ".repeat(searchPad), color: color.text, bg: color.surface },
-  ]);
+  ]], contentW, { border: color.border }));
   rows.push(blank());
 
-  if (providers.length === 0) {
-    rows.push([{ text: "no providers yet — add one below", color: color.dim }]);
-    rows.push(divider());
+  // List box: one row per provider, subtle dividers, inline expand. When a
+  // height is given the list windows to it, so the panel's fixed chrome
+  // (search box 2, list-box borders 2, add box 2, footer 1, blanks 3) plus
+  // both scroll markers plus the expanded actions always fit.
+  const dividerRow: Seg[] = [{ text: "─".repeat(contentW - 2), color: color.border }];
+  const n = providers.length;
+  const expandedOpen = expandedIndex !== null && expandedIndex !== undefined;
+  const cap = height === undefined ? Infinity : Math.max(1, Math.floor((height - 14 - (expandedOpen ? 3 : 0)) / 2));
+  const itemN = Math.min(n, cap);
+  const start = n <= itemN ? 0 : Math.max(0, Math.min(cursor - Math.floor(itemN / 2), n - itemN));
+  const end = Math.min(n, start + itemN);
+  const listRows: Seg[][] = [];
+  if (n === 0) {
+    listRows.push([{ text: "no providers yet — add one below", color: color.dim }]);
   } else {
-    providers.forEach((p, i) => {
+    if (start > 0) listRows.push(plain(`  ↑ ${start} above`, color.dim));
+    for (let i = start; i < end; i += 1) {
+      if (i > start) listRows.push(dividerRow);
+      const p = providers[i]!;
       const focused = i === cursor;
       const nameBg = focused ? color.surface : undefined;
-      // Name on its own line, ACTIVE right-aligned on the same line, the
-      // endpoint/description tucked under the name in secondary text.
       const namePrefix = " ";
       const activeLabel = "ACTIVE";
-      const gap = Math.max(0, contentW - namePrefix.length - p.name.length - (p.active ? activeLabel.length : 0));
-      const nameRow: Seg[] = [
+      const gap = Math.max(0, contentW - 2 - namePrefix.length - p.name.length - (p.active ? activeLabel.length + 1 : 0));
+      listRows.push([
         { text: namePrefix, bg: nameBg },
         { text: p.name, color: focused ? "#ff5555" : color.text, bold: focused, bg: nameBg },
         { text: " ".repeat(gap), bg: nameBg },
         ...(p.active ? [{ text: activeLabel, color: color.success, bold: true, bg: nameBg } as Seg] : []),
-      ];
-      rows.push(nameRow);
-      rows.push([
+      ]);
+      listRows.push([
         { text: "   " + p.label, color: color.dim, bg: nameBg },
       ]);
-      rows.push(divider());
-    });
+      if (expandedIndex === i) {
+        listRows.push(dividerRow);
+        const ac = actionCursor ?? 0;
+        const a0 = ac === 0;
+        const a1 = ac === 1;
+        listRows.push([
+          { text: "  ", bg: a0 ? color.surface : undefined },
+          { text: "Use provider", color: a0 ? "#ff5555" : color.text, bold: a0, bg: a0 ? color.surface : undefined },
+        ]);
+        listRows.push([
+          { text: "  ", bg: a1 ? color.surface : undefined },
+          { text: "Edit provider", color: a1 ? "#ff5555" : color.text, bold: a1, bg: a1 ? color.surface : undefined },
+        ]);
+      }
+    }
+    if (end < n) listRows.push(plain(`  ↓ ${n - end} more`, color.dim));
   }
+  rows.push(...box(listRows, contentW, { border: color.border }));
+  rows.push(blank());
 
-  // Add row: separated from the list by the divider above, no nested card.
+  // Add provider box: separate rounded rectangle.
   const addFocused = cursor === providers.length;
   const addBg = addFocused ? color.surface : undefined;
-  rows.push([
+  rows.push(...box([[
     { text: "＋ ", color: color.accent, bg: addBg },
     { text: "Add provider", color: addFocused ? "#ff5555" : color.text, bold: addFocused, bg: addBg },
-  ]);
+  ]], contentW, { border: color.border }));
+  rows.push(blank());
 
-  // Footer: consistent, evenly-spaced keyboard hints in secondary text.
-  rows.push([
-    { text: "↵ Select    → Manage    d Remove    Esc Close", color: color.dim },
-  ]);
+  // Footer.
+  rows.push(plain("↵ Select    → Manage    d Remove    Esc Close", color.dim));
   return rows;
 }
 
@@ -620,16 +649,61 @@ export function pickerRows(opts: {
   return box(out, w, { border: color.border, title: opts.title });
 }
 
-export function modelPickerRows(models: string[], cursor: number, height: number, query?: string, width?: number): Seg[][] {
-  return pickerRows({
-    title: query ? `choose a model — ${models.length} match${models.length === 1 ? "" : "es"}` : "choose a model",
-    items: models.map((m, i) => ({ label: m, selected: i === cursor })),
-    cursor,
-    hint: "type to filter · ↑/↓ move · enter select · esc cancel",
-    height,
-    width,
-    query,
-  });
+export function modelPickerRows(
+  entries: { model: string; provider: string }[],
+  cursor: number,
+  height: number,
+  query?: string,
+  width?: number,
+  activeModel?: string,
+  activeProvider?: string,
+): Seg[][] {
+  const contentW = width ?? 60;
+  const rows: Seg[][] = [];
+
+  // Search bar: rounded, magnifier, white text on grey.
+  const searchLabel = query ? query : "models…";
+  const prefix = "⌕ search ";
+  const searchPad = Math.max(0, contentW - prefix.length - searchLabel.length - 1);
+  rows.push(...box([[
+    { text: prefix, color: color.dim, bg: color.surface },
+    { text: searchLabel, color: query ? color.text : color.dim, bold: Boolean(query), bg: color.surface },
+    { text: "▏", color: color.accent, bg: color.surface },
+    { text: " ".repeat(searchPad), color: color.text, bg: color.surface },
+  ]], contentW, { border: color.border }));
+  rows.push(blank());
+
+  // Window the list; each entry takes ~2 rows (entry + divider). The whole
+  // picker must fit in `height`, so budget: search box (2), blanks (2),
+  // scroll markers (2), hint (1), list-box borders (2) — the rest is items.
+  const itemH = Math.max(1, Math.floor((height - 9) / 2));
+  const n = entries.length;
+  const start = n <= itemH ? 0 : Math.max(0, Math.min(cursor - Math.floor(itemH / 2), n - itemH));
+  const end = Math.min(n, start + itemH);
+  if (start > 0) rows.push(plain(`  ↑ ${start} above`, color.dim));
+
+  const listRows: Seg[][] = [];
+  for (let i = start; i < end; i += 1) {
+    if (i > start) listRows.push([{ text: "─".repeat(contentW - 2), color: color.border }]);
+    const e = entries[i]!;
+    const focused = i === cursor;
+    const isActiveModel = e.model === activeModel;
+    const provBold = e.provider !== "" && e.provider === activeProvider;
+    listRows.push([
+      { text: isActiveModel ? "✓ " : "  ", color: color.success, bold: isActiveModel },
+      { text: e.model, color: focused ? "#ff5555" : color.text, bold: focused },
+      { text: "  ", color: color.dim },
+      { text: e.provider, color: color.dim, bold: provBold },
+    ]);
+  }
+  if (n === 0) listRows.push([{ text: "no models", color: color.dim }]);
+  rows.push(...box(listRows, contentW, { border: color.border }));
+
+  if (end < n) rows.push(plain(`  ↓ ${n - end} more`, color.dim));
+  rows.push(blank());
+  const countLabel = query ? `${entries.length} match${entries.length === 1 ? "" : "es"}` : `${entries.length} model${entries.length === 1 ? "" : "s"}`;
+  rows.push(plain(`choose a model — ${countLabel} · type to filter · ↑/↓ move · enter select · esc cancel`, color.dim));
+  return rows;
 }
 
 export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query?: string, width?: number): Seg[][] {

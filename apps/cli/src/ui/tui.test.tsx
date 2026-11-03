@@ -8,7 +8,7 @@ import { createElement } from "react";
 import { render } from "ink";
 import type { ModelClient } from "@actor0/harness";
 import { App } from "./App.js";
-import { addProvider, withModel, type CliConfig } from "../config.js";
+import { addProvider, setActiveProvider, withModel, type CliConfig } from "../config.js";
 import { detectEnvironment } from "../environment.js";
 import type { Screen } from "./term.js";
 
@@ -309,6 +309,79 @@ test("the model picker windows a long list and filters it as you type", async ()
     stdin.write("\r");
     await tick(150);
     assert.ok(!screen.last.join("\n").includes("choose a model"), "the picker closed on selection");
+  } finally {
+    unmount();
+  }
+});
+
+test("enter on a provider expands inline actions; escape collapses; only one at a time", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const cfg = addProvider(
+    addProvider(config(), {
+      name: "alpha", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "api-key", apiKey: "k", model: "alpha-model",
+    }),
+    {
+      name: "beta", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "api-key", apiKey: "k", model: "beta-model",
+    },
+  );
+  const { screen, stdin, unmount } = await mount({ transport: dummy, cfg });
+  try {
+    stdin.write("/provider");
+    await tick(60);
+    stdin.write("\r");
+    await tick(120);
+    stdin.write("\r"); // expand the highlighted provider
+    await tick(120);
+    let menu = screen.last.join("\n");
+    assert.ok(menu.includes("Use provider") && menu.includes("Edit provider"), "enter expands the inline actions");
+    assert.ok(menu.includes("Add provider"), "the menu stays open — no immediate switch");
+    stdin.write("\x1b"); // escape collapses first
+    await tick(100);
+    menu = screen.last.join("\n");
+    assert.ok(!menu.includes("Use provider"), "escape collapsed the actions without closing the menu");
+    assert.ok(menu.includes("Add provider"), "the menu is still open after the collapse");
+    stdin.write("\x1b[B"); // down to the second provider
+    await tick(60);
+    stdin.write("\r"); // expand it
+    await tick(120);
+    menu = screen.last.join("\n");
+    assert.equal(menu.match(/Use provider/g)!.length, 1, "only one provider is expanded at a time");
+  } finally {
+    unmount();
+  }
+});
+
+test("the model picker is global across providers and selects provider and model atomically", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  let cfg = addProvider(
+    addProvider(withModel({ model: "alpha-model", models: ["alpha-model"] }, "alpha-model"), {
+      name: "alpha", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "api-key", apiKey: "k", model: "alpha-model",
+    }),
+    {
+      name: "beta", baseUrl: "https://api.anthropic.com", transport: "anthropic", auth: "api-key", apiKey: "k", model: "beta-model",
+    },
+  );
+  cfg = setActiveProvider(cfg, "alpha"); // addProvider activates its argument; the test starts on alpha
+  const { screen, stdin, unmount } = await mount({ transport: dummy, cfg });
+  try {
+    stdin.write("/model");
+    await tick(60);
+    stdin.write("\r");
+    await tick(150);
+    const open = screen.last.join("\n");
+    assert.ok(open.includes("alpha-model") && open.includes("beta-model"), "models from every provider are offered, not just the active one");
+    assert.ok(open.includes("✓"), "the selected model carries a checkmark");
+    stdin.write("\x1b[B"); // down to beta-model
+    await tick(80);
+    stdin.write("\r");
+    await tick(150);
+    const after = screen.last.join("\n");
+    assert.ok(!after.includes("choose a model"), "the picker closed on selection");
+    assert.ok(after.includes("beta-model"), "the header now shows the other provider's model");
   } finally {
     unmount();
   }

@@ -180,6 +180,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // the same shape: a cursor over its (filtered) items and a search query.
   const [menuIndex, setMenuIndex] = useState(0);
   const [providerQuery, setProviderQuery] = useState("");
+  const [expandedProvider, setExpandedProvider] = useState<number | null>(null);
+  const [providerActionCursor, setProviderActionCursor] = useState(0);
   const [manageProvider, setManageProvider] = useState<string | null>(null);
   const [manageCursor, setManageCursor] = useState(0);
   const [manageConfirm, setManageConfirm] = useState(false);
@@ -233,12 +235,24 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   const active = activeNamedProvider(config);
   const endpoint = active ? providerLabel(active) : "not configured";
-  const activeModel = active?.model;
+  const activeModel = active?.model ?? config.model;
   // The models `/model` may offer: the active provider's own list, never the
   // flat one. A name that belongs to another gateway is not a model this one
   // can serve, and offering it is how a request went to an endpoint that had
   // never heard of it. No provider active means the flat list is the endpoint.
-  const pickerModels = active ? (active.models?.length ? active.models : active.model ? [active.model] : []) : config.models;
+  // Global model list across ALL providers (not just the active one). Each
+  // entry keeps its provider identity so duplicate model IDs from different
+  // providers stay distinct.
+  const modelEntries: { model: string; provider: string }[] = [];
+  const allNamed = namedProviders(config);
+  if (allNamed.length === 0) {
+    for (const m of config.models) modelEntries.push({ model: m, provider: "" });
+  } else {
+    for (const p of allNamed) {
+      const ms = p.models?.length ? p.models : p.model ? [p.model] : [];
+      for (const m of ms) modelEntries.push({ model: m, provider: p.name });
+    }
+  }
   const contextWindow = activeModel ? config.contextWindows?.[activeModel] : undefined;
   const { branch, tokensToday } = useMemo(
     () => ({ branch: gitBranch(cwd), tokensToday: usageSince(readUsage(), startOfDay()).tokens }),
@@ -314,11 +328,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           notice("info", `model set to ${command.model}`);
           return;
         }
-        if (pickerModels.length === 0) {
+        if (modelEntries.length === 0) {
           notice("info", `model is ${config.model || provider?.model || "(none)"} — switch with /model <name>`);
           return;
         }
-        setModelCursor(Math.max(0, pickerModels.indexOf(provider?.model ?? config.model)));
+        setModelCursor(Math.max(0, modelEntries.findIndex((e) => e.model === (provider?.model ?? config.model))));
         setModelQuery("");
         setMode("model");
         return;
@@ -647,7 +661,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const slashMatches = slashEngaged ? matchSlashCommands(slashToken!) : [];
   const slashSel = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
   // The model picker filters on a search query; an empty query is every model.
-  const filteredModels = modelQuery ? pickerModels.filter((m) => m.toLowerCase().includes(modelQuery.toLowerCase())) : pickerModels;
+  const filteredModels = modelQuery
+    ? modelEntries.filter((e) => e.model.toLowerCase().includes(modelQuery.toLowerCase()))
+    : modelEntries;
   // Every picker filters the same way — provider, reasoning effort, add-kind.
   const allProviders = namedProviders(config);
   const filteredProviders = providerQuery ? allProviders.filter((p) => `${p.name} ${providerLabel(p)}`.toLowerCase().includes(providerQuery.toLowerCase())) : allProviders;
@@ -688,6 +704,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       } else if (mode === "menu") {
         setProviderQuery((q) => q + event.text);
         setMenuIndex(0);
+        setExpandedProvider(null);
       } else if (mode === "thinking") {
         setThinkingQuery((q) => q + event.text);
         setThinkingCursor(0);
@@ -813,6 +830,43 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const providers = filteredProviders;
     // The list is the (filtered) providers plus a trailing "Add provider" entry.
     const itemCount = providers.length + 1;
+    // Expanded state handling.
+    const isExpanded = expandedProvider !== null && expandedProvider === menuIndex && menuIndex < providers.length;
+    if (isExpanded) {
+      if (key === "up" || key === "k") return setProviderActionCursor((c) => (c <= 0 ? 1 : c - 1));
+      if (key === "down" || key === "j") return setProviderActionCursor((c) => (c >= 1 ? 0 : c + 1));
+      if (key === "escape") {
+        setExpandedProvider(null);
+        return;
+      }
+      if (key === "return") {
+        const target = providers[menuIndex];
+        if (!target) return;
+        if (providerActionCursor === 0) {
+          // Use provider
+          try {
+            const next = setActiveProvider(config, target.name);
+            setConfig(next);
+            saveConfig(next);
+            notice("info", `switched to ${target.name}`);
+          } catch (e) {
+            notice("error", `${target.name}: ${(e as Error).message}`);
+            return;
+          }
+          setExpandedProvider(null);
+          setProviderQuery("");
+          setMode("chat");
+          return;
+        }
+        // Edit provider
+        setManageProvider(target.name);
+        setManageCursor(0);
+        setExpandedProvider(null);
+        setMode("manage");
+        return;
+      }
+      return;
+    }
     if (key === "up" || key === "k") return setMenuIndex((i) => wrap(i, itemCount, -1));
     if (key === "down" || key === "j") return setMenuIndex((i) => wrap(i, itemCount, 1));
     if (key === "escape") {
@@ -820,13 +874,16 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       if (providerQuery) {
         setProviderQuery("");
         setMenuIndex(0);
+        setExpandedProvider(null);
         return;
       }
+      setExpandedProvider(null);
       return setMode("chat");
     }
     if (key === "backspace") {
       setProviderQuery((q) => q.slice(0, -1));
       setMenuIndex(0);
+      setExpandedProvider(null);
       return;
     }
     // Right arrow opens the highlighted provider's manage screen.
@@ -848,15 +905,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         setMode("add");
         return;
       }
-      const target = providers[menuIndex];
-      if (target) {
-        const next = setActiveProvider(config, target.name);
-        setConfig(next);
-        saveConfig(next);
-        notice("info", `switched to ${target.name}`);
+      // Expand inline action section instead of switching.
+      if (menuIndex < providers.length) {
+        setExpandedProvider(menuIndex);
+        setProviderActionCursor(0);
       }
-      setProviderQuery("");
-      setMode("chat");
       return;
     }
     if (key === "d") {
@@ -949,12 +1002,21 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       return;
     }
     if (key === "return") {
-      const model = filteredModels[modelCursor];
-      if (model) {
-        const next = withModel(config, model);
-        setConfig(next);
-        saveConfig(next);
-        notice("info", `model set to ${model}`);
+      const entry = filteredModels[modelCursor];
+      if (entry) {
+        try {
+          let next = config;
+          if (entry.provider && entry.provider !== active?.name) {
+            next = setActiveProvider(next, entry.provider);
+          }
+          next = withModel(next, entry.model);
+          setConfig(next);
+          saveConfig(next);
+          notice("info", `model set to ${entry.model}`);
+        } catch (e) {
+          notice("error", `couldn't switch model: ${(e as Error).message}`);
+          return;
+        }
       }
       setMode("chat");
     }
@@ -1221,7 +1283,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         // The cursor may sit on the trailing "Add provider" entry.
         // Content width inside the box the panel draws (boxW - 2), so dividers
         // and the search bar pad to exactly the panel's inner width.
-        return panel("Providers", providerPanelRows(providers, Math.min(menuIndex, providers.length), providerQuery, Math.max(24, innerW - 4) - 2), innerW);
+        return panel("Providers", providerPanelRows(providers, Math.min(menuIndex, providers.length), providerQuery, Math.max(24, innerW - 4) - 2, expandedProvider, providerActionCursor, height), innerW);
       }
       case "manage": {
         const p = namedProviders(config).find((x) => x.name === manageProvider);
@@ -1230,7 +1292,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         return panel("Manage provider", managePanelRows({ name: p.name, label: providerLabel(p), model: p.model ?? "", endpoint: p.baseUrl, auth }, manageConfirm ? 3 : manageCursor), innerW);
       }
       case "model":
-        return modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery, innerW);
+        return modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery, innerW, activeModel, active?.name);
       case "thinking":
         return thinkingPickerRows(filteredThinking.map((o) => ({ label: o.label, effort: o.effort })), Math.min(thinkingCursor, Math.max(0, filteredThinking.length - 1)), thinkingQuery, innerW);
       case "usage": {
