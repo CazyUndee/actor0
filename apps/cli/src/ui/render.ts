@@ -532,7 +532,7 @@ export function pickerRows(opts: {
   width?: number;
   query?: string;
 }): Seg[][] {
-  const out: Seg[][] = [plain(opts.title, color.muted), blank()];
+  const out: Seg[][] = [];
   if (opts.query !== undefined) {
     const q = opts.query;
     const boxW = Math.max(24, Math.min(60, q.length + 12));
@@ -574,7 +574,8 @@ export function pickerRows(opts: {
   if (end < n) out.push(plain(`  ↓ ${n - end} more`, color.dim));
   out.push(blank());
   out.push(plain(opts.hint, color.dim));
-  return out;
+  const w = opts.width ?? 60;
+  return box(out, w, { border: color.border });
 }
 
 export function modelPickerRows(models: string[], cursor: number, height: number, query?: string, width?: number): Seg[][] {
@@ -603,15 +604,16 @@ export function usagePanelRows(periodLabel: string, sinceTokens: number, sinceTu
     for (const row of byModel) out.push([{ text: row.model, color: color.muted }, { text: `  ${formatTokens(row.tokens)}`, color: color.dim }]);
   }
   out.push(plain("tab/←/→ switch period · esc close", color.dim));
-  return out;
+  return box(out, 56, { border: color.border });
 }
 
 export function slashPopupRows(commands: { name: string; description: string }[], selected: number): Seg[][] {
-  return commands.map((c, i) => [
+  const inner = commands.map((c, i) => [
     { text: i === selected ? "● " : "○ ", color: i === selected ? color.accent : color.dim },
     { text: `/${c.name}`, color: i === selected ? color.accent : color.text },
     { text: `  ${c.description}`, color: color.dim },
   ]);
+  return box(inner, 48, { border: color.border });
 }
 
 /** The add-provider flow, one renderer per phase. */
