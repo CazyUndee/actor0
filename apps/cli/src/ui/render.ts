@@ -611,12 +611,24 @@ export function usagePanelRows(periodLabel: string, sinceTokens: number, sinceTu
 }
 
 export function slashPopupRows(commands: { name: string; description: string }[], selected: number): Seg[][] {
-  const inner = commands.map((c, i) => [
-    { text: i === selected ? "● " : "○ ", color: i === selected ? color.accent : color.dim },
-    { text: `/${c.name}`, color: i === selected ? color.accent : color.text },
-    { text: `  ${c.description}`, color: color.dim },
-  ]);
-  return box(inner, 48, { border: color.border });
+  const boxW = 48;
+  const innerW = boxW - 2;
+  const maxName = Math.max(1, ...commands.map((c) => c.name.length));
+  const nameWidth = maxName + 1; // include the leading "/"
+  const gap = 4;
+  const colWidth = nameWidth + gap;
+  const rows: Seg[][] = [];
+  commands.forEach((c, i) => {
+    if (i > 0) rows.push([{ text: "─".repeat(innerW), color: color.border }]);
+    const nameToken = `/${c.name}`;
+    const padLen = Math.max(0, colWidth - nameToken.length);
+    rows.push([
+      { text: nameToken, color: i === selected ? color.accent : color.text, bold: i === selected },
+      { text: " ".repeat(padLen), color: color.dim },
+      { text: c.description, color: color.dim },
+    ]);
+  });
+  return box(rows, boxW, { border: color.border });
 }
 
 /** The add-provider flow, one renderer per phase. */
