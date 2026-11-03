@@ -29,7 +29,7 @@ export const color = {
   /** Filled background for highlighted blocks (tool calls). */
   surface: cronix.color.surface2,
   /** The frame's border grey. */
-  border: cronix.color.border,
+  border: cronix.color.borderFocus,
   /**
    * Text-selection background. The surface tokens are all dark fills meant to
    * sit under text; a selection has to be legible the other way, so it reuses
