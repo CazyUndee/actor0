@@ -529,13 +529,14 @@ export function pickerRows(opts: {
   cursor: number;
   hint: string;
   height: number;
+  width?: number;
   query?: string;
 }): Seg[][] {
   const out: Seg[][] = [plain(opts.title, color.muted), blank()];
   if (opts.query !== undefined) {
     const q = opts.query;
-    const boxW = Math.max(24, Math.min(200, q.length + 12));
-    const inner = boxW - 2;
+    const frameW = opts.width ?? 80;
+    const inner = Math.max(22, frameW - 2);
     const pad = Math.max(0, inner - ("search ".length + q.length + 1));
     const b = (s: string): Seg => ({ text: s, color: color.border });
     out.push([b(`╭${"─".repeat(inner)}╮`)]);
@@ -576,19 +577,20 @@ export function pickerRows(opts: {
   return out;
 }
 
-export function modelPickerRows(models: string[], cursor: number, height: number, query?: string): Seg[][] {
+export function modelPickerRows(models: string[], cursor: number, height: number, query?: string, width?: number): Seg[][] {
   return pickerRows({
     title: query ? `choose a model — ${models.length} match${models.length === 1 ? "" : "es"}` : "choose a model",
     items: models.map((m, i) => ({ label: m, selected: i === cursor })),
     cursor,
     hint: "type to filter · ↑/↓ move · enter select · esc cancel",
     height,
+    width,
     query,
   });
 }
 
-export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query?: string): Seg[][] {
-  return pickerRows({ title: "reasoning effort", items: options.map((o, i) => ({ label: o.label, selected: i === cursor })), cursor, hint: "type to filter · ↑/↓ move · enter select · esc cancel", height: options.length + 6, query });
+export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query?: string, width?: number): Seg[][] {
+  return pickerRows({ title: "reasoning effort", items: options.map((o, i) => ({ label: o.label, selected: i === cursor })), cursor, hint: "type to filter · ↑/↓ move · enter select · esc cancel", height: options.length + 6, width, query });
 }
 
 /** The `/usage` panel: a period, a total, and a per-model breakdown. */

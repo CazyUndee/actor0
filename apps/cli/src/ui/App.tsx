@@ -1228,9 +1228,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         return panel("Manage provider", managePanelRows({ name: p.name, label: providerLabel(p), model: p.model ?? "", endpoint: p.baseUrl, auth }, manageConfirm ? 3 : manageCursor), innerW);
       }
       case "model":
-        return modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery);
+        return modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery, innerW);
       case "thinking":
-        return thinkingPickerRows(filteredThinking.map((o) => ({ label: o.label, effort: o.effort })), Math.min(thinkingCursor, Math.max(0, filteredThinking.length - 1)), thinkingQuery);
+        return thinkingPickerRows(filteredThinking.map((o) => ({ label: o.label, effort: o.effort })), Math.min(thinkingCursor, Math.max(0, filteredThinking.length - 1)), thinkingQuery, innerW);
       case "usage": {
         const entries = readUsage();
         const period = PERIODS[usageIndex]!;
