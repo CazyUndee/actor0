@@ -18,6 +18,7 @@
     "build": "tsc -p tsconfig.build.json --tsBuildInfoFile dist/.tsbuildinfo",
     "prepack": "node -e \"require('fs').rmSync('dist/.tsbuildinfo',{force:true})\"",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "pretypecheck": "npm --workspace @actor0/harness run build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
