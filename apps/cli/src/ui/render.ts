@@ -537,7 +537,7 @@ export function pickerRows(opts: {
     const q = opts.query;
     const frameW = opts.width ?? 80;
     const inner = Math.max(22, frameW - 2);
-    const pad = Math.max(0, inner - ("search ".length + q.length + 1));
+    const pad = Math.max(0, inner - (" search ".length + q.length + 1));
     const b = (s: string): Seg => ({ text: s, color: color.border });
     out.push([b(`╭${"─".repeat(inner)}╮`)]);
     out.push([
