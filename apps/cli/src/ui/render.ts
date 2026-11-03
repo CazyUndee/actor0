@@ -173,7 +173,7 @@ export function providerPanelRows(providers: { name: string; label: string; acti
     rows.push([
       { text: focused ? "●" : "○", color: focused ? color.accent : color.dim },
       { text: "  " },
-      { text: p.name, color: focused ? "#ff5555" : color.text, bold: true, bg: focused ? color.surface : undefined },
+      { text: p.name, color: focused ? "#ff5555" : color.text, bold: focused, bg: focused ? color.surface : undefined },
       ...(p.active ? [{ text: "   ACTIVE", color: color.accent } as Seg] : []),
     ]);
     rows.push([{ text: "   " }, { text: p.label, color: color.dim }]);
@@ -209,7 +209,7 @@ export function managePanelRows(
   const actions = ["Change model", "Edit provider", "Test connection", "Remove provider"];
   actions.forEach((a, i) => {
     const focused = i === cursor;
-    rows.push([{ text: focused ? "●" : "○", color: focused ? "#ff5555" : color.dim, bg: focused ? color.surface : undefined }, { text: "  " }, { text: a, color: focused ? "#ff5555" : color.text, bold: true, bg: focused ? color.surface : undefined }]);
+    rows.push([{ text: focused ? "●" : "○", color: focused ? "#ff5555" : color.dim, bg: focused ? color.surface : undefined }, { text: "  " }, { text: a, color: focused ? "#ff5555" : color.text, bold: focused, bg: focused ? color.surface : undefined }]);
   });
   rows.push(blank());
   rows.push([{ text: "↑↓ Navigate   ↵ Open   Esc Back", color: color.dim }]);
@@ -569,7 +569,7 @@ export function pickerRows(opts: {
     out.push([
       { text: "  " },
       { text: item.selected ? "● " : "○ ", color: item.selected ? color.accent : color.dim },
-      { text: item.label, color: focused ? "#ff5555" : color.text, bold: true, bg: focused ? color.surface : undefined },
+      { text: item.label, color: focused ? "#ff5555" : color.text, bold: focused, bg: focused ? color.surface : undefined },
       ...(item.detail ? [{ text: `  ${item.detail}`, color: color.dim } as Seg] : []),
     ]);
   }
