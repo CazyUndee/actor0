@@ -542,10 +542,10 @@ export function pickerRows(opts: {
     out.push([b(`╭${"─".repeat(inner)}╮`)]);
     out.push([
       b("│"),
-      { text: " search ", color: color.dim },
-      { text: q, color: color.text, bold: true },
-      { text: "▏", color: color.accent },
-      { text: " ".repeat(pad), color: color.text },
+      { text: " search ", color: "#ffffff", bg: color.surface },
+      { text: q, color: "#ffffff", bold: true, bg: color.surface },
+      { text: "▏", color: "#ffffff", bg: color.surface },
+      { text: " ".repeat(pad), color: "#ffffff", bg: color.surface },
       b("│"),
     ]);
     out.push([b(`╰${"─".repeat(inner)}╯`)]);
