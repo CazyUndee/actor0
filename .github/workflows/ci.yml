@@ -30,6 +30,14 @@ jobs:
         # `eslint.config.mjs` exists it has to run here too, or the script can
         # rot the same way a second time.
         run: npm run lint
+      - name: Install ripgrep
+        # The rg tool and getRepoIndex shell out to a real ripgrep binary,
+        # so the suite needs it on PATH the way a user machine has it —
+        # the runner image does not ship it. `update` first so a cold
+        # runner's stale package lists cannot make the install fail.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ripgrep
       - name: Test
         run: npm test
       - name: TUI renders
