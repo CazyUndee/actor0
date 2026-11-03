@@ -99,6 +99,28 @@ apps/cli             the terminal client: Ink/React UI, the eight tools,
   each constant came from — treat those constants as evidence, not
   configuration.
 
+## CI
+
+One GitHub Actions workflow (`.github/workflows/ci.yml`) runs all six checks
+plus the TUI preview on every push. The local run of a check is not the CI
+run: CI checks out a clean tree, so anything that passes locally on top of
+stale build artifacts (a built `dist/`, a warm `node_modules`) can still be
+red there — that is exactly how the `pretypecheck` fix in
+`packages/providers` was found, after a typecheck that passed locally had been
+CI-red for months.
+
+After pushing:
+
+```bash
+gh run list --limit 3          # find the run for your commit
+gh run view <id>               # watch it
+gh run view <id> --log-failed  # read the failing step's log
+```
+
+A push is not done until its CI run is green. When a run is red, read the
+failed step before touching code — the failure is usually environmental
+(clean-checkout assumptions), not in the diff.
+
 ## UI preview
 
 `npm run check:tui` renders a frame to a file for eyeballing menu/picker
