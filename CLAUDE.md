@@ -1,29 +1,57 @@
+@AGENTS.md
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Ground rules (read AGENTS.md first)
+## Ground rules
 
-`AGENTS.md` at the repo root is the repository's own working manual — commit
-discipline (commit every coherent change, stage only your own paths, never
-commit a red tree), the traps list, and the six-check verification order.
-Read it before doing nontrivial work. The short version:
+The `@AGENTS.md` import above is the repository's working manual — commit
+discipline, traps, and the six-check verification order. Follow it; it is
+already in context, no need to go look for it.
 
-- **Commit the moment a change is in a coherent state**, with the specific
-  paths you touched (`git add <path>...`, never `git add -A`).
-- Before committing, run **all six, in this order**:
+## Commit messages
 
-```bash
-npm run check:boundaries
-npm run check:theme
-npm run typecheck
-npm test
-npm run lint
-npm run build
+Every commit is exactly this shape:
+
+```
+[tag] one sentence: the impact, and how the commit achieves it
+
+Body: the engineering detail, not a surface re-statement of the title.
+Explain WHY the decision was made — the failure it prevents, the trap it
+closes, the tradeoff taken. No verbosity: say the reasoning, not the
+anecdote.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+Component: CLI          # or: Desktop
+Model: <model id>      # the model that wrote the commit
 ```
 
-`npm test` is one item on that list, not the list — it does not run tsc,
-eslint, or the boundary check.
+- **Tag** (in front of the title, square brackets): `[fix]`, `[chore]`,
+  `[feat]`, `[upgrade]`, or `[misc]` when none of the first four fit.
+- **Title**: one sentence, exactly the impact + how — no "improve", no
+  "update", no hedging.
+- **Body**: WHY, at the engineering level. Why this shape and not the
+  obvious alternative; what breaks if the decision is reversed later.
+- **Trailer lines**: the co-author line always, then `Component:` naming
+  which app the change is for (CLI or Desktop), then `Model:` with the
+  exact model id that made the change.
+
+Example:
+
+```
+[fix] stop() kills the detached watchdog first so a stop cannot be undone by its own timer
+
+stopWatchdog() existed but was never wired: stop() brought the tunnel down,
+the still-running watchdog saw the grace period elapse, and restarted the
+tunnel within seconds. Calling it before stopTunnel() closes that loop.
+Deleting the function instead would have made the watchdog un-stoppable,
+which is the opposite of what `stop` means.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+Component: CLI
+Model: agnes-3.0-flash
+```
 
 ## Commands
 
