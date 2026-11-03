@@ -531,28 +531,33 @@ export function pickerRows(opts: {
   height: number;
   query?: string;
 }): Seg[][] {
-  const out: Seg[][] = [plain(opts.title, color.muted)];
+  const out: Seg[][] = [plain(opts.title, color.muted), blank()];
   if (opts.query !== undefined) {
     out.push([{ text: "search ", color: color.dim }, { text: opts.query, color: color.text }, { text: "▏", color: color.accent }]);
+    out.push(blank());
   }
   // Reserve rows for the title, the search line, the hint and up to two scroll
   // indicators; whatever is left is the item window.
-  const reserved = 1 + (opts.query !== undefined ? 1 : 0) + 1 + 2;
+  const reserved = 1 + (opts.query !== undefined ? 1 : 0) + 1 + 2 + 2;
   const itemH = Math.max(1, opts.height - reserved);
   const n = opts.items.length;
   const start = n <= itemH ? 0 : Math.max(0, Math.min(opts.cursor - Math.floor(itemH / 2), n - itemH));
   const end = Math.min(n, start + itemH);
   if (start > 0) out.push(plain(`  ↑ ${start} above`, color.dim));
+  out.push(plain("─".repeat(24), color.border));
   for (let i = start; i < end; i += 1) {
     const item = opts.items[i]!;
     const focused = i === opts.cursor;
     out.push([
+      { text: "  " },
       { text: item.selected ? "● " : "○ ", color: item.selected ? color.accent : color.dim },
-      { text: item.label, color: focused ? color.accent : color.text },
+      { text: item.label, color: focused ? color.accent : color.text, bold: focused },
       ...(item.detail ? [{ text: `  ${item.detail}`, color: color.dim } as Seg] : []),
     ]);
   }
+  out.push(plain("─".repeat(24), color.border));
   if (end < n) out.push(plain(`  ↓ ${n - end} more`, color.dim));
+  out.push(blank());
   out.push(plain(opts.hint, color.dim));
   return out;
 }
