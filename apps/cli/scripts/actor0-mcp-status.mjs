@@ -26,11 +26,6 @@ function pidFile(name) {
   return { alive, pid };
 }
 
-function msSince(t0) {
-  const s = (Date.now() - t0) / 1000;
-  return s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
-}
-
 async function main() {
   const t0 = Date.now();
   const tunnelPid = pidFile(".mcp-serve-tunnel.pid");
@@ -77,7 +72,9 @@ async function main() {
   try {
     const res = await fetchJson(`http://127.0.0.1:${HEALTH}/readyz`);
     ui = res.status < 500 ? "up" : "degraded";
-  } catch {}
+  } catch {
+    // ui stays "unreachable" — the status table prints that default.
+  }
 
   // 4. quick latency sample: one real tools/call through the bridge.
   let sample = "—";

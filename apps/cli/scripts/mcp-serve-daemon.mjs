@@ -325,6 +325,9 @@ async function status() {
 }
 
 async function stop() {
+  // Stop the watchdog first: it would otherwise restart the tunnel the moment
+  // stopTunnel brings it down.
+  stopWatchdog();
   await stopTunnel();
   const recorded = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim()) : NaN;
   if (!Number.isNaN(recorded) && alive(recorded)) {
