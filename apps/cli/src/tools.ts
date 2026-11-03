@@ -156,12 +156,18 @@ function requireText(args: Record<string, unknown>, key: string): string {
  * target of a `write` usually does not exist yet: `a/b/c.txt` is checked as
  * realpath(`a/b`) + `c.txt`. The tail cannot contain a link, because a
  * non-existent path has nothing to point at.
+ *
+ * `contain` decides what the boundary does to a path that escapes it.
+ * Writers stay contained (`contain: true`, the default): the escape is a
+ * refusal. Readers are not (`contain: false`): they resolve to the real
+ * path and are allowed — inspection of the wider machine is the point,
+ * and a read cannot plant or modify anything.
  */
-async function within(cwd: string, path: string): Promise<string> {
+async function within(cwd: string, path: string, contain = true): Promise<string> {
   const target = isAbsolute(path) ? path : resolve(cwd, path);
   // Not cached: realpath on a directory is one call, and a cache keyed on the
   // cwd string is a stale-root waiting for a directory to be moved under it.
-  const root = await realpath(resolve(cwd)).catch(() => resolve(cwd));
+  const root = contain ? await realpath(resolve(cwd)).catch(() => resolve(cwd)) : undefined;
 
   let resolved = target;
   const tail: string[] = [];
@@ -183,6 +189,7 @@ async function within(cwd: string, path: string): Promise<string> {
     resolved = parent;
   }
 
+  if (root === undefined) return resolved;
   const rel = relative(root, resolved);
   if (rel === "") return resolved;
   const outside = escapes(rel);
@@ -367,7 +374,7 @@ const readTool: CliTool = {
     function: {
       name: "read",
       description:
-        "Read a text file. Files are capped at 2000 lines / 50KB, and any single line longer than 500 characters is cut with a marker saying so; when either cap bites, the output ends with the exact offset=N to pass next. Prefer this over shelling out to `cat` — it is cheaper and it pages deterministically.",
+        "Read a text file. Files are capped at 2000 lines / 50KB, and any single line longer than 500 characters is cut with a marker saying so; when either cap bites, the output ends with the exact offset=N to pass next. Accepts relative paths (rooted at the working directory) or absolute paths anywhere on the machine. Prefer this over shelling out to `cat` — it is cheaper and it pages deterministically.",
       parameters: {
         type: "object",
         properties: {
@@ -382,7 +389,7 @@ const readTool: CliTool = {
   label: (args) => `read ${String(args.path ?? "")}`,
   hint: "reading a file (paged; it names the offset to continue at)",
   async run(args, ctx) {
-    const target = await within(ctx.cwd, requireString(args, "path"));
+    const target = await within(ctx.cwd, requireString(args, "path"), false);
     const info = await stat(target);
     if (info.isDirectory()) throw new Error(`${target} is a directory — list it with the shell tool, or read a file inside it`);
     const asked = String(args.path ?? target);
@@ -1059,7 +1066,7 @@ const rgTool: CliTool = {
     function: {
       name: "rg",
       description:
-        "Search file contents with ripgrep and get back matching paths, matching lines with context, or match counts. Respects .gitignore and skips binaries. The pattern is a Rust regular expression (ripgrep syntax), not a glob. An include glob with no slash matches the file name, so *.ts reaches apps/cli/ui/parts.tsx. Prefer this to grepping in the shell.",
+        "Search file contents with ripgrep and get back matching paths, matching lines with context, or match counts. Respects .gitignore and skips binaries. The search root (the `path` argument) may be any directory on the machine, including absolute paths — an absolute or `..`-based path just reaches outside the working directory. The pattern is a Rust regular expression (ripgrep syntax), not a glob. An include glob with no slash matches the file name, so *.ts reaches apps/cli/ui/parts.tsx. Prefer this to grepping in the shell.",
       parameters: {
         type: "object",
         properties: {
@@ -1107,10 +1114,11 @@ const rgTool: CliTool = {
           ? undefined
           : Math.min(Math.max(1, Math.floor(askedTimeout)) * 1_000, RG_MAX_TIMEOUT_MS);
 
-    // Confine the search to the working directory; rg is then handed the
-    // relative scope so its output paths are the cwd-relative ones the model
-    // can act on, and rg itself skips .git / node_modules via .gitignore.
-    const root = await within(ctx.cwd, scope);
+    // The scope may reach outside the working directory (that is the point):
+    // an absolute or `..`-based path is passed to rg as-is, and rg's own
+    // .gitignore handling and the file-count cap are what keep a wide search
+    // from running away.
+    const root = await within(ctx.cwd, scope, false);
     await stat(root).catch(() => {
       throw new Error(`path does not exist: ${scope}`);
     });
@@ -1293,15 +1301,20 @@ const globTool: CliTool = {
   async run(args, ctx) {
     const pattern = requireString(args, "pattern");
     const scope = optionalText(args, "path") || ".";
-    const root = await within(ctx.cwd, scope);
+    const root = await within(ctx.cwd, scope, false);
 
     const asked = Math.floor(Number(args.head_limit ?? DEFAULT_GLOB_LIMIT));
     const limit = Number.isFinite(asked) && asked > 0 ? asked : DEFAULT_GLOB_LIMIT;
 
     // Real paths, for the same reason `rg` resolves them: `within` resolves
     // and `ctx.cwd` does not, so a display path built from the raw cwd is a
-    // chain of `../..` on any tree whose root is a link.
-    const base = await realpath(ctx.cwd).catch(() => ctx.cwd);
+    // chain of `../..` on any tree whose root is a link. The walk stays
+    // anchored at the working directory when the scope does not escape it —
+    // the whole time before absolute paths existed — and a scope rooted
+    // *outside* the working directory is anchored at its own root, so its
+    // listing is a path the model can actually act on rather than a climb.
+    const anchor = await realpath(ctx.cwd).catch(() => ctx.cwd);
+    const base = escapes(relative(anchor, root)) ? root : anchor;
     const searchRoot = staticBase(pattern);
     const start = await within(root, searchRoot);
     const startIsDirectory = await stat(start)

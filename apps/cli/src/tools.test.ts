@@ -852,16 +852,16 @@ test("a directory whose name starts with two dots is still inside", async () => 
   await host(dir).execute(call("write", { path: join("..cache", "new.txt"), content: "written" }), signal);
   assert.equal(readFileSync(join(dir, "..cache", "new.txt"), "utf8"), "written");
 
-  // And the escape in the neighbouring directory is still an escape.
+  // And a read in the neighbouring directory is allowed: readers reach
+  // outside on purpose, only writers are confined. `relative` already carries
+  // the climb, so the path is it plus the file name — no extra "..".
   const outside = scratch();
   writeFileSync(join(outside, "secret.txt"), "hunter2");
-  await assert.rejects(
-    () => host(dir).execute(call("read", { path: join("..", "..", relative(dir, outside), "secret.txt") }), signal),
-    /outside the working directory/,
-  );
+  const outRead = await host(dir).execute(call("read", { path: join(relative(dir, outside), "secret.txt") }), signal);
+  assert.match(outRead, /hunter2/, "a read may reach outside the working directory");
 });
 
-test("no tool can reach outside the working directory", async () => {
+test("writers stay in the working directory; readers may reach outside", async () => {
   const outer = scratch();
   const inner = join(outer, "project");
   mkdirSync(inner);
@@ -869,10 +869,8 @@ test("no tool can reach outside the working directory", async () => {
   const escape = relative(inner, join(outer, "secret.txt"));
   const attack = host(inner);
 
-  await assert.rejects(
-    () => attack.execute(call("read", { path: escape }), signal),
-    /outside the working directory/,
-  );
+  // Reads follow the escape and return the content — that is the point.
+  assert.match(await attack.execute(call("read", { path: escape }), signal), /hunter2/);
   await assert.rejects(
     () => attack.execute(call("write", { path: `..${sep}secret.txt`, content: "clobbered" }), signal),
     /outside the working directory/,
@@ -881,29 +879,29 @@ test("no tool can reach outside the working directory", async () => {
     () => attack.execute(call("edit", { path: `..${sep}secret.txt`, old_string: "hunter2", new_string: "x" }), signal),
     /outside the working directory/,
   );
-  // The file that was the target is untouched.
+  // The file the writers aimed at is untouched.
   assert.equal(readFileSync(join(outer, "secret.txt"), "utf8"), "hunter2");
 });
 
-test("a sibling directory sharing a name prefix is still outside", async () => {
-  // `..` plus a prefix is the classic way a naive startsWith check lets you out.
+test("a sibling directory sharing a name prefix is reachable for a read", async () => {
+  // `..` plus a prefix used to be the classic way a naive startsWith check
+  // let you out. Readers now go out on purpose, so the point of this test is
+  // that the climb is *intended* — a read into the sibling works.
   const outer = scratch();
   const inner = join(outer, "app");
   const sibling = join(outer, "app-backup");
   mkdirSync(inner);
   mkdirSync(sibling);
   writeFileSync(join(sibling, "notes.txt"), "private");
-  await assert.rejects(
-    () => host(inner).execute(call("read", { path: `..${sep}app-backup${sep}notes.txt` }), signal),
-    /outside the working directory/,
-  );
+  assert.match(await host(inner).execute(call("read", { path: `..${sep}app-backup${sep}notes.txt` }), signal), /private/);
 });
 
-test("a link inside the working directory does not become a way out", async () => {
+test("a link inside the working directory: reads follow it, writes still do not", async () => {
   // The lexical check is satisfied by any path that *reads* as inside the
-  // root, and a link reads as inside while living anywhere. With no approval
-  // gate, this was the difference between a contained agent and one that could
-  // read and write the whole disk through a link it happened to find.
+  // root, and a link reads as inside while living anywhere. Reads are now
+  // allowed outside — following the link is inspection, not damage. What
+  // must never happen is the plant: a write through the link would create a
+  // file outside the project, and that is still refused.
   const outer = scratch();
   const inner = join(outer, "project");
   const elsewhere = join(outer, "elsewhere");
@@ -921,10 +919,10 @@ test("a link inside the working directory does not become a way out", async () =
   const attack = host(inner);
   const through = join("link", "secret.txt");
 
-  await assert.rejects(
-    () => attack.execute(call("read", { path: through }), signal),
-    /outside the working directory/,
-    "a read through a link is still a read from outside",
+  assert.match(
+    await attack.execute(call("read", { path: through }), signal),
+    /hunter2/,
+    "a read through a link is inspection, and it reaches the target",
   );
   await assert.rejects(
     () => attack.execute(call("write", { path: join("link", "planted.txt"), content: "x" }), signal),
@@ -1254,8 +1252,16 @@ test("a very long matching line is cut by --max-columns", async () => {
   assert.ok(out.split("\n")[0]!.length < 600, "the line was not cut");
 });
 
-test("rg will not leave the working directory", async () => {
-  await assert.rejects(() => rg(fixture(), { pattern: "x", path: "../.." }), /outside|within|working directory/i);
+test("rg may search outside the working directory", async () => {
+  // Readers reach outside on purpose: an absolute or `..`-based scope is a
+  // search root, not an escape. Writers stay confined; this tool is how the
+  // model inspects the wider machine.
+  const outer = scratch();
+  const inner = join(outer, "project");
+  mkdirSync(inner);
+  writeFileSync(join(outer, "target.txt"), "needle\n");
+  const out = await rg(inner, { pattern: "needle", path: ".." });
+  assert.match(out, /target\.txt/, "the match outside the working directory is reported");
 });
 
 test("rg is a real tool the prompt can name", () => {
@@ -1417,11 +1423,15 @@ test("the listing is sorted by path, case-insensitively, not by modification tim
   ]);
 });
 
-test("glob will not leave the working directory", async () => {
-  await assert.rejects(
-    () => glob(fixture(), { pattern: "../*" }),
-    /outside|within|working directory/i,
-  );
+test("glob may list outside the working directory", async () => {
+  // A scope rooted outside the working directory is a listing of that root:
+  // paths come back relative to where the walk started, not a `../..` climb.
+  const outer = scratch();
+  const inner = join(outer, "project");
+  mkdirSync(inner);
+  writeFileSync(join(outer, "thing.txt"), "x");
+  const out = await glob(inner, { pattern: "thing.txt", path: ".." });
+  assert.match(out, /thing\.txt/);
 });
 
 test("a path that is a file is told which tool to use instead", async () => {
