@@ -277,6 +277,16 @@ async function run(bin: string, args: string[], stdin: string | undefined, signa
         else reject(new Error(`${label} exited ${code ?? "unknown"}${stderr.trim() ? `: ${stderr.trim()}` : ""}`));
       });
     });
+    // The child can exit before — or while — we finish writing stdin (the fake
+    // test binary does; a real one that ignores `--stdin` will too). That write
+    // then fails with EPIPE, and with no listener on the stream Node throws it
+    // as an uncaught exception that sinks the whole process. The outcome is
+    // already decided by the child's own close/error above, so swallow the
+    // stdin-side error rather than let it escape.
+    child.stdin?.on("error", () => {
+      // stdin write failed because the child closed its end — expected, not a
+      // failure to surface: the close/error handlers settle the promise.
+    });
     if (stdin !== undefined) {
       child.stdin?.end(stdin);
     } else {
