@@ -173,7 +173,7 @@ export function providerPanelRows(providers: { name: string; label: string; acti
     rows.push([
       { text: focused ? "●" : "○", color: focused ? color.accent : color.dim },
       { text: "  " },
-      { text: p.name, color: focused ? color.accent : color.text, bold: focused },
+      { text: p.name, color: focused ? "#ff5555" : color.text, bold: focused },
       ...(p.active ? [{ text: "   ACTIVE", color: color.accent } as Seg] : []),
     ]);
     rows.push([{ text: "   " }, { text: p.label, color: color.dim }]);
@@ -209,7 +209,7 @@ export function managePanelRows(
   const actions = ["Change model", "Edit provider", "Test connection", "Remove provider"];
   actions.forEach((a, i) => {
     const focused = i === cursor;
-    rows.push([{ text: focused ? "●" : "○", color: focused ? color.accent : color.dim }, { text: "  " }, { text: a, color: focused ? color.accent : color.text, bold: focused }]);
+    rows.push([{ text: focused ? "●" : "○", color: focused ? "#ff5555" : color.dim }, { text: "  " }, { text: a, color: focused ? "#ff5555" : color.text, bold: focused }]);
   });
   rows.push(blank());
   rows.push([{ text: "↑↓ Navigate   ↵ Open   Esc Back", color: color.dim }]);
@@ -569,7 +569,7 @@ export function pickerRows(opts: {
     out.push([
       { text: "  " },
       { text: item.selected ? "● " : "○ ", color: item.selected ? color.accent : color.dim },
-      { text: item.label, color: focused ? color.accent : color.text, bold: focused },
+      { text: item.label, color: focused ? "#ff5555" : color.text, bold: focused },
       ...(item.detail ? [{ text: `  ${item.detail}`, color: color.dim } as Seg] : []),
     ]);
   }
