@@ -276,7 +276,8 @@ test("the provider menu is a panel with human-readable labels and an add entry",
     assert.ok(menu.includes("Anthropic API - Direct"), "the provider shows its human-readable label");
     assert.ok(menu.includes("Add provider"), "the panel offers an explicit add-provider entry");
     assert.ok(menu.includes("→ Manage"), "the panel advertises Right-arrow to manage");
-    assert.ok(menu.includes("●"), "the focused row's bullet is filled");
+    assert.ok(!menu.includes("●") && !menu.includes("○"), "selection dots are gone; focus is a highlight, not a bullet");
+    assert.ok(menu.includes("⌕ search "), "the panel has a magnifier search bar");
     assert.ok(!menu.includes("❯"), "no caret pushes the rows in");
   } finally {
     unmount();

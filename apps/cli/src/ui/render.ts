@@ -163,27 +163,66 @@ function rule(): Seg[] {
   return [{ text: "─".repeat(200), color: color.dim }];
 }
 
-/** The provider list, as a modal panel: search, two-line entries, add, hint. */
-export function providerPanelRows(providers: { name: string; label: string; active: boolean }[], cursor: number, query: string): Seg[][] {
+/** The provider list, as a modal panel: a search bar, structured entries, add, footer. */
+export function providerPanelRows(providers: { name: string; label: string; active: boolean }[], cursor: number, query: string, width?: number): Seg[][] {
+  const contentW = width ?? 60;
+  // A divider spans the full inner width; it is also what separates the list
+  // from the Add row, so it is emitted after every entry.
+  const divider = (): Seg[] => [{ text: "─".repeat(contentW), color: color.border }];
   const rows: Seg[][] = [];
-  rows.push(query ? [{ text: `search ${query}`, color: color.text }, { text: "▏", color: color.accent }] : [{ text: "search providers…", color: color.dim }]);
+
+  // Search field: a flat grey bar integrated into the panel (no nested card),
+  // magnifier on the left, white typed text, a visible caret. Mirrors the
+  // model picker's "search" prefix so the two menus read the same.
+  const searchLabel = query ? query : "providers…";
+  const prefix = "⌕ search ";
+  const searchPad = Math.max(0, contentW - prefix.length - searchLabel.length - 1);
+  rows.push([
+    { text: prefix, color: color.dim, bg: color.surface },
+    { text: searchLabel, color: query ? color.text : color.dim, bold: Boolean(query), bg: color.surface },
+    { text: "▏", color: color.accent, bg: color.surface },
+    { text: " ".repeat(searchPad), color: color.text, bg: color.surface },
+  ]);
   rows.push(blank());
-  providers.forEach((p, i) => {
-    const focused = i === cursor;
-    rows.push([
-      { text: focused ? "●" : "○", color: focused ? color.accent : color.dim },
-      { text: "  " },
-      { text: p.name, color: focused ? "#ff5555" : color.text, bold: focused, bg: focused ? color.surface : undefined },
-      ...(p.active ? [{ text: "   ACTIVE", color: color.accent } as Seg] : []),
-    ]);
-    rows.push([{ text: "   " }, { text: p.label, color: color.dim }]);
-  });
-  if (providers.length === 0) rows.push([{ text: "no providers yet — add one below", color: color.dim }]);
-  rows.push(blank());
-  rows.push(rule());
-  rows.push([{ text: "＋  ", color: color.accent }, { text: "Add provider", color: cursor === providers.length ? color.accent : color.text, bold: cursor === providers.length }]);
-  rows.push(blank());
-  rows.push([{ text: "↵ Select   → Manage   d Remove   Esc Close", color: color.dim }]);
+
+  if (providers.length === 0) {
+    rows.push([{ text: "no providers yet — add one below", color: color.dim }]);
+    rows.push(divider());
+  } else {
+    providers.forEach((p, i) => {
+      const focused = i === cursor;
+      const nameBg = focused ? color.surface : undefined;
+      // Name on its own line, ACTIVE right-aligned on the same line, the
+      // endpoint/description tucked under the name in secondary text.
+      const namePrefix = " ";
+      const activeLabel = "ACTIVE";
+      const gap = Math.max(0, contentW - namePrefix.length - p.name.length - (p.active ? activeLabel.length : 0));
+      const nameRow: Seg[] = [
+        { text: namePrefix, bg: nameBg },
+        { text: p.name, color: focused ? "#ff5555" : color.text, bold: focused, bg: nameBg },
+        { text: " ".repeat(gap), bg: nameBg },
+        ...(p.active ? [{ text: activeLabel, color: color.success, bold: true, bg: nameBg } as Seg] : []),
+      ];
+      rows.push(nameRow);
+      rows.push([
+        { text: "   " + p.label, color: color.dim, bg: nameBg },
+      ]);
+      rows.push(divider());
+    });
+  }
+
+  // Add row: separated from the list by the divider above, no nested card.
+  const addFocused = cursor === providers.length;
+  const addBg = addFocused ? color.surface : undefined;
+  rows.push([
+    { text: "＋ ", color: color.accent, bg: addBg },
+    { text: "Add provider", color: addFocused ? "#ff5555" : color.text, bold: addFocused, bg: addBg },
+  ]);
+
+  // Footer: consistent, evenly-spaced keyboard hints in secondary text.
+  rows.push([
+    { text: "↵ Select    → Manage    d Remove    Esc Close", color: color.dim },
+  ]);
   return rows;
 }
 
@@ -578,7 +617,7 @@ export function pickerRows(opts: {
   out.push(blank());
   out.push(plain(opts.hint, color.dim));
   const w = opts.width ?? 60;
-  return box(out, w, { border: color.border });
+  return box(out, w, { border: color.border, title: opts.title });
 }
 
 export function modelPickerRows(models: string[], cursor: number, height: number, query?: string, width?: number): Seg[][] {

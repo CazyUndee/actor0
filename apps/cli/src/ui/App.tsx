@@ -1219,7 +1219,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       case "menu": {
         const providers = filteredProviders.map((p) => ({ name: p.name, label: providerLabel(p), active: p.name === config.activeProvider }));
         // The cursor may sit on the trailing "Add provider" entry.
-        return panel("Providers", providerPanelRows(providers, Math.min(menuIndex, providers.length), providerQuery), innerW);
+        // Content width inside the box the panel draws (boxW - 2), so dividers
+        // and the search bar pad to exactly the panel's inner width.
+        return panel("Providers", providerPanelRows(providers, Math.min(menuIndex, providers.length), providerQuery, Math.max(24, innerW - 4) - 2), innerW);
       }
       case "manage": {
         const p = namedProviders(config).find((x) => x.name === manageProvider);
