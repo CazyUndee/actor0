@@ -49,7 +49,7 @@ export class Screen {
     // Without this the terminal emits none of the sequences input.ts parses, so
     // the wheel is dead in a real terminal even though the tests inject them.
     this.stream.write("\x1b[?1049h\x1b[?25l");
-    if (this.mouse) this.stream.write("\x1b[?1000h\x1b[?1006h");
+    if (this.mouse) this.stream.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
   }
 
   /**
@@ -89,7 +89,7 @@ export class Screen {
   dispose(): void {
     if (!this.live) return;
     this.live = false;
-    if (this.mouse) this.stream.write("\x1b[?1000l\x1b[?1006l");
+    if (this.mouse) this.stream.write("\x1b[?1000l\x1b[?1002l\x1b[?1006l");
     this.stream.write("\x1b[?25h\x1b[?1049l");
   }
 }
