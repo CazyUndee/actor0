@@ -533,12 +533,26 @@ export function pickerRows(opts: {
 }): Seg[][] {
   const out: Seg[][] = [plain(opts.title, color.muted), blank()];
   if (opts.query !== undefined) {
-    out.push([{ text: "search ", color: color.dim }, { text: opts.query, color: color.text }, { text: "▏", color: color.accent }]);
+    const q = opts.query;
+    const boxW = Math.max(24, Math.min(60, q.length + 12));
+    const inner = boxW - 2;
+    const pad = Math.max(0, inner - ("search ".length + q.length + 1));
+    const b = (s: string): Seg => ({ text: s, color: color.border });
+    out.push([b(`╭${"─".repeat(inner)}╮`)]);
+    out.push([
+      b("│"),
+      { text: " search ", color: color.dim },
+      { text: q, color: color.text, bold: true },
+      { text: "▏", color: color.accent },
+      { text: " ".repeat(pad), color: color.text },
+      b("│"),
+    ]);
+    out.push([b(`╰${"─".repeat(inner)}╯`)]);
     out.push(blank());
   }
   // Reserve rows for the title, the search line, the hint and up to two scroll
   // indicators; whatever is left is the item window.
-  const reserved = 1 + (opts.query !== undefined ? 1 : 0) + 1 + 2 + 2;
+  const reserved = 1 + (opts.query !== undefined ? 4 : 0) + 1 + 2 + 2;
   const itemH = Math.max(1, opts.height - reserved);
   const n = opts.items.length;
   const start = n <= itemH ? 0 : Math.max(0, Math.min(opts.cursor - Math.floor(itemH / 2), n - itemH));
