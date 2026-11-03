@@ -537,13 +537,16 @@ export function pickerRows(opts: {
     const q = opts.query;
     const boxW = Math.max(24, Math.min(60, q.length + 12));
     const inner = boxW - 2;
-    const pad = Math.max(0, inner - (" search ".length + q.length + 1));
+    const pad = Math.max(0, inner - (3 + " search ".length + 1 + q.length + 3 + 1));
     const b = (s: string): Seg => ({ text: s, color: color.border });
     out.push([b(`╭${"─".repeat(inner)}╮`)]);
     out.push([
       b("│"),
+      { text: " ⌕ ", color: "#ffffff", bg: color.surface },
       { text: " search ", color: "#ffffff", bg: color.surface },
+      { text: " ", color: "#ffffff", bg: color.surface },
       { text: q, color: "#ffffff", bold: true, bg: color.surface },
+      { text: " │ ", color: color.border, bg: color.surface },
       { text: "▏", color: "#ffffff", bg: color.surface },
       { text: " ".repeat(pad), color: "#ffffff", bg: color.surface },
       b("│"),
