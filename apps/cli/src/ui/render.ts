@@ -179,9 +179,9 @@ export function panel(rows: Seg[][], innerW: number, width?: number): Seg[][] {
 
 export const MENU_WIDTH = 60;
 
-/** The column of the search bar's input area (box border + the 11-char
+/** The column of the search bar's input area (box border + the 12-char
  *  `⌕  search │ ` prefix), for positioning a caret on that row. */
-export const SEARCH_INPUT_COL = 12;
+export const SEARCH_INPUT_COL = 13;
 
 export type MenuSubRow = {
   label: string;
@@ -212,10 +212,12 @@ function menuSearchRow(query: string, live: boolean, info: boolean): Seg[] {
   const out: Seg[] = [
     { text: "⌕  ", color: color.dim },
     { text: "search", color: color.dim },
+    { text: " ", color: color.dim },
     { text: "│", color: color.border },
+    { text: " ", color: color.dim },
   ];
-  if (query) out.push({ text: ` ${query}`, color: info ? color.muted : color.text, bold: !info });
-  else if (live) out.push({ text: " ▏", color: color.accent });
+  if (query) out.push({ text: query, color: info ? color.muted : color.text, bold: !info });
+  else if (live) out.push({ text: "▏", color: color.accent });
   return out;
 }
 
