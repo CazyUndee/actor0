@@ -1,7 +1,6 @@
 {
   "name": "@actor0/providers",
   "version": "0.2.0",
-  "private": true,
   "type": "module",
   "files": [
     "dist"
@@ -22,11 +21,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@actor0/harness": "*"
+    "@actor0/harness": "^0.2.0"
   },
   "devDependencies": {
     "@types/node": "^20",
     "tsx": "^4.20",
     "typescript": "^5.9"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

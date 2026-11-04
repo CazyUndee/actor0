@@ -1,7 +1,6 @@
 {
   "name": "@actor0/harness",
   "version": "0.2.0",
-  "private": true,
   "type": "module",
   "files": [
     "dist"
@@ -24,5 +23,8 @@
     "@types/node": "^20",
     "tsx": "^4.20",
     "typescript": "^5.9"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
