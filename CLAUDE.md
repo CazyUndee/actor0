@@ -1,15 +1,6 @@
 @AGENTS.md
 
 
-# Release notes — v0.2.0
-
-Headline: a real terminal renderer replaced Ink; the harness/CLI boundary became enforceable; markdown is now actually rendered; context overflow is recovered instead of being fatal; eight tools (rg, glob added); BYOK with three transports; an MCP server; a tool-interface benchmark; a TUI preview that stopped lying; and release plumbing for GitHub + npm.
-
-Full engineering detail for every change — what, why, and how — lives in [`v0.2.0.md`](./v0.2.0.md). That file is the comprehensive record; this section is the headline only. Read it before assuming a behaviour is accidental.
-
----
-
-
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
