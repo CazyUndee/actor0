@@ -495,10 +495,17 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
   sees directly (a crash on a code path, a broken clipboard, a swallowed EPIPE).
   "User-visible" is not the test; "does it change what the code does" is.
   `[chore]` and `[misc]` commits do not bump unless they touch runtime behaviour.
-  "I'll bump later" is how 142 commits shipped under 0.1.1.
-- **Semantic-ish, not strict.** Patch for fixes, minor for features, major for
-  breaking changes to config/session format. When in doubt, bump minor rather
-  than patch — a missed bump is worse than an over-bump.
+- **How much to bump.** Versions are `MAJOR.MINOR.PATCH`. Bump exactly one
+  component per commit, never two, and reset the lower ones to 0:
+    - `PATCH` (0.2.0 -> 0.2.1): any `[fix]` or `[chore]` that touches runtime
+      behaviour. The default for a normal commit.
+    - `MINOR` (0.2.1 -> 0.3.0): any `[feat]` or `[upgrade]`. Resets patch to 0.
+    - `MAJOR` (0.3.0 -> 1.0.0): only when the config or session format changes
+      in a way that old data cannot be read by the new code (or vice versa).
+      Resets minor and patch to 0. Needs a migration note in the commit body.
+  When in doubt between patch and minor, pick minor  a missed feature bump is
+  worse than an over-bump. When in doubt between minor and major, pick minor 
+  major is a promise you cannot easily take back.
 - **Keep the three in sync.** The CLI reads its own version from its
   `package.json` at runtime, so a stale package.json prints a stale `--version`;
   the harness/providers versions are consumed by dependents and by the MCP
