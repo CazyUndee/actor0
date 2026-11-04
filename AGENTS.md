@@ -500,9 +500,9 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
     - `PATCH` (0.2.0 -> 0.2.1): any `[fix]` or `[chore]` that touches runtime
       behaviour. The default for a normal commit.
     - `MINOR` (0.2.1 -> 0.3.0): any `[feat]` or `[upgrade]`. Resets patch to 0.
-    - `MAJOR` (0.3.0 -> 1.0.0): only when the config or session format changes
-      in a way that old data cannot be read by the new code (or vice versa).
-      Resets minor and patch to 0. Needs a migration note in the commit body.
+    - `MAJOR` (0.3.0 -> 1.0.0): only when the user explicitly says to bump
+      major. Never infer a major bump from the code alone. Resets minor and
+      patch to 0. Needs a migration note in the commit body.
   When in doubt between patch and minor, pick minor  a missed feature bump is
   worse than an over-bump. When in doubt between minor and major, pick minor 
   major is a promise you cannot easily take back.
