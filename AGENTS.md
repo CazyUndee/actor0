@@ -490,9 +490,12 @@ Versions live in three places and all three must move together: `apps/cli/packag
 `packages/harness/package.json`, and `packages/providers/package.json`, plus the
 hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.test.ts`.
 
-- **Bump on every user-visible change.** A commit that changes behaviour, fixes a
-  bug, or ships a feature bumps at least the patch number. "I'll bump later" is
-  how 142 commits shipped under 0.1.1.
+- **Bump on every behavioural change.** Any commit tagged `[fix]`, `[feat]`, or
+  `[upgrade]` bumps at least the patch number — including fixes the user never
+  sees directly (a crash on a code path, a broken clipboard, a swallowed EPIPE).
+  "User-visible" is not the test; "does it change what the code does" is.
+  `[chore]` and `[misc]` commits do not bump unless they touch runtime behaviour.
+  "I'll bump later" is how 142 commits shipped under 0.1.1.
 - **Semantic-ish, not strict.** Patch for fixes, minor for features, major for
   breaking changes to config/session format. When in doubt, bump minor rather
   than patch â€” a missed bump is worse than an over-bump.
