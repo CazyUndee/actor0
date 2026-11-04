@@ -1231,7 +1231,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const disclaimerRow: Seg[] = [{ text: " ".repeat(dPad) + disclaimer, color: color.dim }];
 
     const chromeH = top.length + blockedRow.length + slashPopup.length + composer.length + 1;
-    const transcriptV = Math.max(3, rows - 2 - chromeH);
+    // The slash popup can consume the transcript space on a fresh session.
+    // Let the transcript yield completely rather than clipping the composer.
+    const transcriptV = Math.max(0, rows - 2 - chromeH);
     const live = menuOpen ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), expandReasoning);
     const transcript = windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
     while (transcript.length < transcriptV) transcript.push([{ text: " ".repeat(innerW), dim: true }]);
