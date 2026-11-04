@@ -145,6 +145,12 @@ function proseBlock(text: string, cols: number): Seg[][] {
   while (i < lines.length) {
     const line = lines[i]!;
     if (line.trim() === "") {
+      if (out.length > 0) {
+        const last = out[out.length - 1]!;
+        if (!(last.length === 1 && last[0]!.text.trim() === "")) {
+          out.push([{ text: " " }]);
+        }
+      }
       i += 1;
       continue;
     }
@@ -207,6 +213,12 @@ function proseBlock(text: string, cols: number): Seg[][] {
 export function renderMarkdown(text: string, cols: number): Seg[][] {
   const out: Seg[][] = [];
   for (const seg of segments(text)) {
+    if (out.length > 0) {
+      const last = out[out.length - 1]!;
+      if (!(last.length === 1 && last[0]!.text.trim() === "")) {
+        out.push([{ text: " " }]);
+      }
+    }
     if (seg.kind === "code") out.push(...codeBlock(seg, Math.max(20, cols - 4)));
     else if (seg.kind === "table") out.push(...tableBlock(seg, cols));
     else out.push(...proseBlock(seg.text, cols));
