@@ -3,6 +3,15 @@
 Notes for agents and for anyone auditing the harness. The project is small; the
 traps below are the parts that are not obvious from the code.
 
+## Read CLAUDE.md too — even if you are not Claude
+
+This repository's working manual is split across two files and both are mandatory reading, regardless of which agent or tool is operating here:
+
+- `AGENTS.md` (this file) — commit discipline, traps, the six-check verification order, behaviour worth knowing.
+- `CLAUDE.md` — the repository's other working manual: the commit-message format, the commands, the architecture, the CI contract, the UI preview failure modes, and the release notes at the top (with a pointer to `v0.2.0.md` for the full engineering record).
+
+`CLAUDE.md` is not Claude-specific despite the name. It is the project's second manual and an agent that reads only this file will miss the commit-message format, the build traps, and the release notes. Read both before touching anything. If the two disagree, AGENTS.md wins on process and CLAUDE.md wins on architecture and release notes.
+
 ## Commit every change. Every time. No exceptions.
 
 The working tree is not storage. In one session the entire `apps/cli/src` and
@@ -491,7 +500,7 @@ Versions live in three places and all three must move together: `apps/cli/packag
 hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.test.ts`.
 
 - **Bump on every behavioural change.** Any commit tagged `[fix]`, `[feat]`, or
-  `[upgrade]` bumps at least the patch number � including fixes the user never
+  `[upgrade]` bumps at least the patch number � including fixes the user never
   sees directly (a crash on a code path, a broken clipboard, a swallowed EPIPE).
   "User-visible" is not the test; "does it change what the code does" is.
   `[chore]` and `[misc]` commits do not bump unless they touch runtime behaviour.
