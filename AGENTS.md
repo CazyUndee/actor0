@@ -483,3 +483,23 @@ sustainable. So a new model is onboarded with the *breadth* question only:
 The two invariants that keep this honest: verdicts are per-model, never
 averaged across models, and a verdict states its own sample ("1/3 repeats,
 directional") instead of presenting one draw as settled.
+
+## Versioning
+
+Versions live in three places and all three must move together: `apps/cli/package.json`,
+`packages/harness/package.json`, and `packages/providers/package.json`, plus the
+hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.test.ts`.
+
+- **Bump on every user-visible change.** A commit that changes behaviour, fixes a
+  bug, or ships a feature bumps at least the patch number. "I'll bump later" is
+  how 142 commits shipped under 0.1.1.
+- **Semantic-ish, not strict.** Patch for fixes, minor for features, major for
+  breaking changes to config/session format. When in doubt, bump minor rather
+  than patch — a missed bump is worse than an over-bump.
+- **Keep the three in sync.** The CLI reads its own version from its
+  `package.json` at runtime, so a stale package.json prints a stale `--version`;
+  the harness/providers versions are consumed by dependents and by the MCP
+  clientInfo fallback. Never leave one behind.
+- **No silent versions.** If a commit touches behaviour, the version field in
+  the same commit's diff is the evidence it was considered. A review that sees
+  a behaviour change with no version change should flag it.
