@@ -14,6 +14,20 @@ import type { Screen } from "./term.js";
 
 const tick = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
 
+/**
+ * Poll the last frame until `pred` holds — a fixed tick is a load flake: on a
+ * busy CI box a 150 ms wait elapses before React has re-rendered, and the
+ * test asserts on the frame before the input landed.
+ */
+const until = async (screen: { last: string[] }, pred: (joined: string) => boolean, ms = 5000): Promise<void> => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    if (pred(screen.last.join("\n"))) return;
+    await tick(50);
+  }
+  throw new Error(`timed out waiting for frame; last: ${JSON.stringify(screen.last.join("\n").slice(-400))}`);
+};
+
 /** A Screen that records the grids it is asked to draw. */
 class FakeScreen {
   size = { rows: 24, cols: 80 };
@@ -208,17 +222,29 @@ test("the wheel scrolls the transcript but leaves the composer's prompt in place
   }
 });
 
-test("typing a slash command edits the draft and opens the menu in place", async () => {
+test("typing in the slash menu filters it through its search bar, in place", async () => {
   const dummy: ModelClient = {
     async *stream() { yield { type: "done", text: "", complete: true } as never; },
   };
   const { screen, stdin, unmount } = await mount({ transport: dummy });
   try {
-    stdin.write("/h");
-    await tick(250);
-    const joined = screen.last.join("\n");
-    assert.ok(joined.includes("/h"), "the typed slash text is in the composer");
-    assert.ok(joined.includes("help") && joined.includes("show commands"), "the slash menu opened and lists the help command");
+    stdin.write("/");
+    await until(screen, (j) => j.includes("search"), 4000);
+    let joined = screen.last.join("\n");
+    assert.ok(joined.includes("❯ /"), "the composer holds just the /");
+    assert.ok(joined.includes("⌕") && joined.includes("search"), "the menu opened with its search bar");
+    assert.ok(joined.includes("/provider"), "the first command is listed");
+    assert.ok(joined.includes("more") || joined.includes("↓"), "a long command list windows like every other menu");
+    // Typing lands in the menu's search input, not the composer: the fixed
+    // "⌕  search" label stays put and the results filter underneath it.
+    stdin.write("qu");
+    await until(screen, (j) => j.includes("/quit"), 4000);
+    joined = screen.last.join("\n");
+    assert.ok(joined.includes("❯ /"), "the composer still holds just the /");
+    assert.ok(joined.includes("qu"), "the query shows in the search input");
+    assert.ok(joined.includes("/quit"), "the matching command is listed");
+    assert.ok(!joined.includes("/clear"), "non-matching commands are filtered out");
+    assert.equal(joined.match(/search/g)!.length, 1, "the search label is the one fixed one");
   } finally {
     unmount();
   }
@@ -278,7 +304,7 @@ test("the provider menu is a panel with human-readable labels and an add entry",
     assert.ok(!menu.includes("↵ Select") && !menu.includes("→ Manage"), "the bottom shortcut/help footer is removed");
     assert.ok(menu.includes("●"), "the active provider carries a status dot");
     assert.ok(menu.includes("⌕  "), "the panel has a magnifier search bar");
-    assert.ok(!menu.includes("❯"), "no caret pushes the rows in");
+    assert.ok(menu.includes("❯"), "the composer stays visible under the menu");
   } finally {
     unmount();
   }
@@ -295,7 +321,7 @@ test("the model picker windows a long list and filters it as you type", async ()
     stdin.write("\r");
     await tick(150);
     const open = screen.last.join("\n");
-    assert.ok(open.includes("models…"), "the picker opened");
+    assert.ok(open.includes("search"), "the picker opened with its search bar");
     // 42 models cannot all fit: the window shows a subset and a 'more' marker.
     assert.ok(open.includes("more"), "the list is windowed, with a '↓ N more' marker");
     assert.ok(!open.includes("model-42-preview"), "the last model is off-screen until scrolled");
@@ -308,7 +334,7 @@ test("the model picker windows a long list and filters it as you type", async ()
     // Enter on the single match selects it (no turn runs).
     stdin.write("\r");
     await tick(150);
-    assert.ok(!screen.last.join("\n").includes("models…"), "the picker closed on selection");
+    assert.ok(!screen.last.join("\n").includes("search"), "the picker closed on selection");
   } finally {
     unmount();
   }
@@ -328,26 +354,29 @@ test("enter on a provider expands inline actions; escape collapses; only one at 
   );
   const { screen, stdin, unmount } = await mount({ transport: dummy, cfg });
   try {
+    // Expanded actions make the provider block three rows; a 24-row terminal
+    // would window it and hide the add entry, so give the panel room.
+    screen.setSize(32, 80);
     stdin.write("/provider");
     await tick(60);
     stdin.write("\r");
-    await tick(120);
+    await until(screen, (j) => j.includes("Providers"));
     stdin.write("\r"); // expand the highlighted provider
-    await tick(120);
+    await until(screen, (j) => j.includes("Use provider"));
     let menu = screen.last.join("\n");
     assert.ok(menu.includes("Use provider") && menu.includes("Edit provider"), "enter expands the inline actions");
     assert.ok(menu.includes("Add provider"), "the menu stays open — no immediate switch");
     stdin.write("\x1b"); // escape collapses first
-    await tick(100);
+    await until(screen, (j) => !j.includes("Use provider"));
     menu = screen.last.join("\n");
     assert.ok(!menu.includes("Use provider"), "escape collapsed the actions without closing the menu");
     assert.ok(menu.includes("Add provider"), "the menu is still open after the collapse");
     stdin.write("\x1b[B"); // down to the second provider
     await tick(60);
     stdin.write("\r"); // expand it
-    await tick(120);
+    await until(screen, (j) => (j.match(/Use provider/g)?.length ?? 0) === 1);
     menu = screen.last.join("\n");
-    assert.equal(menu.match(/Use provider/g)!.length, 1, "only one provider is expanded at a time");
+    assert.equal(menu.match(/Use provider/g)?.length ?? 0, 1, "only one provider is expanded at a time");
   } finally {
     unmount();
   }
@@ -413,6 +442,9 @@ test("right arrow opens the manage screen for the highlighted provider", async (
   };
   const { screen, stdin, unmount } = await mount({ transport: dummy, cfg: manyModels() });
   try {
+    // The manage screen lists details and four actions; a 24-row terminal is
+    // too short for that, so give it room before opening the panel.
+    screen.setSize(32, 80);
     stdin.write("/provider");
     await tick(60);
     stdin.write("\r");
@@ -430,6 +462,25 @@ test("right arrow opens the manage screen for the highlighted provider", async (
     assert.ok(manage.includes("Manage provider"), "right arrow opens the manage screen");
     assert.ok(manage.includes("Change model") && manage.includes("Test connection") && manage.includes("Remove provider"), "the manage screen lists its actions");
     assert.ok(manage.includes("Endpoint"), "the manage screen shows the provider's details");
+  } finally {
+    unmount();
+  }
+});
+
+test("the usage menu carries the same search bar as every other menu", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
+  try {
+    stdin.write("/usage");
+    await tick(60);
+    stdin.write("\r");
+    await tick(150);
+    const menu = screen.last.join("\n");
+    assert.ok(menu.includes("usage"), "the usage panel is open");
+    assert.ok(menu.includes("all time"), "the all-time total is listed");
+    assert.ok(menu.includes("⌕") && menu.includes("search"), "the same search bar appears on every menu");
   } finally {
     unmount();
   }

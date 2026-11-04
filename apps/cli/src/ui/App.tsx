@@ -59,6 +59,7 @@ import {
   thinkingPickerRows,
   usagePanelRows,
   slashPopupRows,
+  MENU_WIDTH,
   addKindRows,
   addUrlRows,
   addKeyRows,
@@ -75,6 +76,7 @@ import {
   paint,
   fitWidth,
   highlight,
+  segWidth,
   type Face,
   type Seg,
 } from "./render.js";
@@ -162,6 +164,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   };
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
+  // The slash menu's search input: while the menu is open, typing lands here —
+  // the composer keeps just the `/` and the list filters live below it.
+  const [slashQuery, setSlashQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -378,6 +383,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       notice("warn", "still working — wait for the turn, or press Esc to cancel it");
       return;
     }
+    setSlashQuery("");
     const command = parseSlash(input);
     if (command) {
       setDraft("");
@@ -656,9 +662,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
   };
 
-  const slashToken = /^\/([a-z]*)$/i.exec(draft)?.[1];
-  const slashEngaged = mode === "chat" && slashToken !== undefined && slashDismissed !== slashToken;
-  const slashMatches = slashEngaged ? matchSlashCommands(slashToken!) : [];
+  // The menu filters on its own search input, not on the composer draft:
+  // typing goes into the search bar and the fixed "⌕  search" label above the
+  // results never changes.
+  const slashEngaged = mode === "chat" && /^\/$/.test(draft) && slashDismissed !== draft;
+  const slashMatches = slashEngaged ? matchSlashCommands(slashQuery) : [];
   const slashSel = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
   // The model picker filters on a search query; an empty query is every model.
   const filteredModels = modelQuery
@@ -695,7 +703,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       // Always edit the draft in chat, even while the slash menu is open —
       // the menu filters on the draft, so blocking input here is what made
       // typing "/hel" print nothing and never update the list.
-      if (mode === "chat") editDraft(event);
+      if (mode === "chat") {
+        // While the slash menu is open, input lands in its search input, not
+        // the draft — that is what makes the search bar live.
+        if (slashEngaged) {
+          setSlashQuery((q) => q + event.text);
+          setSlashIndex(0);
+        } else editDraft(event);
+      }
       else if (mode === "add") handleAddText(event.text);
       // In a picker, typing filters the list — the same behaviour everywhere.
       else if (mode === "model") {
@@ -773,7 +788,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const dir = event.button === "wheel-up" ? -1 : 1;
     // In chat the wheel scrolls the transcript; in a menu it moves the cursor
     // through the (windowed, possibly long) list — same direction as the keys.
-    if (mode === "chat") return setScrollOffset((o) => (dir < 0 ? o + 3 : Math.max(0, o - 3)));
+    if (mode === "chat") {
+      // The open slash menu owns the wheel: it moves through the command list.
+      if (slashEngaged) return setSlashIndex((i) => wrapSlash(i, slashMatches.length, dir));
+      return setScrollOffset((o) => (dir < 0 ? o + 3 : Math.max(0, o - 3)));
+    }
     if (mode === "menu") return setMenuIndex((i) => wrap(i, filteredProviders.length + 2, dir));
     if (mode === "model") return setModelCursor((c) => wrap(c, Math.max(1, filteredModels.length), dir));
     if (mode === "thinking") return setThinkingCursor((c) => wrap(c, Math.max(1, filteredThinking.length), dir));
@@ -820,12 +839,43 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (slashEngaged) {
       if (key === "up") return setSlashIndex((n) => wrapSlash(n, slashMatches.length, -1));
       if (key === "down") return setSlashIndex((n) => wrapSlash(n, slashMatches.length, 1));
-      if (key === "escape") return setSlashDismissed(slashToken!);
+      if (key === "escape") {
+        // First escape clears the search; a second closes the menu.
+        if (slashQuery) {
+          setSlashQuery("");
+          setSlashIndex(0);
+          return;
+        }
+        setSlashDismissed(draft);
+        return;
+      }
+      // The draft is just the `/` itself — caret keys have nothing to do here.
+      if (key === "left" || key === "right" || key === "home" || key === "end") return;
+      if (key === "backspace") {
+        if (slashQuery) {
+          setSlashQuery((q) => q.slice(0, -1));
+          setSlashIndex(0);
+          return;
+        }
+      } else if (key === "delete") {
+        if (slashQuery) {
+          setSlashQuery("");
+          setSlashIndex(0);
+          return;
+        }
+      } else if (key === "ctrl-u") {
+        if (slashQuery) {
+          setSlashQuery("");
+          setSlashIndex(0);
+          return;
+        }
+      }
       if (key === "tab") {
         const match = slashMatches[slashSel];
         if (match) {
           setDraft(`/${match.name}`);
           setCaret(match.name.length + 1);
+          setSlashQuery("");
         }
         return;
       }
@@ -1225,21 +1275,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const innerW = frameInnerWidth(cols);
     const menuOpen = mode !== "chat";
 
-    // The composer (or an open menu) is pinned to the bottom; the transcript
-    // window fills the space above it.
-    let composer: Seg[][];
-    // Rows a menu may occupy: the frame minus both borders, the top area, the
-    // disclaimer and a sliver of transcript. Long lists window to this height.
-    const menuHeight = Math.max(6, rows - 2 - 3 - 1 - 3);
-    // The composer grows with a long draft, up to a bounded height so the
-    // transcript never disappears entirely; the rest scrolls within the box.
+    // The composer (the draft input) is always pinned to the bottom — even
+    // while a menu is open; the menu renders above it, never in its place.
     const composerMaxH = Math.max(3, Math.min(12, rows - 9));
-    if (menuOpen) {
-      composer = menuRows(menuHeight);
-    } else {
-      composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH }).rows;
-    }
-    const slashPopup = !menuOpen && slashEngaged && slashMatches.length > 0 ? slashPopupRows(slashMatches.map((c) => ({ name: c.name, description: c.description })), slashSel) : [];
+    const composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH }).rows;
     const blockedRow = conversation.blocked ? [[{ text: `the agent needs you: ${conversation.blocked.message} — reply to continue, or /clear`, color: color.warning }]] : [];
 
     // Human-readable header: the provider label, the model, branch, context, session.
@@ -1252,25 +1291,45 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const dPad = Math.max(0, Math.floor((frameInnerWidth(cols) - disclaimer.length) / 2));
     const disclaimerRow: Seg[] = [{ text: " ".repeat(dPad) + disclaimer, color: color.dim }];
 
-    const chromeH = top.length + blockedRow.length + slashPopup.length + composer.length + 1;
-    // The slash popup can consume the transcript space on a fresh session.
-    // Let the transcript yield completely rather than clipping the composer.
+    const blankRow: Seg[] = [{ text: " ".repeat(innerW), dim: true }];
+
+    // Rows a menu may occupy: the frame minus both borders, the top area, the
+    // composer and the disclaimer. Long lists window to this height — and so
+    // does the slash popup, which must never push the composer off the frame.
+    const menuHeight = Math.max(6, rows - 2 - top.length - blockedRow.length - composer.length - 2);
+    // Menus sit in the middle of the frame. panel() already centres its box
+    // (segWidth(row) === innerW there), so this is a no-op on those rows.
+    const centerRows = (r: Seg[][]): Seg[][] =>
+      r.map((row) => {
+        const pad = Math.max(0, Math.floor((innerW - segWidth(row)) / 2));
+        return pad > 0 ? [{ text: " ".repeat(pad), dim: true }, ...row] : row;
+      });
+    const menuContent = menuOpen ? centerRows(menuContentRows(menuHeight)) : [];
+    const slashPopup =
+      !menuOpen && slashEngaged && slashMatches.length > 0
+        ? centerRows(slashPopupRows(slashMatches.map((c) => ({ name: c.name, description: c.description, alias: c.aliases[0] })), slashSel, slashQuery, Math.min(MENU_WIDTH, innerW - 2), menuHeight))
+        : [];
+
+    // The chrome (top, blocked notice, menus, composer) may leave no room
+    // for the transcript on a short terminal; the transcript yields
+    // completely rather than clipping the pinned composer.
+    const chromeH = top.length + blockedRow.length + slashPopup.length + menuContent.length + composer.length + 1;
     const transcriptV = Math.max(0, rows - 2 - chromeH);
     const live = menuOpen ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), expandReasoning);
-    const transcript = windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
-    while (transcript.length < transcriptV) transcript.push([{ text: " ".repeat(innerW), dim: true }]);
 
-    // Panel menus (provider list, manage) are top-aligned modals: the top area,
-    // a blank line, the panel, then blank space down to the disclaimer. The
-    // flat pickers (model, thinking, add) stay anchored above the composer.
+    // Panel menus (provider list, manage) are top-aligned: the top area, a
+    // blank line, the panel. The flat pickers (model, thinking, usage, add)
+    // keep the transcript visible above them; the composer sits under every
+    // menu, panel or flat.
     const panelMenu = mode === "menu" || mode === "manage";
-    const blankRow: Seg[] = [{ text: " ".repeat(innerW), dim: true }];
+    const transcript: Seg[][] = panelMenu ? [] : windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
+    while (!panelMenu && transcript.length < transcriptV) transcript.push(blankRow);
+
     const inner: Seg[][] = panelMenu
-      ? [...top, ...blockedRow, blankRow, ...composer]
-      : [...top, ...blockedRow, ...transcript, ...slashPopup, ...composer];
+      ? [...top, ...blockedRow, blankRow, ...menuContent, ...composer]
+      : [...top, ...blockedRow, ...transcript, ...slashPopup, ...menuContent, ...composer];
     const contentH = rows - 2;
-    // The disclaimer owns the last row; fill everything above it. Padding is
-    // applied before the highlight so column offsets are the visible ones.
+    // The disclaimer owns the last row; fill everything above it.
     const fitted: Seg[][] = inner.map((r) => fitWidth(r, innerW));
     while (fitted.length < contentH - 1) fitted.push(fitWidth(blankRow, innerW));
     fitted.push(fitWidth(disclaimerRow, innerW));
@@ -1299,26 +1358,25 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     return { grid, plain };
   };
 
-  function menuRows(height: number): Seg[][] {
+  function menuContentRows(height: number): Seg[][] {
     const innerW = frameInnerWidth(screen.size.cols);
     switch (mode) {
       case "menu": {
         const providers = filteredProviders.map((p) => ({ name: p.name, label: providerLabel(p), active: p.name === config.activeProvider }));
         // The cursor may sit on the trailing "Add provider" entry.
-        // Content width inside the box the panel draws (boxW - 2), so dividers
-        // and the search bar pad to exactly the panel's inner width.
-        return panel("Providers", providerPanelRows(providers, Math.min(menuIndex, providers.length), providerQuery, Math.max(24, innerW - 4) - 2, expandedProvider, providerActionCursor, height), innerW);
+        const w = Math.min(MENU_WIDTH, innerW - 2);
+        return panel(providerPanelRows(providers, Math.min(menuIndex, providers.length), providerQuery, w, expandedProvider, providerActionCursor, height), innerW, w);
       }
       case "manage": {
         const p = namedProviders(config).find((x) => x.name === manageProvider);
         if (!p) return [];
         const auth = p.auth === "oauth" ? `Subscription${p.oauth?.plan ? ` · ${p.oauth.plan}` : ""}` : "API key";
-        return panel("Manage provider", managePanelRows({ name: p.name, label: providerLabel(p), model: p.model ?? "", endpoint: p.baseUrl, auth }, manageConfirm ? 3 : manageCursor), innerW);
+        return panel(managePanelRows({ name: p.name, label: providerLabel(p), model: p.model ?? "", endpoint: p.baseUrl, auth }, manageConfirm ? 3 : manageCursor, Math.min(MENU_WIDTH, innerW - 2), height), innerW, Math.min(MENU_WIDTH, innerW - 2));
       }
       case "model":
-        return modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery, innerW, activeModel, active?.name);
+        return modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery, Math.min(MENU_WIDTH, innerW - 2), activeModel, active?.name);
       case "thinking":
-        return thinkingPickerRows(filteredThinking.map((o) => ({ label: o.label, effort: o.effort })), Math.min(thinkingCursor, Math.max(0, filteredThinking.length - 1)), thinkingQuery, innerW);
+        return thinkingPickerRows(filteredThinking.map((o) => ({ label: o.label, effort: o.effort })), Math.min(thinkingCursor, Math.max(0, filteredThinking.length - 1)), thinkingQuery, Math.min(MENU_WIDTH, innerW - 2));
       case "usage": {
         const entries = readUsage();
         const period = PERIODS[usageIndex]!;
@@ -1326,7 +1384,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         const bucket = usageSince(entries, since);
         const all = usageSince(entries, 0);
         const byModel = usageByModel(entries, since);
-        return usagePanelRows(`[${period.label}]`, bucket.tokens, bucket.turns, all.tokens, all.turns, byModel);
+        return usagePanelRows(`[${period.label}]`, bucket.tokens, bucket.turns, all.tokens, all.turns, byModel, Math.min(MENU_WIDTH, innerW - 2), height);
       }
       case "add":
         return addRows(height);

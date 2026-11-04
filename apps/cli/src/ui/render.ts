@@ -151,23 +151,193 @@ export function box(rows: Seg[][], cols: number, opts: { border?: string; bg?: s
  * modal look the provider and manage screens use, as opposed to the flat
  * picker lists. `title` is set into the top border.
  */
-export function panel(title: string, rows: Seg[][], innerW: number): Seg[][] {
-  const boxW = Math.max(24, innerW - 4);
+/**
+ * Place a canonical menu box (the output of `menuRows` and its adapters)
+ * in the middle of the frame, inset from the walls — the modal look the
+ * provider and manage screens use. The box keeps its own titled border;
+ * `panel` only positions it.
+ */
+export function panel(rows: Seg[][], innerW: number, width?: number): Seg[][] {
+  const boxW = Math.max(24, Math.min(width ?? MENU_WIDTH, innerW - 4));
   const inset = Math.max(0, Math.floor((innerW - boxW) / 2));
-  const boxed = box(rows, boxW, { border: color.border, title });
-  return boxed.map((r) => fitWidth([{ text: " ".repeat(inset), dim: true }, ...r], innerW));
+  return rows.map((r) => fitWidth([{ text: " ".repeat(inset), dim: true }, ...r], innerW));
 }
 
-/** A full-width rule, for separating sections inside a panel. */
-function rule(): Seg[] {
-  return [{ text: "─".repeat(200), color: color.dim }];
+/* ---- the canonical menu ----
+ *
+ * Every menu in the app — slash commands, providers, manage, models, thinking
+ * effort, usage, the add-provider flow, help — is drawn by `menuRows`, one
+ * shared shape: a single rounded rectangle whose first row is the search bar.
+ * The search bar is a fixed `⌕  search` label, a `│` unicode divider, then
+ * the live input area; the label and icon never move, only the input area
+ * changes as the user types. A horizontal divider runs under the search bar
+ * and every item below is separated from the next by a horizontal divider —
+ * an item is a row of its own, nothing else. `MENU_WIDTH` keeps every menu
+ * the same width; callers clamp it to the terminal. The per-menu builders
+ * below are thin adapters that map their data onto this one shape.
+ */
+
+export const MENU_WIDTH = 60;
+
+/** The column of the search bar's input area (box border + the 11-char
+ *  `⌕  search │ ` prefix), for positioning a caret on that row. */
+export const SEARCH_INPUT_COL = 12;
+
+export type MenuSubRow = {
+  label: string;
+  detail?: string;
+  /** This sub-row carries the cursor (an expanded action, etc.). */
+  active?: boolean;
+};
+
+export type MenuEntry = {
+  /** A 2-column marker: `● `, `✓ `, `+ `, `  `. */
+  marker?: string;
+  markerTone?: string;
+  /** Primary text; the focused row draws it red and bold on the filled bg. */
+  label?: string;
+  /** Muted right-hand text. */
+  detail?: string;
+  /** A full-width plain row (hints, prose) instead of the label/detail split. */
+  line?: string;
+  lineTone?: string;
+  /** Indented rows drawn under this item, each with its own divider. */
+  subRows?: MenuSubRow[];
+  /** The cursor can never land on this row. */
+  selectable?: boolean;
+};
+
+/** The canonical search-bar row: fixed `⌕  search` label, `│` divider, input. */
+function menuSearchRow(query: string, live: boolean, info: boolean): Seg[] {
+  const out: Seg[] = [
+    { text: "⌕  ", color: color.dim },
+    { text: "search", color: color.dim },
+    { text: "│", color: color.border },
+  ];
+  if (query) out.push({ text: ` ${query}`, color: info ? color.muted : color.text, bold: !info });
+  else if (live) out.push({ text: " ▏", color: color.accent });
+  return out;
 }
+
+export function menuRows(o: {
+  title: string;
+  /** Text in the input area; empty + `live` shows the block caret. */
+  query?: string;
+  /** The input area is being typed into. */
+  live?: boolean;
+  /** The input text is shown for information (muted), not as a typed search. */
+  info?: boolean;
+  items: MenuEntry[];
+  /** Index into `items` that carries the cursor; omitted → none. */
+  cursor?: number;
+  /** Window the items to this total height (borders and dividers included). */
+  height?: number;
+  /** Box width; the default keeps every menu the same width. */
+  width?: number;
+  emptyText?: string;
+}): Seg[][] {
+  const width = Math.max(24, o.width ?? MENU_WIDTH);
+  const innerW = width - 2;
+  const query = o.query ?? "";
+  const divider: Seg[] = [{ text: "─".repeat(innerW), color: color.border }];
+  const rows: Seg[][] = [menuSearchRow(query, o.live ?? false, o.info ?? false), divider];
+
+  // Column layout: a fixed 2-column marker, an aligned label column, and the
+  // muted detail — the label is what gets truncated, never the layout.
+  const labeled = o.items.filter((i) => i.label !== undefined);
+  const nameW = labeled.length > 0 ? Math.min(26, Math.max(4, ...labeled.map((i) => i.label!.length))) : 4;
+  const gapW = 2;
+  const labelW = Math.max(0, innerW - 2 - nameW - gapW);
+  const cut = (s: string, w: number): string => (w <= 0 ? "" : s.length > w ? `${s.slice(0, w - 1)}…` : s);
+  const entryRow = (i: number, focused: boolean): Seg[] => {
+    const e = o.items[i]!;
+    if (e.line !== undefined) {
+      const out: Seg[] = [{ text: e.line, color: e.lineTone, bg: focused ? color.surface : undefined }];
+      if (e.line.length < innerW) out.push({ text: " ".repeat(innerW - e.line.length), bg: focused ? color.surface : undefined, dim: true });
+      return out;
+    }
+    const bg = focused ? color.surface : undefined;
+    const label = cut(e.label ?? "", nameW);
+    const out: Seg[] = [
+      { text: (e.marker ?? "  ").slice(0, 2).padEnd(2), color: e.markerTone, bg },
+      { text: label, color: focused ? "#ff5555" : color.text, bold: focused, bg },
+      { text: " ".repeat(nameW - label.length + gapW), bg },
+    ];
+    if (e.detail !== undefined && labelW > 0) out.push({ text: cut(e.detail, labelW), color: color.muted, bg });
+    return out;
+  };
+  const subRow = (sr: MenuSubRow): Seg[] => {
+    const bg = sr.active ? color.surface : undefined;
+    const detail = sr.detail !== undefined ? `  ${cut(sr.detail, Math.max(0, innerW - 4 - sr.label.length - 2))}` : "";
+    return [
+      { text: "    ", bg },
+      { text: sr.label, color: sr.active ? "#ff5555" : color.muted, bold: sr.active, bg },
+      ...(detail ? [{ text: detail, color: color.text, bg } as Seg] : []),
+    ];
+  };
+
+  // Windowing: a content row is an item (plus its sub-rows) or a marker, and a
+  // divider follows every row — so C content rows cost `3 + 2*C` box rows, and
+  // B content rows fit in `o.height`.
+  let start = 0;
+  let end = o.items.length;
+  if (o.height !== undefined && o.items.length > 0) {
+    const n = o.items.length;
+    const units = o.items.map((i) => 1 + (i.subRows?.length ?? 0));
+    const totalUnits = units.reduce((a, b) => a + b, 0);
+    const B = Math.max(1, Math.floor((o.height - 3) / 2));
+    if (totalUnits > B) {
+      const walk = (s: number): number => {
+        let e = s;
+        while (e < n) {
+          const shown = units.slice(s, e + 1).reduce((a, b) => a + b, 0);
+          const c = shown + (s > 0 ? 1 : 0) + (e + 1 < n ? 1 : 0); // items, sub-rows, markers
+          if (c > B) break;
+          e += 1;
+        }
+        // Never window to zero items: force the first row in rather than an empty box.
+        return e === s ? Math.min(n, s + 1) : e;
+      };
+      start = o.cursor !== undefined ? Math.max(0, Math.min(o.cursor - Math.floor(B / 2), n - 1)) : 0;
+      end = walk(start);
+      // The cursor's item must be in the window; a heavy block before it can
+      // push it out, so re-anchor the window at the cursor when that happens.
+      if (o.cursor !== undefined && o.cursor >= end && o.cursor < n) {
+        start = o.cursor;
+        end = walk(start);
+      }
+    }
+  }
+  const above = start;
+  const below = o.items.length - end;
+
+  const body: Seg[][] = [];
+  const push = (r: Seg[]): void => {
+    if (body.length > 0) body.push(divider);
+    body.push(r);
+  };
+  if (above > 0) push(plain(`  ↑ ${above} above`, color.dim));
+  for (let i = start; i < end; i += 1) {
+    const e = o.items[i]!;
+    push(entryRow(i, o.cursor === i && e.selectable !== false));
+    // Sub-rows are a divider-free block that belongs to the item, not the
+    // list — they ride under it without earning their own dividers.
+    for (const sr of e.subRows ?? []) body.push(subRow(sr));
+  }
+  if (below > 0) push(plain(`  ↓ ${below} more`, color.dim));
+  if (start === end) push(plain(`  ${o.emptyText ?? "no matches"}`, color.dim));
+  rows.push(...body);
+  return box(rows, width, { border: color.border, title: o.title });
+}
+
+
+
 
 /**
- * The provider list: a search box, then one rounded list holding every provider
- * on a single row, the inline expand actions, and "+ Add provider". Each row is
- * three aligned columns — a narrow status dot, the name, and a muted label — so
- * long names/URLs truncate instead of wrapping a provider onto two lines.
+ * The provider list, as the canonical menu: one rounded rectangle with the
+ * search bar on top, each provider a single row (status dot, name, muted
+ * label), the expanded actions as sub-rows, then the add entry — a
+ * horizontal divider between every row.
  */
 export function providerPanelRows(
   providers: { name: string; label: string; active: boolean }[],
@@ -178,113 +348,67 @@ export function providerPanelRows(
   actionCursor?: number,
   height?: number,
 ): Seg[][] {
-  const contentW = width ?? 60;
-  const rows: Seg[][] = [];
-
-  // Search box: rounded, magnifier, "Search providers…" placeholder. The query
-  // replaces the placeholder as you type.
-  const searchText = query ? query : "Search providers…";
-  rows.push(...box([[
-    { text: "⌕  ", color: color.dim, bg: color.surface },
-    { text: searchText, color: query ? color.text : color.dim, bold: Boolean(query), bg: color.surface },
-  ]], contentW, { border: color.border }));
-  rows.push(blank());
-
-  // One rounded list: every provider on a single row, subtle dividers, the
-  // expanded actions, and the add entry — all inside the same rectangle.
-  const n = providers.length;
-  const expandedOpen = expandedIndex !== null && expandedIndex !== undefined;
-  const cap = height === undefined ? Infinity : Math.max(1, Math.floor((height - 11 - (expandedOpen ? 3 : 0)) / 2));
-  const itemN = Math.min(n, cap);
-  const start = n <= itemN ? 0 : Math.max(0, Math.min(cursor - Math.floor(itemN / 2), n - itemN));
-  const end = Math.min(n, start + itemN);
-
-  // Column widths. The status column is fixed so every name begins at the same
-  // column; the name column is capped so the label column stays aligned and the
-  // label is what gets truncated, never the layout.
-  const innerW = contentW - 2;
-  const statusW = 2;
-  const nameW = Math.min(24, Math.max(4, providers.reduce((m, p) => Math.max(m, p.name.length), 0)));
-  const gapW = 2;
-  const labelW = Math.max(0, innerW - statusW - nameW - gapW);
-  const cut = (s: string, w: number): string => (w <= 0 ? "" : s.length > w ? `${s.slice(0, w - 1)}…` : s);
-  const divider: Seg[] = [{ text: "─".repeat(innerW), color: color.dim }];
-
-  const providerRow = (i: number): Seg[] => {
-    const p = providers[i]!;
-    const focused = i === cursor;
-    const bg = focused ? color.surface : undefined;
-    return [
-      { text: p.active ? "● " : "  ", color: p.active ? color.success : undefined, bg },
-      { text: cut(p.name, nameW).padEnd(nameW), color: focused ? "#ff5555" : color.text, bold: focused, bg },
-      { text: " ".repeat(gapW), bg },
-      ...(labelW > 0 ? [{ text: cut(p.label, labelW), color: color.muted, bg } as Seg] : []),
-    ];
-  };
-  const actionRow = (label: string, active: boolean): Seg[] => [
-    { text: "    ", bg: active ? color.surface : undefined },
-    { text: label, color: active ? "#ff5555" : color.text, bold: active, bg: active ? color.surface : undefined },
-  ];
-  const addFocused = cursor === n;
-  const addBg = addFocused ? color.surface : undefined;
-  const addRow: Seg[] = [
-    { text: "  ", bg: addBg },
-    { text: "+ ", color: color.accent, bg: addBg },
-    { text: "Add provider", color: addFocused ? "#ff5555" : color.text, bold: addFocused, bg: addBg },
-  ];
-
-  const listRows: Seg[][] = [];
-  if (n === 0) {
-    listRows.push(plain("  no providers yet", color.dim));
-  } else {
-    if (start > 0) listRows.push(plain(`  ↑ ${start} above`, color.dim));
-    for (let i = start; i < end; i += 1) {
-      if (i > start) listRows.push(divider);
-      listRows.push(providerRow(i));
-      if (expandedIndex === i) {
-        listRows.push(divider);
-        const ac = actionCursor ?? 0;
-        listRows.push(actionRow("Use provider", ac === 0));
-        listRows.push(actionRow("Edit provider", ac === 1));
-      }
-    }
-    if (end < n) listRows.push(plain(`  ↓ ${n - end} more`, color.dim));
-  }
-  listRows.push(divider);
-  listRows.push(addRow);
-
-  rows.push(...box(listRows, contentW, { border: color.border }));
-  return rows;
+  const items: MenuEntry[] = providers.map((p, i) => ({
+    marker: p.active ? "● " : "  ",
+    markerTone: p.active ? color.success : undefined,
+    label: p.name,
+    detail: p.label,
+    subRows:
+      expandedIndex === i
+        ? [
+            { label: "Use provider", active: (actionCursor ?? 0) === 0 },
+            { label: "Edit provider", active: (actionCursor ?? 0) === 1 },
+          ]
+        : undefined,
+  }));
+  items.push({ marker: "+ ", markerTone: color.accent, label: "Add provider" });
+  return menuRows({
+    title: "Providers",
+    query,
+    live: true,
+    items,
+    cursor,
+    width,
+    height,
+    emptyText: "no providers yet",
+  });
 }
 
-/** The manage screen for one provider: its details, then actions. */
+/** The manage screen for one provider: its details as sub-rows, then actions. */
 export function managePanelRows(
   provider: { name: string; label: string; model: string; endpoint: string; auth: string },
   cursor: number,
+  width?: number,
+  height?: number,
 ): Seg[][] {
-  const rows: Seg[][] = [];
-  rows.push([{ text: provider.name, color: color.accent, bold: true }]);
-  rows.push([{ text: provider.label, color: color.dim }]);
-  rows.push(blank());
-  const col = 22;
-  const detail = (label: string, value: string): Seg[] => [
-    { text: label.padEnd(col), color: color.dim },
-    { text: value, color: color.text },
-  ];
-  rows.push(detail("Model", provider.model || "(none)"));
-  rows.push(detail("Endpoint", provider.endpoint));
-  rows.push(detail("Authentication", provider.auth));
-  rows.push(blank());
-  rows.push(rule());
   const actions = ["Change model", "Edit provider", "Test connection", "Remove provider"];
-  actions.forEach((a, i) => {
-    const focused = i === cursor;
-    rows.push([{ text: focused ? "●" : "○", color: focused ? "#ff5555" : color.dim, bg: focused ? color.surface : undefined }, { text: "  " }, { text: a, color: focused ? "#ff5555" : color.text, bold: focused, bg: focused ? color.surface : undefined }]);
+  const items: MenuEntry[] = [
+    {
+      label: provider.name,
+      detail: provider.label,
+      selectable: false,
+      subRows: [
+        { label: "Model", detail: provider.model || "(none)" },
+        { label: "Endpoint", detail: provider.endpoint },
+        { label: "Authentication", detail: provider.auth },
+      ],
+    },
+    ...actions.map((label, i) => ({
+      marker: i === cursor ? "● " : "○ ",
+      markerTone: i === cursor ? color.accent : color.dim,
+      label,
+    })),
+  ];
+  return menuRows({
+    title: "Manage provider",
+    query: provider.name,
+    info: true,
+    items,
+    cursor: cursor + 1, // the cursor walks the four actions, not the details block
+    width: width ?? MENU_WIDTH,
+    height,
   });
-  rows.push(blank());
-  return rows;
 }
-
 /** One committed transcript entry, as rows of segments (each row ≤ `cols`). */
 export function entryLines(entry: Entry, cols: number, expandReasoning = false): Seg[][] {
   switch (entry.kind) {
@@ -376,24 +500,18 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false):
   }
 }
 
-/** The commands panel, laid out to fit `cols` and returned as rows of segments. */
+/** The commands list, as the canonical menu (a reference, not a search). */
 export function helpBox(cols: number): Seg[][] {
-  const width = Math.max(40, Math.min(cols - 2, 92));
-  const inner = width - 4;
-  const rows = HELP_TEXT.map(([command, description]) => {
-    const [name, alias] = command.split(/\s{2,}/);
-    return { name: name ?? command, alias: alias ?? "", description };
-  });
-  const nameW = Math.max(...rows.map((r) => r.name.length));
-  const aliasW = Math.max(...rows.map((r) => r.alias.length));
-  const line = (content: string, tone?: string): Seg[] => plain(`│ ${content.padEnd(inner)} │`, tone ?? color.dim);
-  const edge = (l: string, r: string): Seg[] => plain(`${l}${"─".repeat(width - 2)}${r}`, color.dim);
-  const out: Seg[][] = [edge("╭", "╮"), line("commands", color.muted), line("")];
-  for (const r of rows) out.push(line(`${r.name.padEnd(nameW + 2)}${r.alias.padEnd(aliasW + 2)}${r.description}`.slice(0, inner)));
-  out.push(line(""), line("esc cancels a running turn · Ctrl+D quits"), edge("╰", "╯"));
-  return out;
+  const width = Math.min(MENU_WIDTH, Math.max(40, cols - 2));
+  const items: MenuEntry[] = HELP_TEXT.map(([command, description]) => ({
+    marker: "  ",
+    label: command,
+    detail: description,
+    selectable: false,
+  }));
+  items.push({ line: "esc cancels a running turn · Ctrl+D quits", lineTone: color.dim, selectable: false });
+  return menuRows({ title: "commands", items, width });
 }
-
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
 export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true): Seg[][] {
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
@@ -592,194 +710,152 @@ export interface PickerItem {
  * long (a provider's models) windows to `height`, following the cursor, with
  * ↑/↓ markers for the rest.
  */
+/** A filterable / multi-select picker, as the canonical menu. */
 export function pickerRows(opts: {
   title: string;
   items: PickerItem[];
   cursor: number;
+  /** A dim line under the search bar, above the first item. */
+  prefix?: string;
+  /** A dim line at the bottom, after the last item. */
   hint?: string;
-  height: number;
+  height?: number;
   width?: number;
   query?: string;
 }): Seg[][] {
-  const out: Seg[][] = [];
-  if (opts.query !== undefined) {
-    const q = opts.query;
-    const boxW = Math.max(24, Math.min(60, q.length + 12));
-    const inner = boxW - 2;
-    const pad = Math.max(0, inner - (3 + " search ".length + 1 + q.length + 3 + 1));
-    const b = (s: string): Seg => ({ text: s, color: color.border });
-    out.push([b(`╭${"─".repeat(inner)}╮`)]);
-    out.push([
-      b("│"),
-      { text: " ⌕ ", color: "#ffffff", bg: color.surface },
-      { text: " search ", color: "#ffffff", bg: color.surface },
-      { text: " ", color: "#ffffff", bg: color.surface },
-      { text: q, color: "#ffffff", bold: true, bg: color.surface },
-      { text: " │ ", color: color.border, bg: color.surface },
-      { text: "▏", color: "#ffffff", bg: color.surface },
-      { text: " ".repeat(pad), color: "#ffffff", bg: color.surface },
-      b("│"),
-    ]);
-    out.push([b(`╰${"─".repeat(inner)}╯`)]);
-    out.push(blank());
+  const entries: MenuEntry[] = [];
+  if (opts.prefix) entries.push({ line: opts.prefix, lineTone: color.dim, selectable: false });
+  for (const it of opts.items) {
+    entries.push({
+      marker: it.selected ? "● " : "○ ",
+      markerTone: it.selected ? color.accent : color.dim,
+      label: it.label,
+      detail: it.detail,
+    });
   }
-  // Reserve rows for the title, the search line, the hint (when present) and up
-  // to two scroll indicators; whatever is left is the item window.
-  const reserved = 1 + (opts.query !== undefined ? 4 : 0) + (opts.hint ? 2 : 0) + 2;
-  const itemH = Math.max(1, opts.height - reserved);
-  const n = opts.items.length;
-  const start = n <= itemH ? 0 : Math.max(0, Math.min(opts.cursor - Math.floor(itemH / 2), n - itemH));
-  const end = Math.min(n, start + itemH);
-  if (start > 0) out.push(plain(`  ↑ ${start} above`, color.dim));
-  out.push(plain("─".repeat(24), color.border));
-  for (let i = start; i < end; i += 1) {
-    const item = opts.items[i]!;
-    const focused = i === opts.cursor;
-    out.push([
-      { text: "  " },
-      { text: item.selected ? "● " : "○ ", color: item.selected ? color.accent : color.dim },
-      { text: item.label, color: focused ? "#ff5555" : color.text, bold: focused, bg: focused ? color.surface : undefined },
-      ...(item.detail ? [{ text: `  ${item.detail}`, color: color.dim } as Seg] : []),
-    ]);
-  }
-  out.push(plain("─".repeat(24), color.border));
-  if (end < n) out.push(plain(`  ↓ ${n - end} more`, color.dim));
-  if (opts.hint) {
-    out.push(blank());
-    out.push(plain(opts.hint, color.dim));
-  }
-  const w = opts.width ?? 60;
-  return box(out, w, { border: color.border, title: opts.title });
+  if (opts.hint) entries.push({ line: opts.hint, lineTone: color.dim, selectable: false });
+  return menuRows({
+    title: opts.title,
+    query: opts.query ?? "",
+    live: opts.query !== undefined,
+    items: entries,
+    cursor: opts.cursor + (opts.prefix ? 1 : 0),
+    height: opts.height,
+    width: opts.width,
+  });
 }
 
 export function modelPickerRows(
   entries: { model: string; provider: string }[],
   cursor: number,
-  height: number,
-  query?: string,
+  height?: number,
+  query = "",
   width?: number,
   activeModel?: string,
   activeProvider?: string,
 ): Seg[][] {
-  const contentW = width ?? 60;
-  const rows: Seg[][] = [];
-
-  // Search bar: rounded, magnifier, white text on grey.
-  const searchLabel = query ? query : "models…";
-  const prefix = "⌕ search ";
-  const searchPad = Math.max(0, contentW - prefix.length - searchLabel.length - 1);
-  rows.push(...box([[
-    { text: prefix, color: color.dim, bg: color.surface },
-    { text: searchLabel, color: query ? color.text : color.dim, bold: Boolean(query), bg: color.surface },
-    { text: "▏", color: color.accent, bg: color.surface },
-    { text: " ".repeat(searchPad), color: color.text, bg: color.surface },
-  ]], contentW, { border: color.border }));
-  rows.push(blank());
-
-  // Window the list; each entry takes ~2 rows (entry + divider). The whole
-  // picker must fit in `height`, so budget: search box (2), blanks (2),
-  // scroll markers (2), hint (1), list-box borders (2) — the rest is items.
-  const itemH = Math.max(1, Math.floor((height - 9) / 2));
-  const n = entries.length;
-  const start = n <= itemH ? 0 : Math.max(0, Math.min(cursor - Math.floor(itemH / 2), n - itemH));
-  const end = Math.min(n, start + itemH);
-  if (start > 0) rows.push(plain(`  ↑ ${start} above`, color.dim));
-
-  const listRows: Seg[][] = [];
-  for (let i = start; i < end; i += 1) {
-    if (i > start) listRows.push([{ text: "─".repeat(contentW - 2), color: color.border }]);
-    const e = entries[i]!;
-    const focused = i === cursor;
-    const isActiveModel = e.model === activeModel;
-    const provBold = e.provider !== "" && e.provider === activeProvider;
-    listRows.push([
-      { text: isActiveModel ? "✓ " : "  ", color: color.success, bold: isActiveModel },
-      { text: e.model, color: focused ? "#ff5555" : color.text, bold: focused },
-      { text: "  ", color: color.dim },
-      { text: e.provider, color: color.dim, bold: provBold },
-    ]);
-  }
-  if (n === 0) listRows.push([{ text: "no models", color: color.dim }]);
-  rows.push(...box(listRows, contentW, { border: color.border }));
-
-  if (end < n) rows.push(plain(`  ↓ ${n - end} more`, color.dim));
-  return rows;
-}
-
-export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query?: string, width?: number): Seg[][] {
-  return pickerRows({ title: "reasoning effort", items: options.map((o, i) => ({ label: o.label, selected: i === cursor })), cursor, height: options.length + 6, width, query });
-}
-
-/** The `/usage` panel: a period, a total, and a per-model breakdown. */
-export function usagePanelRows(periodLabel: string, sinceTokens: number, sinceTurns: number, allTokens: number, allTurns: number, byModel: { model: string; tokens: number }[]): Seg[][] {
-  const out: Seg[][] = [plain("usage", color.muted), plain(periodLabel, color.dim)];
-  out.push([{ text: `${formatTokens(sinceTokens)} tokens`, color: color.text }, { text: ` across ${sinceTurns} turn${sinceTurns === 1 ? "" : "s"}`, color: color.dim }]);
-  out.push(plain(`all time: ${formatTokens(allTokens)} tokens across ${allTurns} turns`, color.dim));
-  if (byModel.length > 0) {
-    out.push(plain("", color.dim));
-    for (const row of byModel) out.push([{ text: row.model, color: color.muted }, { text: `  ${formatTokens(row.tokens)}`, color: color.dim }]);
-  }
-  // hint removed per provider-picker redesign
-  return box(out, 56, { border: color.border });
-}
-
-export function slashPopupRows(commands: { name: string; description: string }[], selected: number): Seg[][] {
-  const boxW = 48;
-  const innerW = boxW - 2;
-  const maxName = Math.max(1, ...commands.map((c) => c.name.length));
-  const nameWidth = maxName + 1; // include the leading "/"
-  const gap = 4;
-  const colWidth = nameWidth + gap;
-  const rows: Seg[][] = [];
-  commands.forEach((c, i) => {
-    if (i > 0) rows.push([{ text: "─".repeat(innerW), color: color.border }]);
-    const nameToken = `/${c.name}`;
-    const padLen = Math.max(0, colWidth - nameToken.length);
-    rows.push([
-      { text: nameToken, color: i === selected ? color.accent : color.text, bold: i === selected },
-      { text: " ".repeat(padLen), color: color.dim },
-      { text: c.description, color: color.dim },
-    ]);
+  void activeProvider;
+  return menuRows({
+    title: "models",
+    query,
+    live: true,
+    items: entries.map((e) => ({
+      marker: e.model === activeModel ? "✓ " : "  ",
+      markerTone: e.model === activeModel ? color.success : undefined,
+      label: e.model,
+      detail: e.provider || undefined,
+    })),
+    cursor,
+    height,
+    width,
+    emptyText: "no models",
   });
-  return box(rows, boxW, { border: color.border });
 }
 
+export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query = "", width?: number): Seg[][] {
+  return pickerRows({
+    title: "reasoning effort",
+    items: options.map((o, i) => ({ label: o.label, selected: i === cursor })),
+    cursor,
+    query,
+    width,
+  });
+}
+/** The `/usage` panel: a period, a total, and a per-model breakdown. */
+export function usagePanelRows(periodLabel: string, sinceTokens: number, sinceTurns: number, allTokens: number, allTurns: number, byModel: { model: string; tokens: number }[], width?: number, height?: number): Seg[][] {
+  const items: MenuEntry[] = [
+    { marker: "  ", label: periodLabel, detail: `${formatTokens(sinceTokens)} tokens · ${sinceTurns} turn${sinceTurns === 1 ? "" : "s"}`, selectable: false },
+    { marker: "  ", label: "all time", detail: `${formatTokens(allTokens)} tokens · ${allTurns} turn${allTurns === 1 ? "" : "s"}`, selectable: false },
+    ...byModel.map((r) => ({ marker: "· ", markerTone: color.muted, label: r.model, detail: formatTokens(r.tokens), selectable: false })),
+  ];
+  return menuRows({ title: "usage", items, width: width ?? MENU_WIDTH, height });
+}
+
+/** The slash-command menu: the canonical rectangle whose search bar filters it. */
+export function slashPopupRows(commands: { name: string; description: string; alias?: string }[], selected: number, query = "", width?: number, height?: number): Seg[][] {
+  return menuRows({
+    title: "commands",
+    query,
+    live: true,
+    items: commands.map((c) => ({
+      marker: c.alias !== undefined && c.alias.length === 1 ? `${c.alias} ` : "  ",
+      markerTone: color.muted,
+      label: `/${c.name}`,
+      detail: c.description,
+    })),
+    cursor: selected,
+    width,
+    height,
+  });
+}
 /** The add-provider flow, one renderer per phase. */
 export function addKindRows(onboarding: boolean, kinds: { id: string; label: string; auth: string[] }[], cursor: number, query?: string): Seg[][] {
-  const rows = pickerRows({
+  return pickerRows({
     title: onboarding ? "welcome to actor0" : "add a provider",
+    prefix: onboarding ? "bring your own provider — pick one to start" : undefined,
     items: kinds.map((k, i) => ({ label: k.label, detail: k.auth.join(" or "), selected: i === cursor })),
     cursor,
     hint: "type to filter · ↑/↓ move · enter choose · esc cancel",
-    height: kinds.length + 8,
     query,
   });
-  if (onboarding) rows.splice(1, 0, plain("bring your own provider — pick one to start", color.dim));
-  return rows;
 }
 
 export function addUrlRows(label: string, url: string): { rows: Seg[][]; inputRow: number; inputCol: number } {
-  return {
-    rows: [plain(`${label} — base URL`, color.muted), [{ text: "❯ ", color: color.accent }, { text: url, color: color.text }], plain("enter to continue · esc cancel", color.dim)],
-    inputRow: 1,
-    inputCol: 3,
-  };
+  const rows = menuRows({
+    title: `${label} — base URL`,
+    query: url,
+    live: true,
+    items: [{ line: "enter to continue · esc cancel", lineTone: color.dim, selectable: false }],
+  });
+  return { rows, inputRow: 1, inputCol: SEARCH_INPUT_COL };
 }
 
 export function addKeyRows(label: string, key: string): { rows: Seg[][]; inputRow: number; inputCol: number } {
-  return {
-    rows: [plain(`${label} — API key`, color.muted), [{ text: "❯ ", color: color.accent }, { text: "•".repeat(key.length), color: color.text }], plain("enter to continue · esc cancel", color.dim)],
-    inputRow: 1,
-    inputCol: 3,
-  };
+  const rows = menuRows({
+    title: `${label} — API key`,
+    query: "•".repeat(key.length),
+    live: true,
+    items: [{ line: "enter to continue · esc cancel", lineTone: color.dim, selectable: false }],
+  });
+  return { rows, inputRow: 1, inputCol: SEARCH_INPUT_COL };
 }
 
 export function addWorkingRows(label: string, note: string): Seg[][] {
-  return [plain(label, color.muted), ...note.split("\n").map((l) => plain(l, color.info)), plain("esc to cancel", color.dim)];
+  const items: MenuEntry[] = [
+    ...note.split("\n").map((l): MenuEntry => ({ line: l, lineTone: color.info, selectable: false })),
+    { line: "esc to cancel", lineTone: color.dim, selectable: false },
+  ];
+  return menuRows({ title: label, items });
 }
 
 export function addErrorRows(message: string): Seg[][] {
-  return [plain(message, color.error), plain("enter to try again · esc cancel", color.dim)];
+  return menuRows({
+    title: "add failed",
+    items: [
+      { line: message, lineTone: color.error, selectable: false },
+      { line: "enter to try again · esc cancel", lineTone: color.dim, selectable: false },
+    ],
+  });
 }
 
 export function addModelsRows(label: string, models: string[], cursor: number, chosen: Set<string>, height: number, query?: string): Seg[][] {
@@ -794,13 +870,14 @@ export function addModelsRows(label: string, models: string[], cursor: number, c
 }
 
 export function addManualRows(label: string, manual: string): { rows: Seg[][]; inputRow: number; inputCol: number } {
-  return {
-    rows: [plain(`${label} — no models listed`, color.muted), plain("type a model name, or enter to add it and set one later with /model", color.dim), [{ text: "❯ ", color: color.accent }, { text: manual, color: color.text }]],
-    inputRow: 2,
-    inputCol: 3,
-  };
+  const rows = menuRows({
+    title: `${label} — no models listed`,
+    query: manual,
+    live: true,
+    items: [{ line: "type a model name, or enter to add it and set one later with /model", lineTone: color.dim, selectable: false }],
+  });
+  return { rows, inputRow: 1, inputCol: SEARCH_INPUT_COL };
 }
-
 /** The 3×3 status face box: ╭───╮ / │face│ / ╰───╯. */
 export function faceBox(face: Face): Seg[][] {
   const f = FACE[face];
