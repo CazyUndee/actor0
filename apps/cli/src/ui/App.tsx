@@ -35,7 +35,7 @@ import { contextWindowTokens } from "@actor0/harness";
 import { parseSlash, matchSlashCommands, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { Screen } from "./term.js";
-import { begin, emptySelection, extend, finish, hasSelection, selectedText, spans, type SelectionState } from "./selection.js";
+import { begin, bounds, emptySelection, extend, finish, hasSelection, selectedText, spans, type SelectionState } from "./selection.js";
 import { copyToClipboard } from "./clipboard.js";
 import { parseInput, type InputEvent } from "./input.js";
 
@@ -736,15 +736,37 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         setSelection(() => begin(point, rows, cols));
         return;
       }
+      let copiedText = "";
       setSelection((s) => {
         const done = finish(s);
-        const text = selectedText(done, plainRowsRef.current);
-        if (text.trim()) {
-          copyToClipboard(text);
-          notice("info", `copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"}`);
+        // `done` is in terminal coordinates (borders included), but
+        // `plainRowsRef` holds the inner content rows, so map the selection into
+        // that inner space — the same shift the highlight applies (row - 1,
+        // col - 2). Without it, selectedText indexes the wrong row/column and
+        // returns divider glyphs (─) instead of the selected text.
+        const b = bounds(done);
+        if (b) {
+          const lines = plainRowsRef.current;
+          const innerW = lines.length > 0 ? lines[0]!.length : 1;
+          const shifted: SelectionState = {
+            anchor: {
+              row: Math.max(0, Math.min(lines.length - 1, b.start.row - 1)),
+              col: Math.max(0, Math.min(innerW - 1, b.start.col - 2)),
+            },
+            focus: {
+              row: Math.max(0, Math.min(lines.length - 1, b.end.row - 1)),
+              col: Math.max(0, Math.min(innerW - 1, b.end.col - 2)),
+            },
+            dragging: false,
+          };
+          copiedText = selectedText(shifted, lines);
         }
         return done;
       });
+      if (copiedText.trim()) {
+        copyToClipboard(copiedText);
+        notice("info", `copied ${copiedText.split("\n").length} line${copiedText.split("\n").length === 1 ? "" : "s"} to clipboard`);
+      }
       return;
     }
     if (event.button !== "wheel-up" && event.button !== "wheel-down") return;

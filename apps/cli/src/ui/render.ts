@@ -163,7 +163,12 @@ function rule(): Seg[] {
   return [{ text: "─".repeat(200), color: color.dim }];
 }
 
-/** The provider list: search box, list box (with inline expand), add box, footer. */
+/**
+ * The provider list: a search box, then one rounded list holding every provider
+ * on a single row, the inline expand actions, and "+ Add provider". Each row is
+ * three aligned columns — a narrow status dot, the name, and a muted label — so
+ * long names/URLs truncate instead of wrapping a provider onto two lines.
+ */
 export function providerPanelRows(
   providers: { name: string; label: string; active: boolean }[],
   cursor: number,
@@ -176,82 +181,79 @@ export function providerPanelRows(
   const contentW = width ?? 60;
   const rows: Seg[][] = [];
 
-  // Search box: rounded, magnifier, white text on grey.
-  const searchLabel = query ? query : "providers…";
-  const searchPrefix = "⌕ search ";
-  const searchPad = Math.max(0, contentW - searchPrefix.length - searchLabel.length - 1);
+  // Search box: rounded, magnifier, "Search providers…" placeholder. The query
+  // replaces the placeholder as you type.
+  const searchText = query ? query : "Search providers…";
   rows.push(...box([[
-    { text: searchPrefix, color: color.dim, bg: color.surface },
-    { text: searchLabel, color: query ? color.text : color.dim, bold: Boolean(query), bg: color.surface },
-    { text: "▏", color: color.accent, bg: color.surface },
-    { text: " ".repeat(searchPad), color: color.text, bg: color.surface },
+    { text: "⌕  ", color: color.dim, bg: color.surface },
+    { text: searchText, color: query ? color.text : color.dim, bold: Boolean(query), bg: color.surface },
   ]], contentW, { border: color.border }));
   rows.push(blank());
 
-  // List box: one row per provider, subtle dividers, inline expand. When a
-  // height is given the list windows to it, so the panel's fixed chrome
-  // (search box 2, list-box borders 2, add box 2, footer 1, blanks 3) plus
-  // both scroll markers plus the expanded actions always fit.
-  const dividerRow: Seg[] = [{ text: "─".repeat(contentW - 2), color: color.border }];
+  // One rounded list: every provider on a single row, subtle dividers, the
+  // expanded actions, and the add entry — all inside the same rectangle.
   const n = providers.length;
   const expandedOpen = expandedIndex !== null && expandedIndex !== undefined;
-  const cap = height === undefined ? Infinity : Math.max(1, Math.floor((height - 14 - (expandedOpen ? 3 : 0)) / 2));
+  const cap = height === undefined ? Infinity : Math.max(1, Math.floor((height - 11 - (expandedOpen ? 3 : 0)) / 2));
   const itemN = Math.min(n, cap);
   const start = n <= itemN ? 0 : Math.max(0, Math.min(cursor - Math.floor(itemN / 2), n - itemN));
   const end = Math.min(n, start + itemN);
+
+  // Column widths. The status column is fixed so every name begins at the same
+  // column; the name column is capped so the label column stays aligned and the
+  // label is what gets truncated, never the layout.
+  const innerW = contentW - 2;
+  const statusW = 2;
+  const nameW = Math.min(24, Math.max(4, providers.reduce((m, p) => Math.max(m, p.name.length), 0)));
+  const gapW = 2;
+  const labelW = Math.max(0, innerW - statusW - nameW - gapW);
+  const cut = (s: string, w: number): string => (w <= 0 ? "" : s.length > w ? `${s.slice(0, w - 1)}…` : s);
+  const divider: Seg[] = [{ text: "─".repeat(innerW), color: color.dim }];
+
+  const providerRow = (i: number): Seg[] => {
+    const p = providers[i]!;
+    const focused = i === cursor;
+    const bg = focused ? color.surface : undefined;
+    return [
+      { text: p.active ? "● " : "  ", color: p.active ? color.success : undefined, bg },
+      { text: cut(p.name, nameW).padEnd(nameW), color: focused ? "#ff5555" : color.text, bold: focused, bg },
+      { text: " ".repeat(gapW), bg },
+      ...(labelW > 0 ? [{ text: cut(p.label, labelW), color: color.muted, bg } as Seg] : []),
+    ];
+  };
+  const actionRow = (label: string, active: boolean): Seg[] => [
+    { text: "    ", bg: active ? color.surface : undefined },
+    { text: label, color: active ? "#ff5555" : color.text, bold: active, bg: active ? color.surface : undefined },
+  ];
+  const addFocused = cursor === n;
+  const addBg = addFocused ? color.surface : undefined;
+  const addRow: Seg[] = [
+    { text: "  ", bg: addBg },
+    { text: "+ ", color: color.accent, bg: addBg },
+    { text: "Add provider", color: addFocused ? "#ff5555" : color.text, bold: addFocused, bg: addBg },
+  ];
+
   const listRows: Seg[][] = [];
   if (n === 0) {
-    listRows.push([{ text: "no providers yet — add one below", color: color.dim }]);
+    listRows.push(plain("  no providers yet", color.dim));
   } else {
     if (start > 0) listRows.push(plain(`  ↑ ${start} above`, color.dim));
     for (let i = start; i < end; i += 1) {
-      if (i > start) listRows.push(dividerRow);
-      const p = providers[i]!;
-      const focused = i === cursor;
-      const nameBg = focused ? color.surface : undefined;
-      const namePrefix = " ";
-      const activeLabel = "ACTIVE";
-      const gap = Math.max(0, contentW - 2 - namePrefix.length - p.name.length - (p.active ? activeLabel.length + 1 : 0));
-      listRows.push([
-        { text: namePrefix, bg: nameBg },
-        { text: p.name, color: focused ? "#ff5555" : color.text, bold: focused, bg: nameBg },
-        { text: " ".repeat(gap), bg: nameBg },
-        ...(p.active ? [{ text: activeLabel, color: color.success, bold: true, bg: nameBg } as Seg] : []),
-      ]);
-      listRows.push([
-        { text: "   " + p.label, color: color.dim, bg: nameBg },
-      ]);
+      if (i > start) listRows.push(divider);
+      listRows.push(providerRow(i));
       if (expandedIndex === i) {
-        listRows.push(dividerRow);
+        listRows.push(divider);
         const ac = actionCursor ?? 0;
-        const a0 = ac === 0;
-        const a1 = ac === 1;
-        listRows.push([
-          { text: "  ", bg: a0 ? color.surface : undefined },
-          { text: "Use provider", color: a0 ? "#ff5555" : color.text, bold: a0, bg: a0 ? color.surface : undefined },
-        ]);
-        listRows.push([
-          { text: "  ", bg: a1 ? color.surface : undefined },
-          { text: "Edit provider", color: a1 ? "#ff5555" : color.text, bold: a1, bg: a1 ? color.surface : undefined },
-        ]);
+        listRows.push(actionRow("Use provider", ac === 0));
+        listRows.push(actionRow("Edit provider", ac === 1));
       }
     }
     if (end < n) listRows.push(plain(`  ↓ ${n - end} more`, color.dim));
   }
+  listRows.push(divider);
+  listRows.push(addRow);
+
   rows.push(...box(listRows, contentW, { border: color.border }));
-  rows.push(blank());
-
-  // Add provider box: separate rounded rectangle.
-  const addFocused = cursor === providers.length;
-  const addBg = addFocused ? color.surface : undefined;
-  rows.push(...box([[
-    { text: "＋ ", color: color.accent, bg: addBg },
-    { text: "Add provider", color: addFocused ? "#ff5555" : color.text, bold: addFocused, bg: addBg },
-  ]], contentW, { border: color.border }));
-  rows.push(blank());
-
-  // Footer.
-  rows.push(plain("↵ Select    → Manage    d Remove    Esc Close", color.dim));
   return rows;
 }
 
@@ -280,7 +282,6 @@ export function managePanelRows(
     rows.push([{ text: focused ? "●" : "○", color: focused ? "#ff5555" : color.dim, bg: focused ? color.surface : undefined }, { text: "  " }, { text: a, color: focused ? "#ff5555" : color.text, bold: focused, bg: focused ? color.surface : undefined }]);
   });
   rows.push(blank());
-  rows.push([{ text: "↑↓ Navigate   ↵ Open   Esc Back", color: color.dim }]);
   return rows;
 }
 
@@ -595,7 +596,7 @@ export function pickerRows(opts: {
   title: string;
   items: PickerItem[];
   cursor: number;
-  hint: string;
+  hint?: string;
   height: number;
   width?: number;
   query?: string;
@@ -622,9 +623,9 @@ export function pickerRows(opts: {
     out.push([b(`╰${"─".repeat(inner)}╯`)]);
     out.push(blank());
   }
-  // Reserve rows for the title, the search line, the hint and up to two scroll
-  // indicators; whatever is left is the item window.
-  const reserved = 1 + (opts.query !== undefined ? 4 : 0) + 1 + 2 + 2;
+  // Reserve rows for the title, the search line, the hint (when present) and up
+  // to two scroll indicators; whatever is left is the item window.
+  const reserved = 1 + (opts.query !== undefined ? 4 : 0) + (opts.hint ? 2 : 0) + 2;
   const itemH = Math.max(1, opts.height - reserved);
   const n = opts.items.length;
   const start = n <= itemH ? 0 : Math.max(0, Math.min(opts.cursor - Math.floor(itemH / 2), n - itemH));
@@ -643,8 +644,10 @@ export function pickerRows(opts: {
   }
   out.push(plain("─".repeat(24), color.border));
   if (end < n) out.push(plain(`  ↓ ${n - end} more`, color.dim));
-  out.push(blank());
-  out.push(plain(opts.hint, color.dim));
+  if (opts.hint) {
+    out.push(blank());
+    out.push(plain(opts.hint, color.dim));
+  }
   const w = opts.width ?? 60;
   return box(out, w, { border: color.border, title: opts.title });
 }
@@ -700,14 +703,11 @@ export function modelPickerRows(
   rows.push(...box(listRows, contentW, { border: color.border }));
 
   if (end < n) rows.push(plain(`  ↓ ${n - end} more`, color.dim));
-  rows.push(blank());
-  const countLabel = query ? `${entries.length} match${entries.length === 1 ? "" : "es"}` : `${entries.length} model${entries.length === 1 ? "" : "s"}`;
-  rows.push(plain(`choose a model — ${countLabel} · type to filter · ↑/↓ move · enter select · esc cancel`, color.dim));
   return rows;
 }
 
 export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query?: string, width?: number): Seg[][] {
-  return pickerRows({ title: "reasoning effort", items: options.map((o, i) => ({ label: o.label, selected: i === cursor })), cursor, hint: "type to filter · ↑/↓ move · enter select · esc cancel", height: options.length + 6, width, query });
+  return pickerRows({ title: "reasoning effort", items: options.map((o, i) => ({ label: o.label, selected: i === cursor })), cursor, height: options.length + 6, width, query });
 }
 
 /** The `/usage` panel: a period, a total, and a per-model breakdown. */
@@ -719,7 +719,7 @@ export function usagePanelRows(periodLabel: string, sinceTokens: number, sinceTu
     out.push(plain("", color.dim));
     for (const row of byModel) out.push([{ text: row.model, color: color.muted }, { text: `  ${formatTokens(row.tokens)}`, color: color.dim }]);
   }
-  out.push(plain("tab/←/→ switch period · esc close", color.dim));
+  // hint removed per provider-picker redesign
   return box(out, 56, { border: color.border });
 }
 

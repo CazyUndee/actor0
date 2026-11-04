@@ -275,9 +275,9 @@ test("the provider menu is a panel with human-readable labels and an add entry",
     assert.ok(menu.includes("Providers"), "the menu is a titled panel");
     assert.ok(menu.includes("Anthropic API - Direct"), "the provider shows its human-readable label");
     assert.ok(menu.includes("Add provider"), "the panel offers an explicit add-provider entry");
-    assert.ok(menu.includes("→ Manage"), "the panel advertises Right-arrow to manage");
-    assert.ok(!menu.includes("●") && !menu.includes("○"), "selection dots are gone; focus is a highlight, not a bullet");
-    assert.ok(menu.includes("⌕ search "), "the panel has a magnifier search bar");
+    assert.ok(!menu.includes("↵ Select") && !menu.includes("→ Manage"), "the bottom shortcut/help footer is removed");
+    assert.ok(menu.includes("●"), "the active provider carries a status dot");
+    assert.ok(menu.includes("⌕  "), "the panel has a magnifier search bar");
     assert.ok(!menu.includes("❯"), "no caret pushes the rows in");
   } finally {
     unmount();
@@ -295,7 +295,7 @@ test("the model picker windows a long list and filters it as you type", async ()
     stdin.write("\r");
     await tick(150);
     const open = screen.last.join("\n");
-    assert.ok(open.includes("choose a model"), "the picker opened");
+    assert.ok(open.includes("models…"), "the picker opened");
     // 42 models cannot all fit: the window shows a subset and a 'more' marker.
     assert.ok(open.includes("more"), "the list is windowed, with a '↓ N more' marker");
     assert.ok(!open.includes("model-42-preview"), "the last model is off-screen until scrolled");
@@ -303,12 +303,12 @@ test("the model picker windows a long list and filters it as you type", async ()
     stdin.write("claude");
     await tick(120);
     const filtered = screen.last.join("\n");
-    assert.ok(filtered.includes("1 match") || filtered.includes("claude-opus"), "the search narrowed the list");
+    assert.ok(filtered.includes("claude-opus"), "the search narrowed the list");
     assert.ok(!filtered.includes("model-01-preview"), "non-matching models are filtered out");
     // Enter on the single match selects it (no turn runs).
     stdin.write("\r");
     await tick(150);
-    assert.ok(!screen.last.join("\n").includes("choose a model"), "the picker closed on selection");
+    assert.ok(!screen.last.join("\n").includes("models…"), "the picker closed on selection");
   } finally {
     unmount();
   }
@@ -380,7 +380,7 @@ test("the model picker is global across providers and selects provider and model
     stdin.write("\r");
     await tick(150);
     const after = screen.last.join("\n");
-    assert.ok(!after.includes("choose a model"), "the picker closed on selection");
+    assert.ok(!after.includes("models…"), "the picker closed on selection");
     assert.ok(after.includes("beta-model"), "the header now shows the other provider's model");
   } finally {
     unmount();
@@ -420,7 +420,8 @@ test("right arrow opens the manage screen for the highlighted provider", async (
     // Typing filters the provider list, like every other menu.
     stdin.write("claude");
     await tick(100);
-    assert.ok(screen.last.join("\n").includes("search claude"), "the provider panel filters as you type");
+    const providerScreen = screen.last.join("\n");
+    assert.ok(providerScreen.includes("claude") && !providerScreen.includes("Search providers…"), "the provider panel filters as you type");
     stdin.write("\x7f"); // backspace clears the filter
     await tick(60);
     stdin.write("\x1b[C"); // right arrow → manage the highlighted provider
