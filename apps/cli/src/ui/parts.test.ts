@@ -239,7 +239,7 @@ test("text that fits is not touched, and existing newlines are kept", () => {
 const card = (over: Partial<Parameters<typeof bannerLines>[0]> = {}) =>
   bannerLines({
     title: "actor0",
-    version: "0.2.0",
+    version: "0.3.0",
     model: "gpt-5.6-terra",
     endpoint: "aestral-chat.vercel.app",
     directory: "~/projects/actor0-cli",

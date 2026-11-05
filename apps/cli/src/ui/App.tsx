@@ -1298,9 +1298,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
     const blankRow: Seg[] = [{ text: " ".repeat(innerW), dim: true }];
 
-    // Rows a menu may occupy: the frame minus both borders, the top area, the
-    // composer and the disclaimer. Long lists window to this height — and so
-    // does the slash popup, which must never push the composer off the frame.
+    // All menus share one static slot: a fixed top edge just under the top
+    // area, the same height every time, the composer pinned beneath it. The
+    // budget is the rows between the blank line and the composer — every menu
+    // box pads or windows to exactly it.
     const menuHeight = Math.max(6, rows - 2 - top.length - blockedRow.length - composer.length - 2);
     // Menus sit in the middle of the frame. panel() already centres its box
     // (segWidth(row) === innerW there), so this is a no-op on those rows.
@@ -1314,25 +1315,26 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       !menuOpen && slashEngaged && slashMatches.length > 0
         ? centerRows(slashPopupRows(slashMatches.map((c) => ({ name: c.name, description: c.description, alias: c.aliases[0] })), slashSel, slashQuery, Math.min(MENU_WIDTH, innerW - 2), menuHeight))
         : [];
+    const menuSlot = menuContent.length > 0 || slashPopup.length > 0;
 
-    // The chrome (top, blocked notice, menus, composer) may leave no room
-    // for the transcript on a short terminal; the transcript yields
+    // The chrome (top, blocked notice, menu slot, composer) may leave no
+    // room for the transcript on a short terminal; the transcript yields
     // completely rather than clipping the pinned composer.
-    const chromeH = top.length + blockedRow.length + slashPopup.length + menuContent.length + composer.length + 1;
-    const transcriptV = Math.max(0, rows - 2 - chromeH);
-    const live = menuOpen ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), expandReasoning);
+    const chromeH = top.length + blockedRow.length + (menuSlot ? 1 : 0) + slashPopup.length + menuContent.length + composer.length + 1;
+    const transcriptV = menuSlot ? 0 : Math.max(0, rows - 2 - chromeH);
+    const live = menuSlot ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), expandReasoning);
 
-    // Panel menus (provider list, manage) are top-aligned: the top area, a
-    // blank line, the panel. The flat pickers (model, thinking, usage, add)
-    // keep the transcript visible above them; the composer sits under every
-    // menu, panel or flat.
-    const panelMenu = mode === "menu" || mode === "manage";
-    const transcript: Seg[][] = panelMenu ? [] : windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
-    while (!panelMenu && transcript.length < transcriptV) transcript.push(blankRow);
+    // One layout for every menu: the top area, a blank line, the menu in its
+    // static slot, blank fill, the pinned composer. Menus of every kind sit
+    // on the same rows, so opening a different menu — or typing a filter in
+    // the search bar — never moves the search bar itself; chat mode swaps
+    // the slot for the transcript.
+    const transcript: Seg[][] = menuSlot ? [] : windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
+    while (!menuSlot && transcript.length < transcriptV) transcript.push(blankRow);
 
-    const inner: Seg[][] = panelMenu
-      ? [...top, ...blockedRow, blankRow, ...menuContent, ...composer]
-      : [...top, ...blockedRow, ...transcript, ...slashPopup, ...menuContent, ...composer];
+    const inner: Seg[][] = menuSlot
+      ? [...top, ...blockedRow, blankRow, ...menuContent, ...slashPopup, ...composer]
+      : [...top, ...blockedRow, ...transcript, ...composer];
     const contentH = rows - 2;
     // The disclaimer owns the last row; fill everything above it.
     const fitted: Seg[][] = inner.map((r) => fitWidth(r, innerW));
@@ -1381,7 +1383,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       case "model":
         return modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery, Math.min(MENU_WIDTH, innerW - 2), activeModel, active?.name);
       case "thinking":
-        return thinkingPickerRows(filteredThinking.map((o) => ({ label: o.label, effort: o.effort })), Math.min(thinkingCursor, Math.max(0, filteredThinking.length - 1)), thinkingQuery, Math.min(MENU_WIDTH, innerW - 2));
+        return thinkingPickerRows(filteredThinking.map((o) => ({ label: o.label, effort: o.effort })), Math.min(thinkingCursor, Math.max(0, filteredThinking.length - 1)), thinkingQuery, Math.min(MENU_WIDTH, innerW - 2), height);
       case "usage": {
         const entries = readUsage();
         const period = PERIODS[usageIndex]!;
@@ -1399,13 +1401,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   }
 
   function addRows(height: number): Seg[][] {
-    if (add.kind === "kind") return addKindRows(onboarding, filteredKinds.map((k) => ({ id: k.id, label: k.label, auth: k.auth })), Math.min(addKindCursor, Math.max(0, filteredKinds.length - 1)), addKindQuery);
-    if (add.kind === "url") return addUrlRows(add.provider.label, addUrl).rows;
-    if (add.kind === "key") return addKeyRows(add.provider.label, addKey).rows;
-    if (add.kind === "working") return addWorkingRows(add.label, add.note);
-    if (add.kind === "error") return addErrorRows(add.message);
+    if (add.kind === "kind") return addKindRows(onboarding, filteredKinds.map((k) => ({ id: k.id, label: k.label, auth: k.auth })), Math.min(addKindCursor, Math.max(0, filteredKinds.length - 1)), addKindQuery, height);
+    if (add.kind === "url") return addUrlRows(add.provider.label, addUrl, height).rows;
+    if (add.kind === "key") return addKeyRows(add.provider.label, addKey, height).rows;
+    if (add.kind === "working") return addWorkingRows(add.label, add.note, height);
+    if (add.kind === "error") return addErrorRows(add.message, height);
     if (add.kind === "models") {
-      if (add.models.length === 0) return addManualRows(add.label, addManual).rows;
+      if (add.models.length === 0) return addManualRows(add.label, addManual, height).rows;
       const models = add.query ? add.models.filter((m) => m.toLowerCase().includes(add.query.toLowerCase())) : add.models;
       return addModelsRows(add.label, models, Math.min(add.cursor, Math.max(0, models.length - 1)), add.chosen, height, add.query);
     }

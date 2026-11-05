@@ -329,6 +329,16 @@ export function menuRows(o: {
   if (below > 0) push(plain(`  ↓ ${below} more`, color.dim));
   if (start === end) push(plain(`  ${o.emptyText ?? "no matches"}`, color.dim));
   rows.push(...body);
+  // Every menu with a height budget fills it: pad the frame with blank rows so
+  // filtering rewrites rows inside a static box instead of resizing it — the
+  // search bar and the frame's edges never move while typing.
+  const target = o.height !== undefined ? Math.floor((o.height - 3) / 2) : 0;
+  let content = 0;
+  if (above > 0) content += 1;
+  for (let i = start; i < end; i += 1) content += 1 + (o.items[i]!.subRows?.length ?? 0);
+  if (below > 0) content += 1;
+  if (start === end) content += 1;
+  for (let p = content; p < target; p += 1) rows.push([{ text: " ".repeat(innerW), dim: true }]);
   return box(rows, width, { border: color.border, title: o.title });
 }
 
@@ -780,13 +790,14 @@ export function modelPickerRows(
   });
 }
 
-export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query = "", width?: number): Seg[][] {
+export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query = "", width?: number, height?: number): Seg[][] {
   return pickerRows({
     title: "reasoning effort",
     items: options.map((o, i) => ({ label: o.label, selected: i === cursor })),
     cursor,
     query,
     width,
+    height,
   });
 }
 /** The `/usage` panel: a period, a total, and a per-model breakdown. */
@@ -817,7 +828,7 @@ export function slashPopupRows(commands: { name: string; description: string; al
   });
 }
 /** The add-provider flow, one renderer per phase. */
-export function addKindRows(onboarding: boolean, kinds: { id: string; label: string; auth: string[] }[], cursor: number, query?: string): Seg[][] {
+export function addKindRows(onboarding: boolean, kinds: { id: string; label: string; auth: string[] }[], cursor: number, query?: string, height?: number): Seg[][] {
   return pickerRows({
     title: onboarding ? "welcome to actor0" : "add a provider",
     prefix: onboarding ? "bring your own provider — pick one to start" : undefined,
@@ -825,44 +836,48 @@ export function addKindRows(onboarding: boolean, kinds: { id: string; label: str
     cursor,
     hint: "type to filter · ↑/↓ move · enter choose · esc cancel",
     query,
+    height,
   });
 }
 
-export function addUrlRows(label: string, url: string): { rows: Seg[][]; inputRow: number; inputCol: number } {
+export function addUrlRows(label: string, url: string, height?: number): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const rows = menuRows({
     title: `${label} — base URL`,
     query: url,
     live: true,
     items: [{ line: "enter to continue · esc cancel", lineTone: color.dim, selectable: false }],
+    height,
   });
   return { rows, inputRow: 1, inputCol: SEARCH_INPUT_COL };
 }
 
-export function addKeyRows(label: string, key: string): { rows: Seg[][]; inputRow: number; inputCol: number } {
+export function addKeyRows(label: string, key: string, height?: number): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const rows = menuRows({
     title: `${label} — API key`,
     query: "•".repeat(key.length),
     live: true,
     items: [{ line: "enter to continue · esc cancel", lineTone: color.dim, selectable: false }],
+    height,
   });
   return { rows, inputRow: 1, inputCol: SEARCH_INPUT_COL };
 }
 
-export function addWorkingRows(label: string, note: string): Seg[][] {
+export function addWorkingRows(label: string, note: string, height?: number): Seg[][] {
   const items: MenuEntry[] = [
     ...note.split("\n").map((l): MenuEntry => ({ line: l, lineTone: color.info, selectable: false })),
     { line: "esc to cancel", lineTone: color.dim, selectable: false },
   ];
-  return menuRows({ title: label, items });
+  return menuRows({ title: label, items, height });
 }
 
-export function addErrorRows(message: string): Seg[][] {
+export function addErrorRows(message: string, height?: number): Seg[][] {
   return menuRows({
     title: "add failed",
     items: [
       { line: message, lineTone: color.error, selectable: false },
       { line: "enter to try again · esc cancel", lineTone: color.dim, selectable: false },
     ],
+    height,
   });
 }
 
@@ -877,12 +892,13 @@ export function addModelsRows(label: string, models: string[], cursor: number, c
   });
 }
 
-export function addManualRows(label: string, manual: string): { rows: Seg[][]; inputRow: number; inputCol: number } {
+export function addManualRows(label: string, manual: string, height?: number): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const rows = menuRows({
     title: `${label} — no models listed`,
     query: manual,
     live: true,
     items: [{ line: "type a model name, or enter to add it and set one later with /model", lineTone: color.dim, selectable: false }],
+    height,
   });
   return { rows, inputRow: 1, inputCol: SEARCH_INPUT_COL };
 }
