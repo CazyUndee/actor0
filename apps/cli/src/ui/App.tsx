@@ -35,7 +35,7 @@ import { contextWindowTokens } from "@actor0/harness";
 import { parseSlash, matchSlashCommands, type SlashCommand } from "../slash.js";
 import { color, timing } from "../theme.js";
 import { Screen } from "./term.js";
-import { begin, bounds, emptySelection, extend, finish, hasSelection, selectedText, spans, type SelectionState } from "./selection.js";
+import { begin, emptySelection, extend, finish, hasSelection, selectedText, spans, type SelectionState } from "./selection.js";
 import { copyToClipboard } from "./clipboard.js";
 import { parseInput, type InputEvent } from "./input.js";
 
@@ -178,6 +178,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // set it, and is drawn over the finished grid rather than stored in it.
   const [selection, setSelection] = useState<SelectionState>(emptySelection);
   const plainRowsRef = useRef<string[]>([]);
+  // Full transcript content (committed + live), as plain inner rows and as
+  // Seg rows, so a selection can be anchored to text rather than to the screen
+  // and copied even when the selected rows are scrolled out of view.
+  const transcriptPlainRef = useRef<string[]>([]);
+  const transcriptAllSegsRef = useRef<Seg[][]>([]);
+  const transcriptWindowStartRef = useRef(0);
+  const transcriptStartRowRef = useRef(0); // visible index where transcript begins
+  const transcriptCountRef = useRef(0);
+  const transcriptVisibleBudgetRef = useRef(0);
   const [justFinished, setJustFinished] = useState(false);
   const finishedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -741,43 +750,42 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // This is what makes native copy-paste unnecessary: mouse capture (which
     // the wheel needs) takes it away, so the app reimplements the gesture.
     // Coordinates arrive 1-based from the terminal.
-    const rows = screen.size.rows;
     const cols = screen.size.cols;
-    const point = { col: event.x - 1, row: event.y - 1 };
+    const innerW = Math.max(8, frameInnerWidth(cols));
+    const count = transcriptCountRef.current;
+    // Convert a terminal cell into content-row space: the selection is anchored
+    // to the transcript text, not to screen rows, so it follows the text when
+    // the transcript scrolls and can be copied even when scrolled off screen.
+    const toContentPoint = (x: number, y: number): { col: number; row: number } => {
+      const v = y - 1; // visible row index (top border is row 0)
+      const startRow = transcriptStartRowRef.current;
+      const winStart = transcriptWindowStartRef.current;
+      const budget = Math.max(1, transcriptVisibleBudgetRef.current || 1);
+      const visibleCount = Math.min(budget, count);
+      let contentRow = 0;
+      if (count > 0) {
+        if (v < startRow) contentRow = 0;
+        else if (v >= startRow + visibleCount) contentRow = count - 1;
+        else contentRow = Math.max(0, Math.min(count - 1, winStart + (v - startRow)));
+      }
+      const innerCol = Math.max(0, Math.min(innerW - 1, x - 1 - 2));
+      return { col: innerCol, row: contentRow };
+    };
     if (event.button === "left") {
+      const pt = toContentPoint(event.x, event.y);
       if (event.drag) {
-        setSelection((s) => extend(s, point, rows, cols));
+        setSelection((s) => extend(s, pt, Math.max(1, count), innerW));
         return;
       }
       if (!event.release) {
-        setSelection(() => begin(point, rows, cols));
+        if (count <= 0) return;
+        setSelection(() => begin(pt, Math.max(1, count), innerW));
         return;
       }
       let copiedText = "";
       setSelection((s) => {
         const done = finish(s);
-        // `done` is in terminal coordinates (borders included), but
-        // `plainRowsRef` holds the inner content rows, so map the selection into
-        // that inner space — the same shift the highlight applies (row - 1,
-        // col - 2). Without it, selectedText indexes the wrong row/column and
-        // returns divider glyphs (─) instead of the selected text.
-        const b = bounds(done);
-        if (b) {
-          const lines = plainRowsRef.current;
-          const innerW = lines.length > 0 ? lines[0]!.length : 1;
-          const shifted: SelectionState = {
-            anchor: {
-              row: Math.max(0, Math.min(lines.length - 1, b.start.row - 1)),
-              col: Math.max(0, Math.min(innerW - 1, b.start.col - 2)),
-            },
-            focus: {
-              row: Math.max(0, Math.min(lines.length - 1, b.end.row - 1)),
-              col: Math.max(0, Math.min(innerW - 1, b.end.col - 2)),
-            },
-            dragging: false,
-          };
-          copiedText = selectedText(shifted, lines);
-        }
+        if (count > 0) copiedText = selectedText(done, transcriptPlainRef.current);
         return done;
       });
       if (copiedText.trim()) {
@@ -804,6 +812,18 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // Ctrl+R expands/collapses every reasoning block, in any mode.
     if (key === "ctrl-r") return setExpandReasoning((v) => !v);
     if (key === "ctrl-c") {
+      // If there is a selection on screen, Ctrl+C copies it (native-terminal
+      // habit) instead of exiting — the selection is the receipt the user just
+      // made, and quitting would throw it away.
+      if (hasSelection(selection)) {
+        const text = selectedText(selection, transcriptPlainRef.current);
+        if (text.trim()) {
+          copyToClipboard(text);
+          notice("info", `copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"} to clipboard`);
+        }
+        setSelection(emptySelection());
+        return;
+      }
       if (busy) { abortRef.current?.abort(); return; }
       if (ctrlCPressed) { onExit(); return; }
       setCtrlCPressed(true);
@@ -1329,8 +1349,18 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // on the same rows, so opening a different menu — or typing a filter in
     // the search bar — never moves the search bar itself; chat mode swaps
     // the slot for the transcript.
-    const transcript: Seg[][] = menuSlot ? [] : windowRows([...entryRowList, ...live], transcriptV, scrollOffset);
+    const allTranscript: Seg[][] = menuSlot ? [] : [...entryRowList, ...live];
+    const transcriptWindowStart = menuSlot ? 0 : Math.max(0, allTranscript.length - transcriptV - Math.min(Math.max(0, scrollOffset), Math.max(0, allTranscript.length - transcriptV)));
+    const transcript: Seg[][] = menuSlot ? [] : windowRows(allTranscript, transcriptV, scrollOffset);
     while (!menuSlot && transcript.length < transcriptV) transcript.push(blankRow);
+
+    // Keep refs in sync for selection (content-row anchoring + off-screen copy).
+    transcriptAllSegsRef.current = allTranscript;
+    transcriptPlainRef.current = allTranscript.map((r) => r.map((seg) => seg.text).join(""));
+    transcriptCountRef.current = allTranscript.length;
+    transcriptWindowStartRef.current = transcriptWindowStart;
+    transcriptStartRowRef.current = top.length + blockedRow.length;
+    transcriptVisibleBudgetRef.current = transcriptV;
 
     const inner: Seg[][] = menuSlot
       ? [...top, ...blockedRow, blankRow, ...menuContent, ...slashPopup, ...composer]
@@ -1347,8 +1377,19 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // in terminal coordinates, so shift it into this inner space once, here,
     // where both numbers are known.
     const sel = selection;
+    const winStart = transcriptWindowStartRef.current;
+    const startRow = transcriptStartRowRef.current;
+    const budget = Math.max(1, transcriptVisibleBudgetRef.current || 1);
+    const visibleCount = Math.min(budget, transcriptCountRef.current);
     const selRows = hasSelection(sel)
-      ? spans(sel, cols).map((sp) => ({ row: sp.row - 1, from: sp.from - 2, to: sp.to - 2 }))
+      ? spans(sel, innerW)
+          .map((sp) => {
+            const contentIndex = sp.row;
+            if (contentIndex < winStart || contentIndex >= winStart + visibleCount) return null;
+            const visibleIndex = startRow + (contentIndex - winStart);
+            return { row: visibleIndex, from: sp.from, to: sp.to };
+          })
+          .filter((x): x is { row: number; from: number; to: number } => x !== null)
       : [];
     const painted = visible.map((row, i) => {
       const sp = selRows.find((x) => x.row === i);

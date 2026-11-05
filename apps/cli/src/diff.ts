@@ -12,7 +12,7 @@
 
 export type DiffKind = "context" | "add" | "remove";
 
-export type DiffLine = { kind: DiffKind; text: string };
+export type DiffLine = { kind: DiffKind; text: string; line?: number };
 
 /** How many unchanged lines to show on each side of the change. */
 const CONTEXT = 3;
@@ -48,7 +48,7 @@ export function formatEditDiff(content: string, before: string, after: string): 
   const lines = editDiffLines(content, before, after);
   if (lines.length === 0) return "";
   const body = lines
-    .map((line) => `${line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}${line.text}`)
+    .map((line) => `${line.line !== undefined ? `${line.line}	` : ""}${line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " "}${line.text}`)
     .join("\n");
   return `\`\`\`diff\n${body}\n\`\`\``;
 }

@@ -332,13 +332,10 @@ export function menuRows(o: {
   // Every menu with a height budget fills it: pad the frame with blank rows so
   // filtering rewrites rows inside a static box instead of resizing it — the
   // search bar and the frame's edges never move while typing.
-  const target = o.height !== undefined ? Math.floor((o.height - 3) / 2) : 0;
-  let content = 0;
-  if (above > 0) content += 1;
-  for (let i = start; i < end; i += 1) content += 1 + (o.items[i]!.subRows?.length ?? 0);
-  if (below > 0) content += 1;
-  if (start === end) content += 1;
-  for (let p = content; p < target; p += 1) rows.push([{ text: " ".repeat(innerW), dim: true }]);
+  if (o.height !== undefined) {
+    const target = Math.max(0, o.height - 2);
+    while (rows.length < target) rows.push([{ text: " ".repeat(innerW), dim: true }]);
+  }
   return box(rows, width, { border: color.border, title: o.title });
 }
 
@@ -478,9 +475,10 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false):
       const rows: Seg[][] = [head];
       if (entry.name === "edit" && !failed) {
         for (const d of parseDiffBlock(entry.output)) {
-          const sign = d.kind === "add" ? "+ " : d.kind === "remove" ? "- " : "  ";
+          const sign = d.kind === "add" ? "+" : d.kind === "remove" ? "-" : " ";
           const t = d.kind === "add" ? color.success : d.kind === "remove" ? color.error : color.muted;
-          rows.push(plain(`  ${sign}${d.text.replace(/\t/g, "    ")}`, t));
+          const num = d.line !== undefined ? String(d.line).padStart(4) : "    ";
+          rows.push(plain(`  ${num} ${sign} ${d.text.replace(/\t/g, "    ")}`, t));
         }
       } else {
         // Output reads as an indented block under the header, in the muted tone

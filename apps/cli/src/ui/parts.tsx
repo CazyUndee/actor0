@@ -653,13 +653,12 @@ export function DiffBlock({ lines }: { lines: DiffLine[] }) {
   return (
     <Box flexDirection="column">
       {lines.map((line, index) => {
-        const sign = line.kind === "add" ? "+ " : line.kind === "remove" ? "- " : "  ";
+        const sign = line.kind === "add" ? "+" : line.kind === "remove" ? "-" : " ";
         const tone = line.kind === "add" ? color.success : line.kind === "remove" ? color.error : color.dim;
         return (
           // eslint-disable-next-line react/no-array-index-key -- diff lines are positional and fixed; text can repeat
           <Text key={index} color={tone} wrap="truncate-end">
-            {sign}
-            {line.text.replace(/\t/g, "    ")}
+            {line.line !== undefined ? String(line.line).padStart(4) + " " : "     "}{sign} {line.text.replace(/\t/g, "    ")}
           </Text>
         );
       })}
