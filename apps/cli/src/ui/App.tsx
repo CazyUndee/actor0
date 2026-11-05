@@ -207,6 +207,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const messagesRef = useRef<ChatMessage[]>(resumed?.messages ?? []);
   const sessionIdRef = useRef<string>(resumed?.id ?? newSessionId());
   const abortRef = useRef<AbortController | null>(null);
+  const [ctrlCPressed, setCtrlCPressed] = useState(false);
+  const ctrlCTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveRef = useRef<ChatMessage[]>(messagesRef.current);
   const conversationRef = useRef(conversation);
   conversationRef.current = conversation;
@@ -802,8 +804,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // Ctrl+R expands/collapses every reasoning block, in any mode.
     if (key === "ctrl-r") return setExpandReasoning((v) => !v);
     if (key === "ctrl-c") {
-      if (busy) abortRef.current?.abort();
-      else onExit();
+      if (busy) { abortRef.current?.abort(); return; }
+      if (ctrlCPressed) { onExit(); return; }
+      setCtrlCPressed(true);
+      if (ctrlCTimerRef.current) clearTimeout(ctrlCTimerRef.current);
+      ctrlCTimerRef.current = setTimeout(() => setCtrlCPressed(false), 2000);
       return;
     }
     if (key === "ctrl-d") {
@@ -1278,7 +1283,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // The composer (the draft input) is always pinned to the bottom — even
     // while a menu is open; the menu renders above it, never in its place.
     const composerMaxH = Math.max(3, Math.min(12, rows - 9));
-    const composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH }).rows;
+    const composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH, topRight: ctrlCPressed ? "press ctrl c again to exit actor0" : undefined }).rows;
     const blockedRow = conversation.blocked ? [[{ text: `the agent needs you: ${conversation.blocked.message} — reply to continue, or /clear`, color: color.warning }]] : [];
 
     // Human-readable header: the provider label, the model, branch, context, session.

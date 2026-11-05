@@ -622,7 +622,7 @@ export function frameLine(text: string, columns: number): string {
 /* ---- the composer and every menu, as rows of segments ---- */
 
 /** The composer: a compact rounded box around the draft. Grows with the draft. */
-export function composerRows(opts: { cols: number; draft: string; caret: number; busy: boolean; maxHeight?: number }): { rows: Seg[][]; inputRow: number; inputCol: number } {
+export function composerRows(opts: { cols: number; draft: string; caret: number; busy: boolean; maxHeight?: number; topRight?: string }): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const width = Math.max(20, opts.cols);
   const inner = width - 2;
   const glyph = opts.busy ? "· " : "❯ ";
@@ -669,7 +669,13 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   const visible = all.slice(startIdx, startIdx + maxRows);
   const above = startIdx;
 
-  const rows: Seg[][] = [plain(`╭${"─".repeat(inner)}╮`, color.dim)];
+  let topBorder = `╭${"─".repeat(inner)}╮`;
+  if (opts.topRight) {
+    const label = ` ${opts.topRight} `;
+    const pos = Math.max(2, inner - label.length - 1);
+    topBorder = `╭${"─".repeat(pos)}${label}${"─".repeat(Math.max(0, inner - pos - label.length))}╮`;
+  }
+  const rows: Seg[][] = [plain(topBorder, color.dim)];
   if (above > 0) rows.push([{ text: "│", color: color.dim }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.dim }]);
   visible.forEach((row, vi) => {
     const isCaretRow = startIdx + vi === caretRow;
