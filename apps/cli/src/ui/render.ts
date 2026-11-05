@@ -124,6 +124,49 @@ const plain = (text: string, tone?: string, dim?: boolean): Seg[] => [{ text, ..
 const blank = (): Seg[] => [{ text: " " }];
 
 /**
+ * Format elapsed seconds for a reasoning timer: truncate, never round.
+ * Under a minute shows `12.2s` (0.1 s accuracy), under an hour `1m 12s`,
+ * anything above `2h 13m`. Never days or weeks.
+ */
+export function formatTimer(seconds: number): string {
+  const total = Math.max(0, seconds);
+  if (total < 60) return `${(Math.floor(total * 10) / 10).toFixed(1)}s`;
+  if (total < 3600) {
+    const m = Math.floor(total / 60);
+    const s = Math.floor(total % 60);
+    return `${m}m ${s}s`;
+  }
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+/**
+ * One frame of the ChatGPT-style shimmer: a soft Gaussian highlight moving
+ * across `text`, ported from `d:/chatgpt/main.py`. Each character gets its own
+ * 24-bit colour between the base grey and the peak white based on its distance
+ * from the moving highlight centre, so the whole word reads as steadily lit
+ * with a single soft band sweeping across it.
+ */
+export function shimmerSegs(text: string, frame: number, speed = 1.2): Seg[] {
+  const period = 1 / 60;
+  const phase = ((frame * period) * speed) % 1.0;
+  const center = -0.50 + phase * 2.0;
+  const width = 0.18;
+  const base = [145, 148, 155];
+  const peak = [238, 240, 244];
+  const length = text.length;
+  return [...text].map((ch, index) => {
+    const position = (index + 0.5) / length;
+    const distance = (position - center) / width;
+    const strength = Math.exp(-0.5 * distance * distance);
+    const rgb = base.map((b, i) => Math.round(b + (peak[i] - b) * strength));
+    const hex = rgb.map((v) => v.toString(16).padStart(2, "0")).join("");
+    return { text: ch, color: `#${hex}` };
+  });
+}
+
+/**
  * Wrap content rows in a rounded rectangle, `cols` wide, with an optional title
  * set into the top border. Every content row is padded to the inner width, so
  * the right border always lines up. `border` colours the frame; `bg` fills the
@@ -437,18 +480,15 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false):
     }
 
     case "reasoning": {
-      // A titled card that shows the reasoning as real rows — not a single
-      // collapsed line — in a dimmer tone than an answer so it reads as
-      // thinking. Expanded by default; Ctrl+R collapses it to a one-line preview
-      // for when the chain-of-thought is long and noisy.
+      // Committed reasoning: collapsed it is one sentence — "thought for 12.2s"
+      // — inside the same rounded rectangle the composer uses. Expanded it is
+      // the full chain, rendered as any other long text with no truncation,
+      // even if it runs past the bottom of the screen.
       const rows: Seg[][] = expandReasoning
         ? flattenText(entry.text, proseWidth(cols - 6)).map((l) => plain(l, color.muted))
-       : (() => {
-            const flat = entry.text.replace(/\s+/g, " ").trim();
-            const room = Math.max(20, cols - 22);
-            const cut = flat.length > room ? `${flat.slice(0, room)}…` : flat;
-            return [[{ text: cut, color: color.muted }, { text: "  ⌃r expand", color: color.dim }]];
-          })();
+        : [[
+            { text: entry.durationSeconds != null ? `thought for ${formatTimer(entry.durationSeconds)}` : "thinking", color: color.muted },
+          ]];
       if (rows.length === 0) rows.push(plain("…", color.muted));
       return [blank(), ...box(rows, cols, { border: color.dim, title: "∴ thinking" })];
     }
@@ -523,7 +563,7 @@ export function helpBox(cols: number): Seg[][] {
   return menuRows({ title: "commands", items, width });
 }
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
-export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true): Seg[][] {
+export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null): Seg[][] {
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
   if (!busy) return [];
   const spin = waitingOnUser ? "⏸" : "◐◓◑◒"[frame % 4];
@@ -532,24 +572,26 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
   else if (live.tool) out.push([{ text: `${spin} `, color: color.accent }, { text: `${toolDisplayName(live.tool.name)}${live.tool.target ? `  ${live.tool.target}` : ""}`, color: color.muted }]);
   else if (live.status) out.push([{ text: `${spin} `, color: color.accent }, { text: live.status, color: color.muted }]);
   if (live.reasoning.trim()) {
-    // Stream it as a titled card that grows row by row, the same shape as the
-    // committed block — the reasoning is visible while it is generated, not a
-    // single line. Ctrl+R collapses to a preview.
+    // The current reasoning block: collapsed it is a one-row rounded rectangle
+    // identical in height to the composer, with a shimmer on the left and a
+    // running timer on the right. Expanded it is the full chain, rendered as
+    // any other long text with no truncation — it never yields to the row
+    // budget, even if it runs past the bottom of the screen.
     if (expandReasoning) {
       const lines = flattenText(live.reasoning.trimEnd(), proseWidth(cols - 6));
-      const room = Math.max(1, budget - 5); // card borders + the answer box below
-      const dropped = Math.max(0, lines.length - room);
-      const rows: Seg[][] = [];
-      if (dropped > 0) rows.push(plain(`↑ ${dropped} more line${dropped === 1 ? "" : "s"}`, color.muted, true));
-      for (const l of dropped > 0 ? lines.slice(lines.length - room) : lines) rows.push(plain(l, color.muted));
+      const rows = lines.map((l) => plain(l, color.muted));
       out.push(blank());
       out.push(...box(rows, cols, { border: color.dim, title: "∴ thinking" }));
     } else {
-      const flat = live.reasoning.replace(/\s+/g, " ").trim();
-      const room = Math.max(20, cols - 22);
-      const cut = flat.length > room ? `…${flat.slice(-room)}` : flat;
+      const elapsedSec = reasoningStartedAt != null ? Math.max(0, Date.now() - reasoningStartedAt) / 1000 : 0;
+      const timer = formatTimer(elapsedSec);
+      const inner = Math.max(4, cols - 2);
+      const shimmer = shimmerSegs("thinking", frame);
+      const shimmerW = shimmer.reduce((n, s) => n + s.text.length, 0);
+      const fill = Math.max(0, inner - shimmerW - timer.length);
+      const row: Seg[] = [...shimmer, { text: " ".repeat(fill) }, { text: timer, color: color.dim }];
       out.push(blank());
-      out.push(...box([[{ text: cut, color: color.muted }, { text: "  ⌃r expand", color: color.dim }]], cols, { border: color.dim, title: "∴ thinking" }));
+      out.push(...box([row], cols, { border: color.dim, title: "∴ thinking" }));
     }
   }
   // The streamed answer is boxed from the first token, identical to the

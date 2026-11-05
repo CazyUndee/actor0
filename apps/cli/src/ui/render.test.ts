@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { composerRows, entryLines, liveLines } from "./render.js";
+import { composerRows, entryLines, formatTimer, liveLines } from "./render.js";
 import type { Entry } from "../conversation.js";
 
 /** Join rendered rows to plain text (no colour), for assertions. */
@@ -34,18 +34,42 @@ test("long tool output is cut to a count, not flooded", () => {
   assert.ok(!out.includes("line 39"), "the tail of a long output is not shown");
 });
 
-test("reasoning is collapsed to a one-line preview by default", () => {
+test("reasoning is collapsed to a one-line sentence by default", () => {
   const entry: Entry = { kind: "reasoning", text: "First I need to consider the options carefully and weigh them." };
   const collapsed = text(entryLines(entry, COLS));
   assert.ok(collapsed.includes("∴ thinking"), "a thinking label");
-  assert.ok(collapsed.includes("⌃r"), "an expand hint");
+  assert.ok(collapsed.includes("thinking"), "a one-line sentence, not the full body");
   assert.ok(!collapsed.includes("weigh them"), "the full body is hidden when collapsed");
+  assert.equal(collapsed.split("\n").length, 4, "a rounded rectangle: border, one content row, border");
+});
+
+test("reasoning shows the thought duration when it was timed", () => {
+  const entry: Entry = { kind: "reasoning", text: "First I need to consider the options.", durationSeconds: 12.25 };
+  const collapsed = text(entryLines(entry, COLS));
+  assert.ok(collapsed.includes("thought for 12.2s"), "the duration is truncated to 0.1s, not rounded");
+});
+
+test("reasoning does not show a duration when none was recorded", () => {
+  const entry: Entry = { kind: "reasoning", text: "First I need to consider the options." };
+  const collapsed = text(entryLines(entry, COLS));
+  assert.ok(!collapsed.includes("thought for"), "no duration means no timer");
+  assert.ok(collapsed.includes("thinking"), "just the thinking label");
 });
 
 test("reasoning expands to the full body when asked", () => {
   const entry: Entry = { kind: "reasoning", text: "First I need to consider the options carefully and weigh them." };
   const expanded = text(entryLines(entry, COLS, true));
   assert.ok(expanded.includes("weigh them"), "the full body is shown when expanded");
+  assert.ok(!expanded.includes("…"), "no truncation when expanded");
+});
+
+test("formatTimer truncates instead of rounding", () => {
+  assert.equal(formatTimer(12.25), "12.2s", "0.1s accuracy, truncated");
+  assert.equal(formatTimer(5), "5.0s", "whole seconds still show a tenth");
+  assert.equal(formatTimer(72), "1m 12s", "minutes and seconds");
+  assert.equal(formatTimer(72.9), "1m 12s", "seconds truncated, not rounded");
+  assert.equal(formatTimer(7980), "2h 13m", "hours and minutes");
+  assert.equal(formatTimer(0), "0.0s", "zero");
 });
 
 test("a plan shows its title once and renders its body as markdown", () => {

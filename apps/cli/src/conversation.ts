@@ -16,7 +16,7 @@ import type { HarnessEvent, ToolCall, Usage } from "@actor0/harness";
 export type Entry =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string; partial: boolean }
-  | { kind: "reasoning"; text: string }
+  | { kind: "reasoning"; text: string; durationSeconds?: number }
   | { kind: "tool"; name: string; target: string; status: "ok" | "error"; output: string }
   | { kind: "notice"; tone: "info" | "warn" | "error"; text: string }
   | { kind: "help" }
@@ -134,12 +134,26 @@ export function describeCall(call: ToolCall): string {
  * order things happened. It is a no-op when nothing is pending, so calling it
  * defensively costs nothing.
  */
-function flushReasoning(state: ConversationState): ConversationState {
+function flushReasoning(
+  state: ConversationState,
+  timing?: { nowMs?: number; reasoningStartedAtMs?: number | null },
+): ConversationState {
   const text = state.live.reasoning.trim();
   if (!text) return state;
+  const durationSeconds =
+    timing?.reasoningStartedAtMs != null && timing?.nowMs != null
+      ? Math.max(0, timing.nowMs - timing.reasoningStartedAtMs) / 1000
+      : undefined;
   return {
     ...state,
-    entries: [...state.entries, { kind: "reasoning", text }],
+    entries: [
+      ...state.entries,
+      {
+        kind: "reasoning",
+        text,
+        ...(durationSeconds != null ? { durationSeconds } : {}),
+      },
+    ],
     live: { ...state.live, reasoning: "" },
   };
 }
@@ -158,7 +172,11 @@ function flushReasoning(state: ConversationState): ConversationState {
  *   - `done` — the turn's answer is final, so the accumulated live text is
  *     promoted to a permanent entry and the live region is cleared.
  */
-export function applyEvent(state: ConversationState, event: HarnessEvent): ConversationState {
+export function applyEvent(
+  state: ConversationState,
+  event: HarnessEvent,
+  timing?: { nowMs?: number; reasoningStartedAtMs?: number | null },
+): ConversationState {
   switch (event.type) {
     case "token":
       return { ...state, live: { ...state.live, text: state.live.text + event.delta } };
@@ -172,7 +190,7 @@ export function applyEvent(state: ConversationState, event: HarnessEvent): Conve
     case "plan": {
       // A plan is permanent output, so anything the model thought on the way to
       // it belongs in front of it.
-      const flushed = flushReasoning(state);
+      const flushed = flushReasoning(state, timing);
       return {
         ...flushed,
         entries: [
@@ -228,14 +246,14 @@ export function applyEvent(state: ConversationState, event: HarnessEvent): Conve
       // The tool line is finished, so it becomes permanent and the live
       // spinner is cleared in the same step. Any thinking that led here is
       // committed first, or it would surface later as if the tool had prompted it.
-      const flushed = flushReasoning(state);
+      const flushed = flushReasoning(state, timing);
       return { ...flushed, entries: [...flushed.entries, entry], live: { ...flushed.live, tool: undefined } };
     }
 
     case "tool_call": {
       // The model has finished thinking and decided to act. That is the moment
       // the thinking becomes history, not the moment the turn ends.
-      const flushed = flushReasoning(state);
+      const flushed = flushReasoning(state, timing);
       // Anything the model streamed on its way to the call is the round's own
       // text, and the harness stores it on the tool-call message — so the
       // transcript must store it too, or the next round's tokens append to it
@@ -258,7 +276,7 @@ export function applyEvent(state: ConversationState, event: HarnessEvent): Conve
       // JSON into the transcript, which taught the model nothing and made the
       // user read its malformed output. No tool ran, so there is no output to
       // show beyond the rejection sentence itself.
-      const flushed = flushReasoning(state);
+      const flushed = flushReasoning(state, timing);
       const entry: Entry = {
         kind: "tool",
         name: event.rejection.name,
@@ -284,7 +302,7 @@ export function applyEvent(state: ConversationState, event: HarnessEvent): Conve
       // Whatever is still pending goes in immediately before the answer, which
       // is where a final thought belongs. Anything already committed by an
       // earlier tool call is long since in `entries` and is not repeated.
-      const flushed = flushReasoning(state);
+      const flushed = flushReasoning(state, timing);
       return { ...flushed, entries: [...flushed.entries, answer], live: emptyLive() };
     }
 

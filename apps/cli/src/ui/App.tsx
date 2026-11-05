@@ -187,6 +187,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const transcriptStartRowRef = useRef(0); // visible index where transcript begins
   const transcriptCountRef = useRef(0);
   const transcriptVisibleBudgetRef = useRef(0);
+  // Wall-clock ms when the current live reasoning segment began; used for the
+  // running timer on the collapsed block and to stamp committed entries.
+  const reasoningStartedAtRef = useRef<number | null>(null);
+  // Offsets of each committed entry within `entryRowList`, so a mouse click can
+  // be mapped back to the entry (and its expanded state) it landed on.
+  const entryOffsetsRef = useRef<number[]>([]);
+  const entryRowListLengthRef = useRef(0);
   const [justFinished, setJustFinished] = useState(false);
   const finishedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -199,7 +206,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [manageProvider, setManageProvider] = useState<string | null>(null);
   const [manageCursor, setManageCursor] = useState(0);
   const [manageConfirm, setManageConfirm] = useState(false);
-  const [expandReasoning, setExpandReasoning] = useState(true);
+  const [expandedReasoning, setExpandedReasoning] = useState<Set<number>>(new Set());
+  const [liveReasoningExpanded, setLiveReasoningExpanded] = useState(false);
   const [modelCursor, setModelCursor] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
   const [thinkingCursor, setThinkingCursor] = useState(0);
@@ -332,6 +340,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     return () => clearInterval(id);
   }, [busy]);
 
+  // Start the reasoning clock when the model begins to stream reasoning, and
+  // stop it when the live region is cleared (the turn committed or reset).
+  useEffect(() => {
+    const reasoning = conversation.live.reasoning.trim();
+    if (reasoning && reasoningStartedAtRef.current === null) reasoningStartedAtRef.current = Date.now();
+    if (!reasoning && reasoningStartedAtRef.current !== null) reasoningStartedAtRef.current = null;
+  }, [conversation.live.reasoning]);
+
   const runCommand = (command: SlashCommand): void => {
     switch (command.name) {
       case "help":
@@ -458,7 +474,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           ...(config.maxToolRounds ? { maxToolRounds: config.maxToolRounds } : {}),
           onEvent: (event) =>
             setConversation((state) => {
-              const next = applyEvent(state, event);
+              const next = applyEvent(state, event, {
+                nowMs: Date.now(),
+                reasoningStartedAtMs: reasoningStartedAtRef.current,
+              });
               if (event.type === "done") {
                 const answer = next.entries[next.entries.length - 1];
                 if (answer?.kind === "assistant") updateLive([...messagesRef.current, { role: "assistant", content: answer.text }]);
@@ -752,6 +771,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   };
   dispatchRef.current = dispatch;
 
+  const toggleReasoning = (index: number): void => {
+    setExpandedReasoning((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
   const handleMouse = (event: InputEvent & { type: "mouse" }): void => {
     // A left press starts a selection; motion extends it; release copies it.
     // This is what makes native copy-paste unnecessary: mouse capture (which
@@ -780,6 +808,34 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     };
     if (event.button === "left") {
       const pt = toContentPoint(event.x, event.y);
+      if (!event.drag && !event.release) {
+        // A click on a committed reasoning block toggles it open to the full
+        // chain-of-thought, rendered as any other long text with no truncation.
+        const offsets = entryOffsetsRef.current;
+        const entryLength = entryRowListLengthRef.current;
+        let entryIndex: number | undefined;
+        for (let i = 0; i < offsets.length; i += 1) {
+          const start = offsets[i]!;
+          const end = offsets[i + 1] ?? entryLength;
+          if (pt.row >= start && pt.row < end) { entryIndex = i; break; }
+        }
+        if (entryIndex !== undefined && conversation.entries[entryIndex]?.kind === "reasoning") {
+          toggleReasoning(entryIndex);
+          return;
+        }
+        // A click on the live reasoning block (the only thing live while the
+        // model is still thinking and nothing has been answered yet) expands
+        // it to the full chain without truncation.
+        if (
+          mode === "chat" &&
+          pt.row >= entryLength &&
+          conversation.live.reasoning.trim() &&
+          !conversation.live.text
+        ) {
+          setLiveReasoningExpanded((v) => !v);
+          return;
+        }
+      }
       if (event.drag) {
         setSelection((s) => extend(s, pt, Math.max(1, count), innerW));
         return;
@@ -816,8 +872,21 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   };
 
   const handleKey = (key: string): void => {
-    // Ctrl+R expands/collapses every reasoning block, in any mode.
-    if (key === "ctrl-r") return setExpandReasoning((v) => !v);
+    // Ctrl+R expands or collapses every committed reasoning block at once.
+    if (key === "ctrl-r") {
+      const reasoningIndices = conversation.entries
+        .map((e, i) => (e.kind === "reasoning" ? i : -1))
+        .filter((i): i is number => i >= 0);
+      if (reasoningIndices.length === 0) return;
+      const allExpanded = reasoningIndices.every((i) => expandedReasoning.has(i));
+      setExpandedReasoning((prev) => {
+        const next = new Set(prev);
+        if (allExpanded) reasoningIndices.forEach((i) => next.delete(i));
+        else reasoningIndices.forEach((i) => next.add(i));
+        return next;
+      });
+      return;
+    }
     if (key === "ctrl-c") {
       // If there is a selection on screen, Ctrl+C copies it (native-terminal
       // habit) instead of exiting — the selection is the receipt the user just
@@ -1299,7 +1368,17 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const face: Face = justFinished ? "happy" : busy && liveQuiet ? "startled" : stateFace({ live: conversation.live, lastEntry: conversation.entries[conversation.entries.length - 1], blocked: Boolean(conversation.blocked), busy });
 
   // ---- build the screen and draw it ----
-  const entryRowList = useMemo(() => conversation.entries.flatMap((entry) => entryLines(entry, frameInnerWidth(screen.size.cols), expandReasoning)), [conversation.entries, screen.size.cols, expandReasoning]);
+  const entryRowList = useMemo(() => {
+    const offsets: number[] = [];
+    const rows: Seg[][] = [];
+    conversation.entries.forEach((entry, i) => {
+      offsets.push(rows.length);
+      rows.push(...entryLines(entry, frameInnerWidth(screen.size.cols), expandedReasoning.has(i)));
+    });
+    entryOffsetsRef.current = offsets;
+    entryRowListLengthRef.current = rows.length;
+    return rows;
+  }, [conversation.entries, screen.size.cols, expandedReasoning]);
 
   const buildGrid = (): { grid: string[]; plain: string[] } => {
     const cols = screen.size.cols;
@@ -1349,7 +1428,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // completely rather than clipping the pinned composer.
     const chromeH = top.length + blockedRow.length + (menuSlot ? 1 : 0) + slashPopup.length + menuContent.length + composer.length + 1;
     const transcriptV = menuSlot ? 0 : Math.max(0, rows - 2 - chromeH);
-    const live = menuSlot ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), expandReasoning);
+    const live = menuSlot ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), liveReasoningExpanded, reasoningStartedAtRef.current);
 
     // One layout for every menu: the top area, a blank line, the menu in its
     // static slot, blank fill, the pinned composer. Menus of every kind sit
