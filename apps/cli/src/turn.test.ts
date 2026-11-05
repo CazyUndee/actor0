@@ -300,8 +300,19 @@ const overflow = (window: number) => ({
   },
 });
 
-/** The frame a provider sends when the request does not fit. */
-const overflowFrame = overflow(8192);
+/**
+ * The frame a provider sends when the request does not fit.
+ *
+ * The window must exceed the CLI's non-clearable floor — the system prompt
+ * plus project context, the tool schemas, and the answer reserve serialize to
+ * ~8,250 tokens — or the one replay the recovery is allowed is refused in
+ * exactly the words it was meant to fix. 16,384 clears that floor, so the
+ * 60,000-character `bulkyHistory` payload still makes the original too big
+ * yet the compacted retry fits; and the "cannot be made to fit" test below
+ * (an 80,000-character message) stays unfixable at this window too. The
+ * `windowed(...)` tests exercise their own, measured windows separately.
+ */
+const overflowFrame = overflow(16384);
 
 /**
  * A provider with a real window, rather than one that only ever overflows.
