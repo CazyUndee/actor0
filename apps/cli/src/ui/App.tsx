@@ -218,6 +218,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const abortRef = useRef<AbortController | null>(null);
   const [ctrlCPressed, setCtrlCPressed] = useState(false);
   const ctrlCTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [composerHint, setComposerHint] = useState<string | undefined>(undefined);
+  const composerHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashComposerHint = (text: string, ms = 2000): void => {
+    setComposerHint(text);
+    if (composerHintTimerRef.current) clearTimeout(composerHintTimerRef.current);
+    composerHintTimerRef.current = setTimeout(() => setComposerHint(undefined), ms);
+  };
   const liveRef = useRef<ChatMessage[]>(messagesRef.current);
   const conversationRef = useRef(conversation);
   conversationRef.current = conversation;
@@ -790,7 +797,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       });
       if (copiedText.trim()) {
         copyToClipboard(copiedText);
-        notice("info", `copied ${copiedText.split("\n").length} line${copiedText.split("\n").length === 1 ? "" : "s"} to clipboard`);
+        flashComposerHint(`copied ${copiedText.split("\n").length} line${copiedText.split("\n").length === 1 ? "" : "s"}`);
       }
       return;
     }
@@ -819,7 +826,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         const text = selectedText(selection, transcriptPlainRef.current);
         if (text.trim()) {
           copyToClipboard(text);
-          notice("info", `copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"} to clipboard`);
+          flashComposerHint(`copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"}`);
         }
         setSelection(emptySelection());
         return;
@@ -1303,7 +1310,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // The composer (the draft input) is always pinned to the bottom — even
     // while a menu is open; the menu renders above it, never in its place.
     const composerMaxH = Math.max(3, Math.min(12, rows - 9));
-    const composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH, topRight: ctrlCPressed ? "press ctrl c again to exit actor0" : undefined }).rows;
+    const composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH, topRight: ctrlCPressed ? "press ctrl c again to exit actor0" : composerHint }).rows;
     const blockedRow = conversation.blocked ? [[{ text: `the agent needs you: ${conversation.blocked.message} — reply to continue, or /clear`, color: color.warning }]] : [];
 
     // Human-readable header: the provider label, the model, branch, context, session.
