@@ -102,3 +102,17 @@ test("streaming reasoning is a titled multi-row card, not one line", () => {
   // Readable contrast: the body is the muted tone, not the near-invisible dim.
   assert.ok(rows.some((r) => r.some((s) => s.color !== undefined && s.text.trim().length > 0)), "the reasoning has visible text");
 });
+
+test("composer topRight tears the hint into the top border", () => {
+  const built = composerRows({ cols: 60, draft: "", caret: 0, busy: false, maxHeight: 6, topRight: "press ctrl c again to exit actor0" });
+  const top = built.rows[0]!.map((s) => s.text).join("");
+  assert.ok(top.includes("press ctrl c again to exit actor0"), `the hint is torn into the top border: ${top}`);
+  assert.ok(top.startsWith("╭") && top.endsWith("╮"), "the border is still a rounded box");
+});
+
+test("composer without topRight has a plain top border", () => {
+  const built = composerRows({ cols: 60, draft: "", caret: 0, busy: false, maxHeight: 6 });
+  const top = built.rows[0]!.map((s) => s.text).join("");
+  assert.ok(!top.includes("press ctrl"), "no hint when topRight is absent");
+  assert.ok(top.startsWith("╭") && top.endsWith("╮"), "the border is still a rounded box");
+});

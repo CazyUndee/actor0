@@ -543,3 +543,30 @@ test("Ctrl+D quits", async () => {
     unmount();
   }
 });
+
+test("Ctrl+C arms the exit hint instead of quitting immediately", async () => {
+  let exited = false;
+  const { screen, stdin, unmount } = await mount({ onExit: () => { exited = true; } });
+  try {
+    stdin.write("\x03");
+    await until(screen, (j) => j.includes("press ctrl c again to exit actor0"));
+    assert.equal(exited, false, "the first Ctrl+C did not exit");
+    assert.ok(screen.last.join("\n").includes("press ctrl c again to exit actor0"), "the hint is torn into the composer");
+  } finally {
+    unmount();
+  }
+});
+
+test("Ctrl+C twice within 2s exits", async () => {
+  let exited = false;
+  const { stdin, unmount } = await mount({ onExit: () => { exited = true; } });
+  try {
+    stdin.write("\x03");
+    await tick(100);
+    stdin.write("\x03");
+    await tick(100);
+    assert.equal(exited, true, "the second Ctrl+C called onExit");
+  } finally {
+    unmount();
+  }
+});
