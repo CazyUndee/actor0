@@ -6,6 +6,8 @@ import { App } from "./App.js";
 import { Screen } from "./term.js";
 import { setCachedEnvironment } from "./env-cache.js";
 
+type WorkerLike = { once: (event: string, cb: (...args: unknown[]) => void) => void; terminate: () => Promise<number>; };
+
 /**
  * Boot the full-screen TUI.
  *
@@ -29,20 +31,22 @@ function truthy(value: string | undefined): boolean {
  * fails to start leaves the cache cold, and detectEnvironment falls back to a
  * minimal, spawn-free box.
  */
-function warmEnvironment(): void {
+function warmEnvironment(onWorker: (w: WorkerLike | null) => void): void {
   void (async () => {
     try {
       const { Worker } = await import("node:worker_threads");
       const { fileURLToPath } = await import("node:url");
       const { dirname, join } = await import("node:path");
       const path = join(dirname(fileURLToPath(import.meta.url)), "env-worker.mjs");
-      const worker = new Worker(path);
+      const worker = new Worker(path) as unknown as WorkerLike;
+      onWorker(worker);
       worker.once("message", (env: unknown) => {
         setCachedEnvironment(env as Parameters<typeof setCachedEnvironment>[0]);
         void worker.terminate();
       });
       worker.once("error", () => void worker.terminate());
     } catch {
+      onWorker(null);
       // best-effort warm; a cold cache falls back to a minimal environment
     }
   })();
@@ -67,11 +71,13 @@ export async function bootTui(opts: BootOptions): Promise<() => Promise<void>> {
   // Start measuring the machine off the main thread now, so the cache is warm
   // before the first turn builds its system prompt — without ever blocking the
   // first frame. detectEnvironment (in the turn path) reads the warmed cache.
-  warmEnvironment();
+  let worker: WorkerLike | null = null;
+  warmEnvironment((w) => { worker = w; });
   const { PassThrough } = await import("node:stream");
   const sink = new PassThrough();
   sink.resume();
   const instanceRef: { current: ReturnType<typeof render> | undefined } = { current: undefined };
+  let exiting = false;
   const restoreTerminal = (): void => {
     screen.dispose();
     try {
@@ -79,18 +85,46 @@ export async function bootTui(opts: BootOptions): Promise<() => Promise<void>> {
     } catch {
       // not a TTY — nothing to restore
     }
+    try {
+      opts.stdin.pause();
+    } catch {
+      // best effort
+    }
   };
   const exit = (): void => {
+    if (exiting) return;
+    exiting = true;
     restoreTerminal();
-    instanceRef.current?.unmount();
-    process.exit(0);
+    try { instanceRef.current?.unmount(); } catch { /* best effort */ }
+    if (worker) { void worker.terminate(); worker = null; }
+    // Flush the restore sequences before exiting: process.exit does not drain
+    // stdout, and an unflushed alt-screen restore leaves the terminal looking
+    // frozen (still in the alternate screen, mouse still captured).
+    const finish = (): void => process.exit(0);
+    if (process.stdout.writable) {
+      const t = setTimeout(finish, 500);
+      process.stdout.write("", () => { clearTimeout(t); finish(); });
+    } else {
+      finish();
+    }
   };
   // A `kill`, a crash, or a closed terminal must not leave the user stranded in
   // the alt screen with the mouse captured — restore it on the way down.
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.on(sig, () => {
+      if (exiting) return;
+      exiting = true;
       restoreTerminal();
-      process.exit(sig === "SIGINT" ? 130 : 143);
+      try { instanceRef.current?.unmount(); } catch { /* best effort */ }
+      if (worker) { void worker.terminate(); worker = null; }
+      const code = sig === "SIGINT" ? 130 : 143;
+      const finish = (): void => process.exit(code);
+      if (process.stdout.writable) {
+        const t = setTimeout(finish, 500);
+        process.stdout.write("", () => { clearTimeout(t); finish(); });
+      } else {
+        finish();
+      }
     });
   }
   if (opts.stdin.isTTY) opts.stdin.setRawMode(true);
