@@ -200,10 +200,15 @@ export function box(rows: Seg[][], cols: number, opts: { border?: string; bg?: s
  * provider and manage screens use. The box keeps its own titled border;
  * `panel` only positions it.
  */
-export function panel(rows: Seg[][], innerW: number, width?: number): Seg[][] {
+export function panel(rows: Seg[][], innerW: number, width?: number, hitMapIn?: number[], hitMapOut?: number[]): Seg[][] {
   const boxW = Math.max(24, Math.min(width ?? MENU_WIDTH, innerW - 4));
   const inset = Math.max(0, Math.floor((innerW - boxW) / 2));
-  return rows.map((r) => fitWidth([{ text: " ".repeat(inset), dim: true }, ...r], innerW));
+  const out = rows.map((r) => fitWidth([{ text: " ".repeat(inset), dim: true }, ...r], innerW));
+  if (hitMapIn && hitMapOut) {
+    hitMapOut.length = 0;
+    hitMapOut.push(...hitMapIn);
+  }
+  return out;
 }
 
 /* ---- the canonical menu ----
@@ -280,12 +285,15 @@ export function menuRows(o: {
   /** Box width; the default keeps every menu the same width. */
   width?: number;
   emptyText?: string;
+  /** Optional out-array filled with a per-row item index (-1 = not an item). */
+  hitMapOut?: number[];
 }): Seg[][] {
   const width = Math.max(24, o.width ?? MENU_WIDTH);
   const innerW = width - 2;
   const query = o.query ?? "";
   const divider: Seg[] = [{ text: "─".repeat(innerW), color: color.border }];
   const rows: Seg[][] = [menuSearchRow(query, o.live ?? false, o.info ?? false), divider];
+  const hitMapInner: number[] = [-1, -1];
 
   // Column layout: a fixed 2-column marker, an aligned label column, and the
   // muted detail — the label is what gets truncated, never the layout.
@@ -357,17 +365,21 @@ export function menuRows(o: {
   const below = o.items.length - end;
 
   const body: Seg[][] = [];
-  const push = (r: Seg[]): void => {
-    if (body.length > 0) body.push(divider);
+  const push = (r: Seg[], itemIndex = -1): void => {
+    if (body.length > 0) { body.push(divider); hitMapInner.push(-1); }
     body.push(r);
+    hitMapInner.push(itemIndex);
   };
   if (above > 0) push(plain(`  ↑ ${above} above`, color.dim));
   for (let i = start; i < end; i += 1) {
     const e = o.items[i]!;
-    push(entryRow(i, o.cursor === i && e.selectable !== false));
+    push(entryRow(i, o.cursor === i && e.selectable !== false), e.selectable === false ? -1 : i);
     // Sub-rows are a divider-free block that belongs to the item, not the
     // list — they ride under it without earning their own dividers.
-    for (const sr of e.subRows ?? []) body.push(subRow(sr));
+    (e.subRows ?? []).forEach((sr, j) => {
+      body.push(subRow(sr));
+      hitMapInner.push(e.selectable === false ? -1 : 100000 + i * 10 + j);
+    });
   }
   if (below > 0) push(plain(`  ↓ ${below} more`, color.dim));
   if (start === end) push(plain(`  ${o.emptyText ?? "no matches"}`, color.dim));
@@ -377,7 +389,11 @@ export function menuRows(o: {
   // search bar and the frame's edges never move while typing.
   if (o.height !== undefined) {
     const target = Math.max(0, o.height - 2);
-    while (rows.length < target) rows.push([{ text: " ".repeat(innerW), dim: true }]);
+    while (rows.length < target) { rows.push([{ text: " ".repeat(innerW), dim: true }]); hitMapInner.push(-1); }
+  }
+  if (o.hitMapOut) {
+    o.hitMapOut.length = 0;
+    o.hitMapOut.push(-1, ...hitMapInner, -1);
   }
   return box(rows, width, { border: color.border, title: o.title });
 }
@@ -399,6 +415,7 @@ export function providerPanelRows(
   expandedIndex?: number | null,
   actionCursor?: number,
   height?: number,
+  hitMapOut?: number[],
 ): Seg[][] {
   const items: MenuEntry[] = providers.map((p, i) => ({
     marker: p.active ? "● " : "  ",
@@ -423,6 +440,7 @@ export function providerPanelRows(
     width,
     height,
     emptyText: "no providers yet",
+    hitMapOut,
   });
 }
 
@@ -432,6 +450,7 @@ export function managePanelRows(
   cursor: number,
   width?: number,
   height?: number,
+  hitMapOut?: number[],
 ): Seg[][] {
   const actions = ["Change model", "Edit provider", "Test connection", "Remove provider"];
   const items: MenuEntry[] = [
@@ -459,6 +478,7 @@ export function managePanelRows(
     cursor: cursor + 1, // the cursor walks the four actions, not the details block
     width: width ?? MENU_WIDTH,
     height,
+    hitMapOut,
   });
 }
 /** One committed transcript entry, as rows of segments (each row ≤ `cols`). */
@@ -672,7 +692,7 @@ export function frameLine(text: string, columns: number): string {
 /* ---- the composer and every menu, as rows of segments ---- */
 
 /** The composer: a compact rounded box around the draft. Grows with the draft. */
-export function composerRows(opts: { cols: number; draft: string; caret: number; busy: boolean; maxHeight?: number; topRight?: string }): { rows: Seg[][]; inputRow: number; inputCol: number } {
+export function composerRows(opts: { cols: number; draft: string; caret: number; busy: boolean; maxHeight?: number; topRight?: string; topRightColor?: string }): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const width = Math.max(20, opts.cols);
   const inner = width - 2;
   const glyph = opts.busy ? "· " : "❯ ";
@@ -719,13 +739,22 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   const visible = all.slice(startIdx, startIdx + maxRows);
   const above = startIdx;
 
-  let topBorder = `╭${"─".repeat(inner)}╮`;
+  let topBorder: Seg[];
   if (opts.topRight) {
     const label = ` ${opts.topRight} `;
     const pos = Math.max(2, inner - label.length - 1);
-    topBorder = `╭${"─".repeat(pos)}${label}${"─".repeat(Math.max(0, inner - pos - label.length))}╮`;
+    const rightPad = Math.max(0, inner - pos - label.length);
+    topBorder = [
+      { text: "╭", color: color.dim },
+      { text: "─".repeat(pos), color: color.dim },
+      { text: label, color: opts.topRightColor ?? color.dim },
+      { text: "─".repeat(rightPad), color: color.dim },
+      { text: "╮", color: color.dim },
+    ];
+  } else {
+    topBorder = [{ text: `╭${"─".repeat(inner)}╮`, color: color.dim }];
   }
-  const rows: Seg[][] = [plain(topBorder, color.dim)];
+  const rows: Seg[][] = [topBorder];
   if (above > 0) rows.push([{ text: "│", color: color.dim }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.dim }]);
   visible.forEach((row, vi) => {
     const isCaretRow = startIdx + vi === caretRow;
@@ -780,6 +809,7 @@ export function pickerRows(opts: {
   height?: number;
   width?: number;
   query?: string;
+  hitMapOut?: number[];
 }): Seg[][] {
   const entries: MenuEntry[] = [];
   if (opts.prefix) entries.push({ line: opts.prefix, lineTone: color.dim, selectable: false });
@@ -800,6 +830,7 @@ export function pickerRows(opts: {
     cursor: opts.cursor + (opts.prefix ? 1 : 0),
     height: opts.height,
     width: opts.width,
+    hitMapOut: opts.hitMapOut,
   });
 }
 
@@ -811,6 +842,7 @@ export function modelPickerRows(
   width?: number,
   activeModel?: string,
   activeProvider?: string,
+  hitMapOut?: number[],
 ): Seg[][] {
   void activeProvider;
   return menuRows({
@@ -827,6 +859,7 @@ export function modelPickerRows(
     height,
     width,
     emptyText: "no models",
+    hitMapOut,
   });
 }
 
@@ -857,7 +890,7 @@ export function sessionPickerRows(sessions: SessionItem[], cursor: number, heigh
   });
 }
 
-export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query = "", width?: number, height?: number): Seg[][] {
+export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query = "", width?: number, height?: number, hitMapOut?: number[]): Seg[][] {
   return pickerRows({
     title: "reasoning effort",
     items: options.map((o, i) => ({ label: o.label, selected: i === cursor })),
@@ -865,20 +898,21 @@ export function thinkingPickerRows(options: { label: string; effort?: string }[]
     query,
     width,
     height,
+    hitMapOut,
   });
 }
 /** The `/usage` panel: a period, a total, and a per-model breakdown. */
-export function usagePanelRows(periodLabel: string, sinceTokens: number, sinceTurns: number, allTokens: number, allTurns: number, byModel: { model: string; tokens: number }[], width?: number, height?: number): Seg[][] {
+export function usagePanelRows(periodLabel: string, sinceTokens: number, sinceTurns: number, allTokens: number, allTurns: number, byModel: { model: string; tokens: number }[], width?: number, height?: number, hitMapOut?: number[]): Seg[][] {
   const items: MenuEntry[] = [
     { marker: "  ", label: periodLabel, detail: `${formatTokens(sinceTokens)} tokens · ${sinceTurns} turn${sinceTurns === 1 ? "" : "s"}`, selectable: false },
     { marker: "  ", label: "all time", detail: `${formatTokens(allTokens)} tokens · ${allTurns} turn${allTurns === 1 ? "" : "s"}`, selectable: false },
     ...byModel.map((r) => ({ marker: "· ", markerTone: color.muted, label: r.model, detail: formatTokens(r.tokens), selectable: false })),
   ];
-  return menuRows({ title: "usage", items, width: width ?? MENU_WIDTH, height });
+  return menuRows({ title: "usage", items, width: width ?? MENU_WIDTH, height, hitMapOut });
 }
 
 /** The slash-command menu: the canonical rectangle whose search bar filters it. */
-export function slashPopupRows(commands: { name: string; description: string; alias?: string }[], selected: number, query = "", width?: number, height?: number): Seg[][] {
+export function slashPopupRows(commands: { name: string; description: string; alias?: string }[], selected: number, query = "", width?: number, height?: number, hitMapOut?: number[]): Seg[][] {
   return menuRows({
     title: "commands",
     query,
@@ -892,10 +926,11 @@ export function slashPopupRows(commands: { name: string; description: string; al
     cursor: selected,
     width,
     height,
+    hitMapOut,
   });
 }
 /** The add-provider flow, one renderer per phase. */
-export function addKindRows(onboarding: boolean, kinds: { id: string; label: string; auth: string[] }[], cursor: number, query?: string, height?: number): Seg[][] {
+export function addKindRows(onboarding: boolean, kinds: { id: string; label: string; auth: string[] }[], cursor: number, query?: string, height?: number, hitMapOut?: number[]): Seg[][] {
   return pickerRows({
     title: onboarding ? "welcome to actor0" : "add a provider",
     prefix: onboarding ? "bring your own provider — pick one to start" : undefined,
@@ -904,40 +939,43 @@ export function addKindRows(onboarding: boolean, kinds: { id: string; label: str
     hint: "type to filter · ↑/↓ move · enter choose · esc cancel",
     query,
     height,
+    hitMapOut,
   });
 }
 
-export function addUrlRows(label: string, url: string, height?: number): { rows: Seg[][]; inputRow: number; inputCol: number } {
+export function addUrlRows(label: string, url: string, height?: number, hitMapOut?: number[]): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const rows = menuRows({
     title: `${label} — base URL`,
     query: url,
     live: true,
     items: [{ line: "enter to continue · esc cancel", lineTone: color.dim, selectable: false }],
     height,
+    hitMapOut,
   });
   return { rows, inputRow: 1, inputCol: SEARCH_INPUT_COL };
 }
 
-export function addKeyRows(label: string, key: string, height?: number): { rows: Seg[][]; inputRow: number; inputCol: number } {
+export function addKeyRows(label: string, key: string, height?: number, hitMapOut?: number[]): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const rows = menuRows({
     title: `${label} — API key`,
     query: "•".repeat(key.length),
     live: true,
     items: [{ line: "enter to continue · esc cancel", lineTone: color.dim, selectable: false }],
     height,
+    hitMapOut,
   });
   return { rows, inputRow: 1, inputCol: SEARCH_INPUT_COL };
 }
 
-export function addWorkingRows(label: string, note: string, height?: number): Seg[][] {
+export function addWorkingRows(label: string, note: string, height?: number, hitMapOut?: number[]): Seg[][] {
   const items: MenuEntry[] = [
     ...note.split("\n").map((l): MenuEntry => ({ line: l, lineTone: color.info, selectable: false })),
     { line: "esc to cancel", lineTone: color.dim, selectable: false },
   ];
-  return menuRows({ title: label, items, height });
+  return menuRows({ title: label, items, height, hitMapOut });
 }
 
-export function addErrorRows(message: string, height?: number): Seg[][] {
+export function addErrorRows(message: string, height?: number, hitMapOut?: number[]): Seg[][] {
   return menuRows({
     title: "add failed",
     items: [
@@ -945,10 +983,11 @@ export function addErrorRows(message: string, height?: number): Seg[][] {
       { line: "enter to try again · esc cancel", lineTone: color.dim, selectable: false },
     ],
     height,
+    hitMapOut,
   });
 }
 
-export function addModelsRows(label: string, models: string[], cursor: number, chosen: Set<string>, height: number, query?: string): Seg[][] {
+export function addModelsRows(label: string, models: string[], cursor: number, chosen: Set<string>, height: number, query?: string, hitMapOut?: number[]): Seg[][] {
   return pickerRows({
     title: `${label} — ${models.length} model${models.length === 1 ? "" : "s"}`,
     items: models.map((m) => ({ label: m, selected: chosen.has(m) })),
@@ -956,16 +995,18 @@ export function addModelsRows(label: string, models: string[], cursor: number, c
     hint: "type to filter · space toggle · a all · n none · enter use · esc cancel",
     height,
     query,
+    hitMapOut,
   });
 }
 
-export function addManualRows(label: string, manual: string, height?: number): { rows: Seg[][]; inputRow: number; inputCol: number } {
+export function addManualRows(label: string, manual: string, height?: number, hitMapOut?: number[]): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const rows = menuRows({
     title: `${label} — no models listed`,
     query: manual,
     live: true,
     items: [{ line: "type a model name, or enter to add it and set one later with /model", lineTone: color.dim, selectable: false }],
     height,
+    hitMapOut,
   });
   return { rows, inputRow: 1, inputCol: SEARCH_INPUT_COL };
 }

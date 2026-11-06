@@ -199,6 +199,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // be mapped back to the entry (and its expanded state) it landed on.
   const entryOffsetsRef = useRef<number[]>([]);
   const entryRowListLengthRef = useRef(0);
+  // Per-rendered-row item index for the open menu, so a mouse click/hover can
+  // be mapped back to the menu item it landed on (-1 = not an item).
+  const menuHitMapRef = useRef<number[]>([]);
+  const slashHitMapRef = useRef<number[]>([]);
+  // Inner-row index where the (centered) menu content begins this frame.
+  const menuContentStartRowRef = useRef(0);
   const [justFinished, setJustFinished] = useState(false);
   const finishedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -241,11 +247,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [ctrlCPressed, setCtrlCPressed] = useState(false);
   const ctrlCTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [composerHint, setComposerHint] = useState<string | undefined>(undefined);
+  const [composerHintColor, setComposerHintColor] = useState<string | undefined>(undefined);
   const composerHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flashComposerHint = (text: string, ms = 2000): void => {
+  const flashComposerHint = (text: string, ms = 2000, color?: string): void => {
     setComposerHint(text);
+    setComposerHintColor(color);
     if (composerHintTimerRef.current) clearTimeout(composerHintTimerRef.current);
-    composerHintTimerRef.current = setTimeout(() => setComposerHint(undefined), ms);
+    composerHintTimerRef.current = setTimeout(() => { setComposerHint(undefined); setComposerHintColor(undefined); }, ms);
   };
   const liveRef = useRef<ChatMessage[]>(messagesRef.current);
   const conversationRef = useRef(conversation);
@@ -871,6 +879,222 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const cols = screen.size.cols;
     const innerW = Math.max(8, frameInnerWidth(cols));
     const count = transcriptCountRef.current;
+
+    // Hover events (motion with no button held) must never start a transcript
+    // selection — they are only meaningful over menus, handled above.
+    if (event.hover && mode === "chat" && !slashEngaged) return;
+
+    // Slash popup (chat mode): clicking an entry selects and runs it.
+    if (mode === "chat" && slashEngaged && event.button === "left") {
+      const innerIndex = event.y - 2;
+      const contentStart = menuContentStartRowRef.current;
+      const mapIndex = innerIndex - contentStart;
+      const hitMap = slashHitMapRef.current;
+      const code = (mapIndex >= 0 && mapIndex < hitMap.length) ? hitMap[mapIndex]! : -1;
+      if (code !== -1) {
+        setSlashIndex(code);
+        if (event.release) {
+          const match = slashMatches[code];
+          submit(match ? `/${match.name}` : draft);
+        }
+      }
+      return;
+    }
+
+    // In any menu, the mouse drives the cursor (hover = focus) and a click
+    // activates the item under the pointer — the same outcome as Enter.
+    if (mode !== "chat" && event.button === "left") {
+      const innerIndex = event.y - 2; // terminal row 1 is the top border
+      const contentStart = menuContentStartRowRef.current;
+      const mapIndex = innerIndex - contentStart;
+      const hitMap = menuHitMapRef.current;
+      const code = (mapIndex >= 0 && mapIndex < hitMap.length) ? hitMap[mapIndex]! : -1;
+      if (code !== -1) {
+        const isSub = code >= 100000;
+        const itemIndex = isSub ? Math.floor((code - 100000) / 10) : code;
+        const subIndex = isSub ? (code - 100000) % 10 : -1;
+        // Hover parity: move the keyboard cursor to the hovered item.
+        if (mode === "menu") {
+          setMenuIndex(itemIndex);
+          if (isSub) setProviderActionCursor(subIndex);
+          // Hover must mirror keyboard focus without collapsing an expanded
+          // provider's action list, so leave expandedProvider untouched.
+        } else if (mode === "manage") {
+          if (!isSub) setManageCursor(Math.max(0, itemIndex - 1));
+        } else if (mode === "model") {
+          setModelCursor(itemIndex);
+        } else if (mode === "thinking") {
+          setThinkingCursor(itemIndex);
+        } else if (mode === "add" && add.kind === "kind") {
+          setAddKindCursor(itemIndex);
+        } else if (mode === "add" && add.kind === "models" && add.models.length > 0) {
+          const models = add.query ? add.models.filter((m) => m.toLowerCase().includes(add.query.toLowerCase())) : add.models;
+          // itemIndex maps into the filtered? menuRows item index is into filtered list? addModelsRows uses models (filtered) list. filteredModels for app? Actually add uses add.models unfiltered passed to addModelsRows then filtered inside. The hit map item index is into the filtered list passed. Need consistency. Simpler: set cursor to itemIndex clamped.
+          setAdd((a) => (a.kind === "models" ? { ...a, cursor: Math.min(itemIndex, Math.max(0, models.length - 1)) } : a));
+        }
+        // Slash popup hover is handled by the dedicated branch above.
+        // Activation on release (click).
+        if (event.release) {
+          if (mode === "menu") {
+            if (itemIndex === filteredProviders.length) {
+              // "Add provider" entry.
+              setOnboarding(false);
+              setAdd({ kind: "kind" });
+              setAddKindCursor(0);
+              setAddKindQuery("");
+              setMode("add");
+            } else if (isSub) {
+              setProviderActionCursor(subIndex);
+              const target = filteredProviders[itemIndex];
+              if (target) {
+                if (subIndex === 0) {
+                  try {
+                    const next = setActiveProvider(config, target.name);
+                    setConfig(next);
+                    saveConfig(next);
+                    notice("info", `switched to ${target.name}`);
+                  } catch (e) {
+                    notice("error", `${target.name}: ${(e as Error).message}`);
+                    return;
+                  }
+                  setExpandedProvider(null);
+                  setProviderQuery("");
+                  setMode("chat");
+                } else {
+                  setManageProvider(target.name);
+                  setManageCursor(0);
+                  setExpandedProvider(null);
+                  setMode("manage");
+                }
+              }
+            } else if (itemIndex < filteredProviders.length) {
+              if (expandedProvider === itemIndex) {
+                // Already expanded: a second click performs the highlighted action.
+                const target = filteredProviders[itemIndex];
+                if (target && providerActionCursor === 0) {
+                  try {
+                    const next = setActiveProvider(config, target.name);
+                    setConfig(next);
+                    saveConfig(next);
+                    notice("info", `switched to ${target.name}`);
+                  } catch (e) {
+                    notice("error", `${target.name}: ${(e as Error).message}`);
+                    return;
+                  }
+                  setExpandedProvider(null);
+                  setProviderQuery("");
+                  setMode("chat");
+                } else if (target) {
+                  setManageProvider(target.name);
+                  setManageCursor(0);
+                  setExpandedProvider(null);
+                  setMode("manage");
+                }
+              } else {
+                setExpandedProvider(itemIndex);
+                setProviderActionCursor(0);
+              }
+            }
+            setMenuIndex(itemIndex);
+          } else if (mode === "manage") {
+            const p = namedProviders(config).find((x) => x.name === manageProvider);
+            if (p) {
+              const idx = Math.max(0, itemIndex - 1);
+              setManageCursor(idx);
+              if (idx === 0) {
+                const next = setActiveProvider(config, p.name);
+                setConfig(next);
+                saveConfig(next);
+                setModelCursor(Math.max(0, next.models.indexOf(p.model ?? next.model)));
+                setModelQuery("");
+                setMode("model");
+              } else if (idx === 1) {
+                manageModels(p.name);
+              } else if (idx === 2) {
+                notice("info", `testing ${providerLabel(p)}…`);
+                let resolved: ReturnType<typeof resolveProvider>;
+                try {
+                  resolved = resolveProvider({ ...config, activeProvider: p.name });
+                } catch (error) {
+                  notice("error", `${p.name}: ${(error as Error).message}`);
+                  return;
+                }
+                void loadTurn().then((T) => T.verifyProvider(resolved)).then((result) => {
+                  if (result.ok) notice("info", `${p.name} works.`);
+                  else if (result.retriable) notice("warn", `${p.name}: couldn't reach it (network) — ${result.message}`);
+                  else notice("error", `${p.name} didn't answer: ${result.message}`);
+                });
+              } else if (idx === 3) {
+                if (!manageConfirm) setManageConfirm(true);
+                else {
+                  const next = removeProvider(config, p.name);
+                  setConfig(next);
+                  saveConfig(next);
+                  notice("info", `removed ${p.name}`);
+                  setManageConfirm(false);
+                  setMode("menu");
+                }
+              }
+            }
+          } else if (mode === "model") {
+            setModelCursor(itemIndex);
+            const entry = filteredModels[itemIndex];
+            if (entry) {
+              try {
+                let next = config;
+                if (entry.provider && entry.provider !== active?.name) {
+                  next = setActiveProvider(next, entry.provider);
+                }
+                next = withModel(next, entry.model);
+                setConfig(next);
+                saveConfig(next);
+                notice("info", `model set to ${entry.model}`);
+              } catch (e) {
+                notice("error", `couldn't switch model: ${(e as Error).message}`);
+                return;
+              }
+            }
+            setMode("chat");
+          } else if (mode === "thinking") {
+            setThinkingCursor(itemIndex);
+            const effort = filteredThinking[itemIndex]?.effort;
+            if (effort) {
+              const next = withActiveReasoningEffort(config, effort);
+              setConfig(next);
+              saveConfig(next);
+              flashComposerHint(`reasoning effort: ${effort}`, 2000, color.info);
+            } else {
+              flashComposerHint("reasoning effort left to the provider", 2000, color.info);
+            }
+            setMode("chat");
+          } else if (mode === "add" && add.kind === "kind") {
+            setAddKindCursor(itemIndex);
+            const chosen = filteredKinds[itemIndex];
+            if (chosen) {
+              setAddKindQuery("");
+              if (chosen.auth.length === 1 && chosen.auth[0] === "oauth") addSignIn(chosen);
+              else {
+                setAddUrl(chosen.baseUrl);
+                setAdd({ kind: "url", provider: chosen });
+              }
+            }
+          } else if (mode === "add" && add.kind === "models" && add.models.length > 0) {
+            const models = add.query ? add.models.filter((m) => m.toLowerCase().includes(add.query.toLowerCase())) : add.models;
+            const model = models[itemIndex];
+            if (model) {
+              setAdd((a) => (a.kind === "models" ? { ...a, cursor: itemIndex } : a));
+              addRegister([model]);
+            }
+          }
+        }
+      }
+      // Wheel handling for menus already in the wheel branch below; but we
+      // already returned? No, fall through to wheel check only if not left.
+      // For left events over a menu, if it didn't hit an item, do nothing
+      // (avoid starting a transcript selection in menu mode).
+      return;
+    }
+
     // Convert a terminal cell into content-row space: the selection is anchored
     // to the transcript text, not to screen rows, so it follows the text when
     // the transcript scrolls and can be copied even when scrolled off screen.
@@ -1499,7 +1723,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // The composer (the draft input) is always pinned to the bottom — even
     // while a menu is open; the menu renders above it, never in its place.
     const composerMaxH = Math.max(3, Math.min(12, rows - 9));
-    const composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH, topRight: ctrlCPressed ? "press ctrl c again to exit actor0" : composerHint }).rows;
+    const composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH, topRight: ctrlCPressed ? "press ctrl c again to exit actor0" : composerHint, topRightColor: ctrlCPressed ? color.warning : composerHintColor }).rows;
     const blockedRow = conversation.blocked ? [[{ text: `the agent needs you: ${conversation.blocked.message} — reply to continue, or /clear`, color: color.warning }]] : [];
 
     // Human-readable header: the provider label, the model, branch, context, session.
@@ -1527,10 +1751,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         return pad > 0 ? [{ text: " ".repeat(pad), dim: true }, ...row] : row;
       });
     const menuContent = menuOpen ? centerRows(menuContentRows(menuHeight)) : [];
+    const slashHitMap: number[] = [];
     const slashPopup =
       !menuOpen && slashEngaged && slashMatches.length > 0
-        ? centerRows(slashPopupRows(slashMatches.map((c) => ({ name: c.name, description: c.description, alias: c.aliases[0] })), slashSel, slashQuery, Math.min(MENU_WIDTH, innerW - 2), menuHeight))
+        ? centerRows(slashPopupRows(slashMatches.map((c) => ({ name: c.name, description: c.description, alias: c.aliases[0] })), slashSel, slashQuery, Math.min(MENU_WIDTH, innerW - 2), menuHeight, slashHitMap))
         : [];
+    slashHitMapRef.current = slashHitMap;
     const menuSlot = menuContent.length > 0 || slashPopup.length > 0;
 
     // The chrome (top, blocked notice, menu slot, composer) may leave no
@@ -1557,6 +1783,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     transcriptWindowStartRef.current = transcriptWindowStart;
     transcriptStartRowRef.current = top.length + blockedRow.length;
     transcriptVisibleBudgetRef.current = transcriptV;
+    menuContentStartRowRef.current = top.length + blockedRow.length + 1;
 
     const inner: Seg[][] = menuSlot
       ? [...top, ...blockedRow, blankRow, ...menuContent, ...slashPopup, ...composer]
@@ -1604,23 +1831,29 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   function menuContentRows(height: number): Seg[][] {
     const innerW = frameInnerWidth(screen.size.cols);
+    const hitMap: number[] = [];
+    let rows: Seg[][] = [];
     switch (mode) {
       case "menu": {
         const providers = filteredProviders.map((p) => ({ name: p.name, label: providerLabel(p), active: p.name === config.activeProvider }));
         // The cursor may sit on the trailing "Add provider" entry.
         const w = Math.min(MENU_WIDTH, innerW - 2);
-        return panel(providerPanelRows(providers, Math.min(menuIndex, providers.length), providerQuery, w, expandedProvider, providerActionCursor, height), innerW, w);
+        rows = panel(providerPanelRows(providers, Math.min(menuIndex, providers.length), providerQuery, w, expandedProvider, providerActionCursor, height, hitMap), innerW, w, hitMap, hitMap);
+        break;
       }
       case "manage": {
         const p = namedProviders(config).find((x) => x.name === manageProvider);
-        if (!p) return [];
+        if (!p) { rows = []; break; }
         const auth = p.auth === "oauth" ? `Subscription${p.oauth?.plan ? ` · ${p.oauth.plan}` : ""}` : "API key";
-        return panel(managePanelRows({ name: p.name, label: providerLabel(p), model: p.model ?? "", endpoint: p.baseUrl, auth }, manageConfirm ? 3 : manageCursor, Math.min(MENU_WIDTH, innerW - 2), height), innerW, Math.min(MENU_WIDTH, innerW - 2));
+        rows = panel(managePanelRows({ name: p.name, label: providerLabel(p), model: p.model ?? "", endpoint: p.baseUrl, auth }, manageConfirm ? 3 : manageCursor, Math.min(MENU_WIDTH, innerW - 2), height, hitMap), innerW, Math.min(MENU_WIDTH, innerW - 2), hitMap, hitMap);
+        break;
       }
       case "model":
-        return modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery, Math.min(MENU_WIDTH, innerW - 2), activeModel, active?.name);
+        rows = modelPickerRows(filteredModels, Math.min(modelCursor, Math.max(0, filteredModels.length - 1)), height, modelQuery, Math.min(MENU_WIDTH, innerW - 2), activeModel, active?.name, hitMap);
+        break;
       case "thinking":
-        return thinkingPickerRows(filteredThinking.map((o) => ({ label: o.label, effort: o.effort })), Math.min(thinkingCursor, Math.max(0, filteredThinking.length - 1)), thinkingQuery, Math.min(MENU_WIDTH, innerW - 2), height);
+        rows = thinkingPickerRows(filteredThinking.map((o) => ({ label: o.label, effort: o.effort })), Math.min(thinkingCursor, Math.max(0, filteredThinking.length - 1)), thinkingQuery, Math.min(MENU_WIDTH, innerW - 2), height, hitMap);
+        break;
       case "usage": {
         const entries = readUsage();
         const period = PERIODS[usageIndex]!;
@@ -1628,33 +1861,38 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         const bucket = usageSince(entries, since);
         const all = usageSince(entries, 0);
         const byModel = usageByModel(entries, since);
-        return usagePanelRows(`[${period.label}]`, bucket.tokens, bucket.turns, all.tokens, all.turns, byModel, Math.min(MENU_WIDTH, innerW - 2), height);
+        rows = usagePanelRows(`[${period.label}]`, bucket.tokens, bucket.turns, all.tokens, all.turns, byModel, Math.min(MENU_WIDTH, innerW - 2), height, hitMap);
+        break;
       }
       case "session":
-        return sessionPickerRows(
+        rows = sessionPickerRows(
           filteredSessions.map((s) => ({ id: s.id, updatedAt: s.updatedAt, messageCount: s.messages.length, active: s.id === sessionIdRef.current })),
           Math.min(sessionCursor, Math.max(0, filteredSessions.length - 1)),
           height,
           sessionQuery,
           Math.min(MENU_WIDTH, innerW - 2),
         );
+        break;
       case "add":
-        return addRows(height);
+        rows = addRows(height, hitMap);
+        break;
       default:
-        return [];
+        rows = [];
     }
+    menuHitMapRef.current = hitMap;
+    return rows;
   }
 
-  function addRows(height: number): Seg[][] {
-    if (add.kind === "kind") return addKindRows(onboarding, filteredKinds.map((k) => ({ id: k.id, label: k.label, auth: k.auth })), Math.min(addKindCursor, Math.max(0, filteredKinds.length - 1)), addKindQuery, height);
-    if (add.kind === "url") return addUrlRows(add.provider.label, addUrl, height).rows;
-    if (add.kind === "key") return addKeyRows(add.provider.label, addKey, height).rows;
-    if (add.kind === "working") return addWorkingRows(add.label, add.note, height);
-    if (add.kind === "error") return addErrorRows(add.message, height);
+  function addRows(height: number, hitMapOut?: number[]): Seg[][] {
+    if (add.kind === "kind") return addKindRows(onboarding, filteredKinds.map((k) => ({ id: k.id, label: k.label, auth: k.auth })), Math.min(addKindCursor, Math.max(0, filteredKinds.length - 1)), addKindQuery, height, hitMapOut);
+    if (add.kind === "url") return addUrlRows(add.provider.label, addUrl, height, hitMapOut).rows;
+    if (add.kind === "key") return addKeyRows(add.provider.label, addKey, height, hitMapOut).rows;
+    if (add.kind === "working") return addWorkingRows(add.label, add.note, height, hitMapOut);
+    if (add.kind === "error") return addErrorRows(add.message, height, hitMapOut);
     if (add.kind === "models") {
-      if (add.models.length === 0) return addManualRows(add.label, addManual, height).rows;
+      if (add.models.length === 0) return addManualRows(add.label, addManual, height, hitMapOut).rows;
       const models = add.query ? add.models.filter((m) => m.toLowerCase().includes(add.query.toLowerCase())) : add.models;
-      return addModelsRows(add.label, models, Math.min(add.cursor, Math.max(0, models.length - 1)), add.chosen, height, add.query);
+      return addModelsRows(add.label, models, Math.min(add.cursor, Math.max(0, models.length - 1)), add.chosen, height, add.query, hitMapOut);
     }
     return [];
   }
