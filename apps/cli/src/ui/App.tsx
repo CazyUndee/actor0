@@ -105,6 +105,8 @@ export type AppProps = {
   cwd: string;
   config: CliConfig;
   resumed?: { id: string; createdAt: string; updatedAt: string; messages: ChatMessage[] };
+  /** Open the saved-session picker on start (the --resume flag). */
+  openSessionPicker?: boolean;
   version?: string;
   transport?: ModelClient;
   /** Our renderer. */
@@ -143,7 +145,7 @@ function wrap(current: number, count: number, delta: number): number {
   return (((current + delta) % count) + count) % count;
 }
 
-export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", transport, screen, stdin, onExit }: AppProps) {
+export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", transport, screen, stdin, onExit, openSessionPicker }: AppProps) {
   const [config, setConfig] = useState<CliConfig>(initialConfig);
   const [conversation, setConversation] = useState<ConversationState>(() => initialConversation());
   // The draft is edited on every keystroke, and several keystrokes can land
@@ -171,7 +173,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
-  const [mode, setMode] = useState<Mode>("chat");
+  // --resume boots straight into the session picker instead of a chat screen;
+  // the saved sessions are loaded once here, not per render.
+  const [mode, setMode] = useState<Mode>(openSessionPicker ? "session" : "chat");
   const [onboarding, setOnboarding] = useState(false);
   const [contextTokens, setContextTokens] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -217,7 +221,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // The session picker: a snapshot of the saved sessions, the cursor, and the
   // search filter. `filteredSessions` is derived from the query, exactly like
   // the model and provider pickers.
-  const [sessionList, setSessionList] = useState<StoredSession[]>([]);
+  const [sessionList, setSessionList] = useState<StoredSession[]>(() => openSessionPicker ? listSessions() : []);
   const [sessionCursor, setSessionCursor] = useState(0);
   const [sessionQuery, setSessionQuery] = useState("");
   const [add, setAdd] = useState<AddPhase>({ kind: "kind" });
@@ -386,7 +390,8 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   };
 
   // Open the session picker: snapshot the saved sessions and enter the mode.
-  const openSessionPicker = (): void => {
+  // Named `enter…` because the `openSessionPicker` prop is the --resume flag.
+  const enterSessionPicker = (): void => {
     const sessions = listSessions();
     if (sessions.length === 0) {
       notice("info", "no saved sessions yet");
@@ -472,7 +477,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           switchToSession(target);
           return;
         }
-        openSessionPicker();
+        enterSessionPicker();
         return;
       case "quit":
         onExit();

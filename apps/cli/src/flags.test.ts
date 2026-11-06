@@ -9,7 +9,7 @@ import { FlagError, nearestFlag, parseFlags, resolveCwd } from "./flags.js";
  */
 
 test("an empty command line is a plain run", () => {
-  assert.deepEqual(parseFlags([]), { new: false, help: false, version: false, sessions: false });
+  assert.deepEqual(parseFlags([]), { new: false, help: false, version: false, sessions: false, resume: false });
 });
 
 test("the boolean flags set what they say", () => {
@@ -19,6 +19,7 @@ test("the boolean flags set what they say", () => {
   assert.equal(parseFlags(["--version"]).version, true);
   assert.equal(parseFlags(["-v"]).version, true);
   assert.equal(parseFlags(["--sessions"]).sessions, true);
+  assert.equal(parseFlags(["--resume"]).resume, true);
 });
 
 test("flags that take a value take the next argument", () => {
@@ -82,6 +83,10 @@ test("contradictory ways of picking a session are rejected", () => {
   // Whichever won would have been decided by code the user cannot see.
   assert.throws(() => parseFlags(["--new", "--session", "abc"]), /contradict/);
   assert.throws(() => parseFlags(["--new", "-p", "hi"]), /contradict/);
+  // --resume picks from the saved list, so it contradicts every other pick.
+  assert.throws(() => parseFlags(["--resume", "--session", "abc"]), /contradict/);
+  assert.throws(() => parseFlags(["--resume", "--new"]), /contradict/);
+  assert.throws(() => parseFlags(["--resume", "-p", "hi"]), /contradict/);
 });
 
 test("the failure names the program and the fix", () => {

@@ -20,6 +20,7 @@ export type Flags = {
   help: boolean;
   version: boolean;
   sessions: boolean;
+  resume: boolean;
   session?: string;
   cwd?: string;
   print?: string;
@@ -49,7 +50,7 @@ const TAKES_VALUE: Record<string, string> = {
  * and the user would have no way to tell.
  */
 export function parseFlags(argv: string[]): Flags {
-  const flags: Flags = { new: false, help: false, version: false, sessions: false };
+  const flags: Flags = { new: false, help: false, version: false, sessions: false, resume: false };
 
   // Everything after `--` is the prompt, verbatim. Without this there is no way
   // to send a prompt that starts with a dash, which is a quiet failure of its
@@ -93,13 +94,16 @@ export function parseFlags(argv: string[]): Flags {
       case "--sessions":
         flags.sessions = true;
         break;
+      case "--resume":
+        flags.resume = true;
+        break;
       case "--":
         // Unreachable: the separator is consumed before this loop.
         break;
       default:
         // A near-miss on a real flag gets a suggestion; a stray word gets
         // told what to do with it. Both used to vanish.
-        throw new FlagError(unknownMessage(arg, [...Object.keys(TAKES_VALUE), "--new", "--help", "-h", "--version", "-v", "--sessions"]));
+        throw new FlagError(unknownMessage(arg, [...Object.keys(TAKES_VALUE), "--new", "--help", "-h", "--version", "-v", "--sessions", "--resume"]));
     }
   }
 
@@ -110,6 +114,17 @@ export function parseFlags(argv: string[]): Flags {
   }
   if (flags.new && flags.print !== undefined) {
     throw new FlagError("--new and --print contradict each other. Pick one.");
+  }
+  // --resume picks a conversation from the saved list, so it contradicts every
+  // other way of picking one — and the one-shot print path, which has no TUI.
+  if (flags.resume && flags.session !== undefined) {
+    throw new FlagError("--resume and --session contradict each other. Pick one.");
+  }
+  if (flags.resume && flags.new) {
+    throw new FlagError("--resume and --new contradict each other. Pick one.");
+  }
+  if (flags.resume && flags.print !== undefined) {
+    throw new FlagError("--resume and --print contradict each other. Pick one.");
   }
 
   return flags;

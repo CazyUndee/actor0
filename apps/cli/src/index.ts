@@ -20,6 +20,7 @@ const HELP = `actor0 — a terminal client for the Actor0 harness
 Usage
   actor0                 start a conversation, resuming the last session
   actor0 --new           start a fresh session
+  actor0 --resume        open the picker of saved sessions and start one of them
   actor0 --session <id>  resume a specific session
   actor0 --sessions      list saved sessions
   actor0 --cwd <path>    run with tools rooted at <path>
@@ -95,7 +96,10 @@ async function main(): Promise<void> {
   }
 
   const { latestSession, loadSession } = await import("./session.js");
-  const restored = flags.new
+  // --resume preloads nothing: the picker is where the choice happens, and
+  // silently resuming the most recent session first would have made the list
+  // feel like a formality. Neither --new nor --session preloads either.
+  const restored = flags.new || flags.resume
     ? undefined
     : flags.session
       ? loadSession(flags.session)
@@ -142,6 +146,7 @@ async function main(): Promise<void> {
           },
         }
       : {}),
+    ...(flags.resume ? { openSessionPicker: true } : {}),
   });
   await waitUntilExit();
 }

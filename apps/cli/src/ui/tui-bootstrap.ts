@@ -58,6 +58,8 @@ export interface BootOptions {
   version: string;
   stdin: NodeJS.ReadStream;
   resumed?: { id: string; createdAt: string; updatedAt: string; messages: ChatMessage[] };
+  /** Open the saved-session picker on start instead of a chat screen. */
+  openSessionPicker?: boolean;
 }
 
 /** Start the TUI and return a function that resolves when it exits. */
@@ -138,6 +140,7 @@ export async function bootTui(opts: BootOptions): Promise<() => Promise<void>> {
       stdin: opts.stdin,
       onExit: exit,
       ...(opts.resumed ? { resumed: opts.resumed } : {}),
+      ...(opts.openSessionPicker ? { openSessionPicker: true } : {}),
     }),
     // Ctrl+C is handled in the app: it cancels a running turn first and only
     // exits when there is nothing to cancel.

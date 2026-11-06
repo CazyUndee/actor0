@@ -78,7 +78,7 @@ function manyModels(): CliConfig {
   });
 }
 
-async function mount(opts: { transport?: ModelClient; onExit?: () => void; cfg?: CliConfig } = {}): Promise<{ screen: FakeScreen; stdin: PassThrough; unmount: () => void; dir: string }> {
+async function mount(opts: { transport?: ModelClient; onExit?: () => void; cfg?: CliConfig; openSessionPicker?: boolean } = {}): Promise<{ screen: FakeScreen; stdin: PassThrough; unmount: () => void; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), "actor0-tui-"));
   const prev = process.env.ACTOR0_CONFIG_DIR;
   const prevData = process.env.ACTOR0_DATA_DIR;
@@ -101,6 +101,7 @@ async function mount(opts: { transport?: ModelClient; onExit?: () => void; cfg?:
       stdin: stdin as unknown as NodeJS.ReadStream,
       onExit: opts.onExit ?? (() => {}),
       ...(opts.transport ? { transport: opts.transport } : {}),
+      ...(opts.openSessionPicker ? { openSessionPicker: true } : {}),
     }),
     { stdin: sink as never, stdout: sink as never, exitOnCtrlC: false, patchConsole: false },
   );
@@ -611,6 +612,18 @@ test("/session lists saved sessions and enter switches to one, wiping the contex
     stdin.write("\r");
     await until(screen, (j) => j.includes("switched to session"), 5000);
     assert.ok(screen.last.join("\n").includes("switched to session"), "a notice confirms the switch");
+  } finally {
+    unmount();
+  }
+});
+
+test("--resume boots straight into the session picker", async () => {
+  const { screen, unmount } = await mount({ openSessionPicker: true });
+  try {
+    // No sessions in the isolated data dir yet, so the picker opens on its
+    // empty state rather than on a chat screen.
+    await until(screen, (j) => j.includes("sessions"), 5000);
+    assert.ok(screen.last.join("\n").includes("no saved sessions"), "the picker is open, in its empty state");
   } finally {
     unmount();
   }
