@@ -1,7 +1,6 @@
 {
   "name": "@actor0/cli",
   "version": "0.5.2",
-  "private": true,
   "type": "module",
   "bin": {
     "actor0": "./dist/cli.mjs"
@@ -10,8 +9,15 @@
     "dist"
   ],
   "main": "./dist/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json --tsBuildInfoFile dist/.tsbuildinfo && node scripts/bundle.mjs",
+    "prepack": "node -e \"require('fs').rmSync('dist/.tsbuildinfo',{force:true})\"",
     "typecheck": "npm --workspace @actor0/harness run build && npm --workspace @actor0/providers run build && tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts",
     "gen:theme": "node scripts/generate-theme.mjs",

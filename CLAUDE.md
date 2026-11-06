@@ -173,8 +173,11 @@ Full mechanic in AGENTS.md ("Versioning"); the short version:
   npm trusted publisher is bound to `release.yml` / job `publish-libraries` /
   `workflow_dispatch`); there is no long-lived registry key in the secrets.
   npm is deprecating direct publish via 2FA-bypass granular tokens (~Jan 2027),
-  so do not reintroduce one. Re-drive a publish with
-  `gh workflow run release.yml -f tag=vX.Y.Z`.
+  so do not reintroduce one. The binding is per package: each published
+  package page (`@actor0/harness`, `@actor0/providers`, `@actor0/cli`)
+  carries its own trusted-publisher entry (Settings → Trusted publishing,
+  web-UI only — a missing one shows up as `ENEEDAUTH` on every step of the
+  job). Re-drive a publish with `gh workflow run release.yml -f tag=vX.Y.Z`.
 
 ## UI preview
 

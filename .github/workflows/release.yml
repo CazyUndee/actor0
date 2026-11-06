@@ -37,6 +37,8 @@ jobs:
         run: npm publish --workspace @actor0/harness
       - name: Publish providers
         run: npm publish --workspace @actor0/providers
+      - name: Publish CLI
+        run: npm publish --workspace @actor0/cli
 
   build-cli:
     runs-on: ubuntu-latest

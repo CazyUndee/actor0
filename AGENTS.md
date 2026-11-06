@@ -596,3 +596,15 @@ the credential class that leaks. Re-drive a publish with
 trigger now drives only the asset-attach job, because a published release
 cannot be re-run and that is precisely when a publish most needs a
 re-drive.
+
+The binding lives on the package side: the registry verifies the claim
+per package, so every published package page (npmjs.com → Packages →
+Settings → Trusted publishing) carries its own trusted-publisher entry for
+this workflow — `@actor0/harness`, `@actor0/providers` and `@actor0/cli`,
+and a new one the moment a new package is added to the publish job. Adding
+a binding is web-UI only; there is no registry API for it, so a publish
+that starts failing with `ENEEDAUTH` at every step has a missing binding,
+not a broken workflow. `@actor0/cli` is published through the same job
+(`npm i -g @actor0/cli` gives the `actor0` binary); its bundle inlines
+every dependency, so the tarball is self-contained and the `engines`
+field is what tells the user which Node it needs.
