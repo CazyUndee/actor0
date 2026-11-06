@@ -16,8 +16,12 @@ permissions:
 
 jobs:
   publish-libraries:
+    # Trusted publishing (OIDC): npm verifies the GitHub App's identity claim,
+    # so no token secret is involved. Dispatch-only: npm's trusted publisher
+    # binds one event, and release: published cannot be re-driven, which is
+    # exactly when a publish needs a re-drive.
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.tag }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,12 +35,8 @@ jobs:
       - run: npm run build
       - name: Publish harness
         run: npm publish --workspace @actor0/harness
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.ACTOR0_NPM_TOKEN }}
       - name: Publish providers
         run: npm publish --workspace @actor0/providers
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.ACTOR0_NPM_TOKEN }}
 
   build-cli:
     runs-on: ubuntu-latest

@@ -581,3 +581,18 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
   infra commits and, for each user-facing one, what it changes and why; a
   `[fix]` release still names what was broken and what now works. Write it
   for the next person auditing the version, not for the changelog skimmer.
+
+## Publishing to npm
+
+OIDC trusted publishing only, no token. `publish-libraries` in `release.yml`
+is bound to an npm trusted publisher (GitHub App `GitHub Actions`, workflow
+`release.yml`, job `publish-libraries`, event `workflow_dispatch`) and
+authenticates through `id-token: write` — there is no registry key in the
+repo secrets, and there must never be one: npm is deprecating direct
+publish via 2FA-bypass granular tokens (effective ~Jan 2027) and the token
+surface is shrinking, not growing; a long-lived key in a secret is exactly
+the credential class that leaks. Re-drive a publish with
+`gh workflow run release.yml -f tag=vX.Y.Z`. The `release: published`
+trigger now drives only the asset-attach job, because a published release
+cannot be re-run and that is precisely when a publish most needs a
+re-drive.

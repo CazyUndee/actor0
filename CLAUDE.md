@@ -168,6 +168,13 @@ Full mechanic in AGENTS.md ("Versioning"); the short version:
   gap to backfill before moving on. Detailed = the version's commits listed
   with what each user-facing change does and why; a `[fix]` release still
   names what was broken.
+- **Publishing is OIDC trusted publishing, not a token.** `release.yml`'s
+  `publish-libraries` authenticates through GitHub Actions' `id-token` (the
+  npm trusted publisher is bound to `release.yml` / job `publish-libraries` /
+  `workflow_dispatch`); there is no long-lived registry key in the secrets.
+  npm is deprecating direct publish via 2FA-bypass granular tokens (~Jan 2027),
+  so do not reintroduce one. Re-drive a publish with
+  `gh workflow run release.yml -f tag=vX.Y.Z`.
 
 ## UI preview
 
