@@ -41,6 +41,43 @@ Two disciplines keep "commit constantly" from decaying into "commit garbage":
 
 Small, frequent, each-one-builds commits. That is the whole policy.
 
+## Push once it is verified. Every time. No exceptions.
+
+Committing is not the end of the loop. A commit that only exists locally is
+one bad afternoon away from being lost (see the opening of this file), and a
+green local tree that never reaches `origin/main` is invisible to CI, to the
+next agent, and to anyone else.
+
+So: **push the moment the change is verified to be working.** Not at the end of
+the session, not "once everything is done," not after a batch of commits. Once
+the applicable checks from Verify have passed on the commit you intend to ship,
+push it. A half-verified commit sitting in the working tree is not progress;
+it is a liability.
+
+Discipline:
+
+- **Push after every verified commit, or at most after a short run of them.**
+  Do not accumulate a pile of local commits waiting for "the right moment."
+  The right moment is when the checks are green.
+- **Run the checks that apply before pushing.** A push is a publication: the
+  same six-check bar from Verify (boundaries, theme, typecheck, tests, lint,
+  build) applies, in that order, to whatever you are about to send. Pushing a
+  red tree is pushing a trap.
+- **A push is not done until its CI run is green.** After pushing, check the
+  run (`gh run list`, then `gh run view <id>` / `gh run view <id> --log-failed`)
+  and read any failure before touching more code. CI checks out a clean tree, so
+  a run that is red locally-green is an environmental assumption you missed,
+  not a mystery.
+- **Never force-push a shared branch, and never push over someone else's work.**
+  `main` is shared. If the push is rejected, pull/rebase and re-verify before
+  pushing again; do not `--force`.
+- **Stage and commit only your own paths** (see above); the same rule applies
+  to what you push. Do not sweep in another agent's dirty files to make a
+  push "clean."
+
+The only safe place for verified work to live is on `origin`. Local commits are
+a staging area, not storage.
+
 ## Layout
 
 - `packages/harness/src` — the runtime. `harness.ts` owns the turn loop,
