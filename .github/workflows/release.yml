@@ -29,15 +29,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          registry-url: https://registry.npmjs.org
           cache: npm
+      - run: sed -i '/_authToken/d' ~/.npmrc 2>/dev/null || true
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run build
       - name: Publish harness
-        run: npm publish --workspace @actor0/harness
+        run: npm publish --workspace @actor0/harness --provenance
       - name: Publish providers
-        run: npm publish --workspace @actor0/providers
+        run: npm publish --workspace @actor0/providers --provenance
       - name: Publish CLI
-        run: npm publish --workspace @actor0/cli
+        run: npm publish --workspace @actor0/cli --provenance
 
   build-cli:
     runs-on: ubuntu-latest
