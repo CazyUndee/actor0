@@ -64,10 +64,12 @@ Discipline:
   build) applies, in that order, to whatever you are about to send. Pushing a
   red tree is pushing a trap.
 - **A push is not done until its CI run is green.** After pushing, check the
-  run (`gh run list`, then `gh run view <id>` / `gh run view <id> --log-failed`)
-  and read any failure before touching more code. CI checks out a clean tree, so
-  a run that is red locally-green is an environmental assumption you missed,
-  not a mystery.
+  run (`gh run list`, then `gh run view <id>` / `gh run view <id> --log-failed`).
+  If it is red, **fix the cause before doing anything else** — do not leave a
+  red CI run behind and do not move on to the next task. Read the failed step
+  first; the failure is usually environmental (clean-checkout assumptions), not
+  in the diff, and the fix is to make the clean checkout reproduce locally.
+  A red run you walked away from is a trap for the next person and for you.
 - **Never force-push a shared branch, and never push over someone else's work.**
   `main` is shared. If the push is rejected, pull/rebase and re-verify before
   pushing again; do not `--force`.

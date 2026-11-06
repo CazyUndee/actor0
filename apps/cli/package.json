@@ -1,6 +1,6 @@
 {
   "name": "@actor0/cli",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
   "bin": {
@@ -20,8 +20,8 @@
     "check:tui": "tsx scripts/preview-tui.tsx"
   },
   "dependencies": {
-    "@actor0/harness": "^0.2.0",
-    "@actor0/providers": "^0.2.0",
+    "@actor0/harness": "*",
+    "@actor0/providers": "*",
     "cronixui": "^1.1.5",
     "ink": "^6",
     "react": "^19"
