@@ -1,6 +1,6 @@
 {
   "name": "@actor0/cli",
-  "version": "0.5.2",
+  "version": "0.5.5",
   "type": "module",
   "bin": {
     "actor0": "./dist/cli.mjs"
