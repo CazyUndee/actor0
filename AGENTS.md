@@ -546,13 +546,21 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
 - **How much to bump.** Versions are `MAJOR.MINOR.PATCH`. Bump exactly one
   component per commit, never two, and reset the lower ones to 0:
     - `PATCH` (0.2.0 -> 0.2.1): any `[fix]` or `[chore]` that touches runtime
-      behaviour. The default for a normal commit.
-    - `MINOR` (0.2.1 -> 0.3.0): any `[feat]` or `[upgrade]`. Resets patch to 0.
+      behaviour, and — by default — most `[feat]` too. A UI refinement, a
+      small feature, a hover/interaction nicety, or a hardening all bump
+      patch. This is the default for a normal commit.
+    - `MINOR` (0.2.0 -> 0.3.0): a new **top-level capability** — a new tool,
+      a new provider transport, or an entirely new subsystem the user could
+      point to and name. Most `[feat]`/`[upgrade]` commits are *not* this;
+      a menu, picker, renderer, or mouse change is a patch even when tagged
+      `[feat]`. Resets patch to 0.
     - `MAJOR` (0.3.0 -> 1.0.0): only when the user explicitly says to bump
       major. Never infer a major bump from the code alone. Resets minor and
       patch to 0. Needs a migration note in the commit body.
-  When in doubt between patch and minor, pick minor  a missed feature bump is
-  worse than an over-bump. When in doubt between minor and major, pick minor 
+  When in doubt between patch and minor, pick **patch** — the bar for minor
+  is a genuinely new capability, not any user-facing change, and a string of
+  over-bumped minors (0.2.0 -> 0.5.0) is version churn that buries the
+  versions that mattered. When in doubt between minor and major, pick minor —
   major is a promise you cannot easily take back.
 - **Keep the three in sync.** The CLI reads its own version from its
   `package.json` at runtime, so a stale package.json prints a stale `--version`;
@@ -561,3 +569,15 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
 - **No silent versions.** If a commit touches behaviour, the version field in
   the same commit's diff is the evidence it was considered. A review that sees
   a behaviour change with no version change should flag it.
+- **Tag and release every version bump.** A version bump is not done when the
+  `package.json` changes; it is done when there is a git tag `vX.Y.Z` on that
+  commit *and* a GitHub release at that tag carrying detailed release notes.
+  A version that landed without its tag/release is a gap to backfill before
+  doing anything else. Release notes are written **for the GitHub release**
+  (the rendered release body), not committed into the repo as a `vX.Y.Z.md`
+  file — the release is the source of truth, and the in-repo `v0.2.0.md` is a
+  historical artefact, not the pattern to copy.
+  Detailed means: for the version's range of commits, list the feature / fix /
+  infra commits and, for each user-facing one, what it changes and why; a
+  `[fix]` release still names what was broken and what now works. Write it
+  for the next person auditing the version, not for the changelog skimmer.

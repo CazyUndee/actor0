@@ -150,6 +150,25 @@ A push is not done until its CI run is green. When a run is red, read the
 failed step before touching code — the failure is usually environmental
 (clean-checkout assumptions), not in the diff.
 
+## Versioning and releases
+
+Full mechanic in AGENTS.md ("Versioning"); the short version:
+
+- Versions live in three `package.json` files (harness, providers, cli) plus
+  the hardcoded fallbacks in `apps/cli/src/mcp.ts` and
+  `apps/cli/src/ui/parts.test.ts`; all move together.
+- Bump on every behavioural change. **Most `[feat]` are a patch**, not a
+  minor: a UI/picker/renderer/mouse change or a hardening is a patch. A minor
+  is reserved for a genuinely new top-level capability — a new tool, a new
+  provider transport, a new subsystem. Major only on explicit request.
+  A string of over-bumped minors is version churn, not progress.
+- **Every version bump gets a git tag `vX.Y.Z` and a GitHub release at that
+  tag, with detailed release notes.** The notes live on the GitHub release,
+  not as an in-repo `vX.Y.Z.md` file. A version that has no tag/release is a
+  gap to backfill before moving on. Detailed = the version's commits listed
+  with what each user-facing change does and why; a `[fix]` release still
+  names what was broken.
+
 ## UI preview
 
 `npm run check:tui` renders a frame to a file for eyeballing menu/picker
