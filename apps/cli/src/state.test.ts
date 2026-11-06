@@ -45,6 +45,9 @@ test("aliases resolve to their command", () => {
   assert.deepEqual(parseSlash("/exit"), { name: "quit" });
   assert.deepEqual(parseSlash("/m gpt-4o"), { name: "model", model: "gpt-4o" }, "an alias takes an argument too");
   assert.equal(resolveCommand("endpoint"), "provider");
+  assert.deepEqual(parseSlash("/session"), { name: "session" }, "/session with no argument opens the picker");
+  assert.deepEqual(parseSlash("/session abc-123"), { name: "session", id: "abc-123" }, "/session <id> jumps straight to that session");
+  assert.deepEqual(parseSlash("/r abc"), { name: "session", id: "abc" }, "the resume alias takes an id too");
 });
 
 test("an unknown command is reported rather than guessed at", () => {
@@ -54,8 +57,9 @@ test("an unknown command is reported rather than guessed at", () => {
 test("the / popup filters commands by the typed prefix", () => {
   assert.ok(matchSlashCommands("").length >= 5, "an empty query lists every command");
   assert.deepEqual(matchSlashCommands("pro").map((c) => c.name), ["provider"]);
-  assert.deepEqual(matchSlashCommands("s").map((c) => c.name), ["setup"]);
+  assert.deepEqual(matchSlashCommands("s").map((c) => c.name), ["setup", "session"]);
   assert.deepEqual(matchSlashCommands("mo").map((c) => c.name), ["model"]);
+  assert.deepEqual(matchSlashCommands("res").map((c) => c.name), ["session"], "the resume alias filters it too");
   assert.deepEqual(matchSlashCommands("zzz"), [], "no match is an empty list, not everything");
   assert.ok(matchSlashCommands("").every((c) => c.description.length > 0), "each carries a description");
 });

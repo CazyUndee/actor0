@@ -18,6 +18,7 @@ export type SlashCommand =
   | { name: "setup" }
   | { name: "usage" }
   | { name: "thinking"; effort?: string }
+  | { name: "session"; id?: string }
   | { name: "quit" }
   | { name: "unknown"; input: string };
 
@@ -42,6 +43,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "model", aliases: ["m"], description: "switch to a model" },
   { name: "thinking", aliases: ["t"], description: "reasoning effort" },
   { name: "clear", aliases: ["c"], description: "start a new conversation" },
+  { name: "session", aliases: ["r", "resume"], description: "switch to a saved session" },
   { name: "usage", aliases: ["u"], description: "tokens and quota" },
   { name: "help", aliases: ["h", "?"], description: "show commands" },
   { name: "quit", aliases: ["q", "exit"], description: "exit" },
@@ -91,6 +93,9 @@ export function parseSlash(input: string): SlashCommand | undefined {
       return { name: "help" };
     case "clear":
       return { name: "clear" };
+    case "session":
+      // No argument opens the picker; an argument jumps straight to that id.
+      return argument ? { name: "session", id: argument } : { name: "session" };
     case "quit":
       return { name: "quit" };
     case "model":

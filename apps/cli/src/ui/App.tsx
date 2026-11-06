@@ -27,7 +27,7 @@ import {
   withUserInput,
   type ConversationState,
 } from "../conversation.js";
-import { newSessionId, saveSession } from "../session.js";
+import { loadSession, listSessions, newSessionId, saveSession, type StoredSession } from "../session.js";
 import { refreshProvider } from "../sign-in.js";
 import { recordAudit, recordUsage, formatTokens, contextBar, readUsage, startOfDay, startOfWeek, startOfMonth, usageSince, usageByModel } from "../usage.js";
 import { gitBranch } from "../git.js";
@@ -58,6 +58,7 @@ import {
   modelPickerRows,
   thinkingPickerRows,
   usagePanelRows,
+  sessionPickerRows,
   slashPopupRows,
   MENU_WIDTH,
   addKindRows,
@@ -114,7 +115,7 @@ export type AppProps = {
   onExit: () => void;
 };
 
-type Mode = "chat" | "menu" | "manage" | "add" | "usage" | "model" | "thinking";
+type Mode = "chat" | "menu" | "manage" | "add" | "usage" | "model" | "thinking" | "session";
 
 type AddPhase =
   | { kind: "kind" }
@@ -213,6 +214,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [thinkingCursor, setThinkingCursor] = useState(0);
   const [thinkingQuery, setThinkingQuery] = useState("");
   const [usageIndex, setUsageIndex] = useState(0);
+  // The session picker: a snapshot of the saved sessions, the cursor, and the
+  // search filter. `filteredSessions` is derived from the query, exactly like
+  // the model and provider pickers.
+  const [sessionList, setSessionList] = useState<StoredSession[]>([]);
+  const [sessionCursor, setSessionCursor] = useState(0);
+  const [sessionQuery, setSessionQuery] = useState("");
   const [add, setAdd] = useState<AddPhase>({ kind: "kind" });
   const [addKindCursor, setAddKindCursor] = useState(0);
   const [addKindQuery, setAddKindQuery] = useState("");
@@ -223,6 +230,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   const messagesRef = useRef<ChatMessage[]>(resumed?.messages ?? []);
   const sessionIdRef = useRef<string>(resumed?.id ?? newSessionId());
+  // When the current session was created, so a switch can persist the
+  // conversation we are leaving with its own createdAt rather than today's.
+  const sessionCreatedAtRef = useRef<string>(resumed?.createdAt ?? new Date().toISOString());
   const abortRef = useRef<AbortController | null>(null);
   const [ctrlCPressed, setCtrlCPressed] = useState(false);
   const ctrlCTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -348,15 +358,63 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (!reasoning && reasoningStartedAtRef.current !== null) reasoningStartedAtRef.current = null;
   }, [conversation.live.reasoning]);
 
+  // Persist the conversation we are leaving, then point the whole app — the
+  // harness's live message list, the session id/createdAt, the rendered
+  // transcript, and the context-window indicator — at the new session.
+  const switchToSession = (target: StoredSession): void => {
+    if (messagesRef.current.length > 0) {
+      try {
+        saveSession({
+          id: sessionIdRef.current,
+          createdAt: sessionCreatedAtRef.current,
+          updatedAt: new Date().toISOString(),
+          model: provider?.model ?? config.model,
+          messages: liveRef.current,
+        });
+      } catch {
+        notice("warn", "could not save the session you are leaving");
+      }
+    }
+    sessionIdRef.current = target.id;
+    sessionCreatedAtRef.current = target.createdAt || new Date().toISOString();
+    messagesRef.current = target.messages;
+    setConversation(initialConversation());
+    setContextTokens(0);
+    setScrollOffset(0);
+    setMode("chat");
+    notice("info", `switched to session ${target.id}`);
+  };
+
+  // Open the session picker: snapshot the saved sessions and enter the mode.
+  const openSessionPicker = (): void => {
+    const sessions = listSessions();
+    if (sessions.length === 0) {
+      notice("info", "no saved sessions yet");
+      return;
+    }
+    setSessionList(sessions);
+    setSessionQuery("");
+    // Start the cursor on the session we are currently on, if it is saved.
+    const current = sessions.findIndex((s) => s.id === sessionIdRef.current);
+    setSessionCursor(current >= 0 ? current : 0);
+    setMode("session");
+  };
+
   const runCommand = (command: SlashCommand): void => {
     switch (command.name) {
       case "help":
         setConversation((state) => withHelp(state));
         return;
       case "clear":
+        // A new conversation is a new session: fresh id, no messages, and the
+        // context-window indicator wiped too — otherwise the header still
+        // shows the previous session's context even though the model gets none.
         sessionIdRef.current = newSessionId();
+        sessionCreatedAtRef.current = new Date().toISOString();
         messagesRef.current = [];
         setConversation(initialConversation());
+        setContextTokens(0);
+        setScrollOffset(0);
         notice("info", "started a new conversation");
         return;
       case "model":
@@ -401,6 +459,20 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         setThinkingCursor(Math.max(0, THINKING.findIndex((o) => o.effort === active?.reasoningEffort)));
         setThinkingQuery("");
         setMode("thinking");
+        return;
+      case "session":
+        // /session <id> jumps straight to that saved session; /session opens
+        // the picker over every saved session.
+        if (command.id) {
+          const target = loadSession(command.id);
+          if (!target) {
+            notice("error", `no saved session with id ${command.id}`);
+            return;
+          }
+          switchToSession(target);
+          return;
+        }
+        openSessionPicker();
         return;
       case "quit":
         onExit();
@@ -531,9 +603,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         try {
           saveSession({
             id: sessionIdRef.current,
-            createdAt: resumed?.createdAt ?? new Date().toISOString(),
+            createdAt: sessionCreatedAtRef.current,
             updatedAt: new Date().toISOString(),
-            model: provider.model,
+            model: provider?.model ?? config.model,
             messages: liveRef.current,
           });
         } catch (error) {
@@ -714,6 +786,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const filteredProviders = providerQuery ? allProviders.filter((p) => `${p.name} ${providerLabel(p)}`.toLowerCase().includes(providerQuery.toLowerCase())) : allProviders;
   const filteredThinking = thinkingQuery ? THINKING.filter((o) => o.label.toLowerCase().includes(thinkingQuery.toLowerCase())) : THINKING;
   const filteredKinds = addKindQuery ? PROVIDER_KINDS.filter((k) => `${k.label} ${k.auth.join(" ")}`.toLowerCase().includes(addKindQuery.toLowerCase())) : PROVIDER_KINDS;
+  const filteredSessions = sessionQuery
+    ? sessionList.filter((s) => `${s.id} ${s.updatedAt}`.toLowerCase().includes(sessionQuery.toLowerCase()))
+    : sessionList;
 
   // ---- input dispatch ----
   // One listener for the life of the stream; it calls the latest dispatch through
@@ -760,6 +835,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       } else if (mode === "thinking") {
         setThinkingQuery((q) => q + event.text);
         setThinkingCursor(0);
+      } else if (mode === "session") {
+        setSessionQuery((q) => q + event.text);
+        setSessionCursor(0);
       }
       // In any other mode a bare character is a command key (a/d/k/j in a
       // menu), not text to type — routing it here is what made the vim keys
@@ -869,6 +947,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode === "menu") return setMenuIndex((i) => wrap(i, filteredProviders.length + 2, dir));
     if (mode === "model") return setModelCursor((c) => wrap(c, Math.max(1, filteredModels.length), dir));
     if (mode === "thinking") return setThinkingCursor((c) => wrap(c, Math.max(1, filteredThinking.length), dir));
+    if (mode === "session") return setSessionCursor((c) => wrap(c, Math.max(1, filteredSessions.length), dir));
   };
 
   const handleKey = (key: string): void => {
@@ -917,6 +996,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode === "model") return modelKey(key);
     if (mode === "thinking") return thinkingKey(key);
     if (mode === "usage") return usageKey(key);
+    if (mode === "session") return sessionKey(key);
     if (mode === "add") return addKeyHandler(key);
   };
 
@@ -1231,6 +1311,31 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (key === "escape") return setMode("chat");
   };
 
+  // The session picker: move through (filtered) saved sessions, type to filter
+  // (the text dispatch routes it into sessionQuery), and enter switches.
+  const sessionKey = (key: string): void => {
+    const count = Math.max(1, filteredSessions.length);
+    if (key === "up" || key === "k") return setSessionCursor((c) => wrap(c, count, -1));
+    if (key === "down" || key === "j") return setSessionCursor((c) => wrap(c, count, 1));
+    if (key === "escape") {
+      if (sessionQuery) {
+        setSessionQuery("");
+        setSessionCursor(0);
+      } else setMode("chat");
+      return;
+    }
+    if (key === "backspace") {
+      setSessionQuery((q) => q.slice(0, -1));
+      setSessionCursor(0);
+      return;
+    }
+    if (key === "return") {
+      const target = filteredSessions[Math.min(sessionCursor, filteredSessions.length - 1)];
+      if (target) switchToSession(target);
+      else setMode("chat");
+    }
+  };
+
   const handleAddText = (text: string): void => {
     if (add.kind === "kind") {
       setAddKindQuery((q) => q + text);
@@ -1520,6 +1625,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         const byModel = usageByModel(entries, since);
         return usagePanelRows(`[${period.label}]`, bucket.tokens, bucket.turns, all.tokens, all.turns, byModel, Math.min(MENU_WIDTH, innerW - 2), height);
       }
+      case "session":
+        return sessionPickerRows(
+          filteredSessions.map((s) => ({ id: s.id, updatedAt: s.updatedAt, messageCount: s.messages.length, active: s.id === sessionIdRef.current })),
+          Math.min(sessionCursor, Math.max(0, filteredSessions.length - 1)),
+          height,
+          sessionQuery,
+          Math.min(MENU_WIDTH, innerW - 2),
+        );
       case "add":
         return addRows(height);
       default:

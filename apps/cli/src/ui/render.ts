@@ -830,6 +830,33 @@ export function modelPickerRows(
   });
 }
 
+/** A saved session for the picker: its id and how recently it was touched. */
+export type SessionItem = { id: string; updatedAt: string; messageCount: number; active?: boolean };
+
+/**
+ * The session picker: a list of saved sessions, most recent first. The active
+ * session is marked; the detail carries when it was last used and its size,
+ * so a long-id list is still scannable. Selecting one switches the whole app
+ * to it (see `switchToSession` in App.tsx).
+ */
+export function sessionPickerRows(sessions: SessionItem[], cursor: number, height?: number, query = "", width?: number): Seg[][] {
+  return menuRows({
+    title: "sessions",
+    query,
+    live: true,
+    items: sessions.map((s) => ({
+      marker: s.active ? "✓ " : "  ",
+      markerTone: s.active ? color.success : undefined,
+      label: s.id,
+      detail: `${s.messageCount} message${s.messageCount === 1 ? "" : "s"} · ${s.updatedAt}`,
+    })),
+    cursor,
+    height,
+    width,
+    emptyText: "no saved sessions",
+  });
+}
+
 export function thinkingPickerRows(options: { label: string; effort?: string }[], cursor: number, query = "", width?: number, height?: number): Seg[][] {
   return pickerRows({
     title: "reasoning effort",

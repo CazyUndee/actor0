@@ -9,6 +9,7 @@ import { render } from "ink";
 import type { ModelClient } from "@actor0/harness";
 import { App } from "./App.js";
 import { addProvider, setActiveProvider, withModel, type CliConfig } from "../config.js";
+import { saveSession, newSessionId } from "../session.js";
 import { detectEnvironment } from "../environment.js";
 import type { Screen } from "./term.js";
 
@@ -566,6 +567,50 @@ test("Ctrl+C twice within 2s exits", async () => {
     stdin.write("\x03");
     await tick(100);
     assert.equal(exited, true, "the second Ctrl+C called onExit");
+  } finally {
+    unmount();
+  }
+});
+
+test("/session with nothing saved says so rather than opening an empty picker", async () => {
+  const { screen, stdin, unmount } = await mount();
+  try {
+    stdin.write("/session");
+    await tick(60);
+    stdin.write("\r");
+    await until(screen, (j) => j.includes("no saved sessions"));
+    assert.ok(screen.last.join("\n").includes("no saved sessions"), "no sessions -> a clear message, not an empty box");
+  } finally {
+    unmount();
+  }
+});
+
+test("/session lists saved sessions and enter switches to one, wiping the context", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
+  try {
+    // Seed a saved session into the isolated data dir mount() pointed the app at.
+    const id = newSessionId();
+    saveSession({
+      id,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      model: "example-model",
+      messages: [{ role: "user", content: "hello" }, { role: "assistant", content: "hi" }],
+    });
+    stdin.write("/session");
+    await tick(60);
+    stdin.write("\r");
+    await until(screen, (j) => j.includes("sessions"), 5000);
+    // The picker is open and lists the seeded session by id.
+    assert.ok(screen.last.join("\n").includes(id), "the saved session is listed");
+    assert.ok(screen.last.join("\n").includes("2 messages"), "its size is shown");
+    // Enter switches to it: the transcript clears and the context indicator is wiped.
+    stdin.write("\r");
+    await until(screen, (j) => j.includes("switched to session"), 5000);
+    assert.ok(screen.last.join("\n").includes("switched to session"), "a notice confirms the switch");
   } finally {
     unmount();
   }
