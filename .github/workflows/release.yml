@@ -3,6 +3,12 @@ name: Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to publish and attach (the release-publish trigger is not re-runnable)"
+        required: true
+        default: "v0.5.2"
 
 permissions:
   contents: write
@@ -11,8 +17,11 @@ permissions:
 jobs:
   publish-libraries:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -23,16 +32,19 @@ jobs:
       - name: Publish harness
         run: npm publish --workspace @actor0/harness
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.ACTOR0_NPM_TOKEN }}
       - name: Publish providers
         run: npm publish --workspace @actor0/providers
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.ACTOR0_NPM_TOKEN }}
 
   build-cli:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -41,7 +53,7 @@ jobs:
       - run: npm run build
       - name: Attach CLI bundle to release
         run: |
-          gh release upload "${{ github.ref_name }}" \
+          gh release upload "${{ inputs.tag || github.ref_name }}" \
             apps/cli/dist/cli.mjs \
             apps/cli/dist/tui.mjs \
             apps/cli/dist/env-worker.mjs \
