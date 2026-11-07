@@ -664,7 +664,6 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
   // counted at the top of the box, not silently dropped.
   if (live.text) {
     const all = renderMarkdown(live.text, cols - 4);
-    if (!live.reasoning.trim()) out.push(blank());
     out.push(...box(all, cols, { border: color.dim }));
   }
   return out;
