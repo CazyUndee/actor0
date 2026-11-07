@@ -30,7 +30,7 @@ export type KeyName =
 export type InputEvent =
   | { type: "text"; text: string }
   | { type: "key"; key: KeyName; ctrl?: boolean }
-  | { type: "mouse"; x: number; y: number; button: "left" | "wheel-up" | "wheel-down"; release: boolean; drag: boolean };
+  | { type: "mouse"; x: number; y: number; button: "left" | "wheel-up" | "wheel-down"; release: boolean; drag: boolean; hover?: boolean };
 
 // eslint-disable-next-line no-control-regex -- matches the ESC that begins every SGR mouse report
 const MOUSE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
@@ -86,7 +86,10 @@ export function parseInput(buffer: string): { events: InputEvent[]; rest: string
       // arrive as `left` and restart the selection at every cell.
       const base = b & 0b1100011;
       const button = base === 64 ? "wheel-up" : base === 65 ? "wheel-down" : "left";
-      events.push({ type: "mouse", x: Number(m[2]), y: Number(m[3]), button, release: m[4] === "m", drag: (b & 32) !== 0 });
+      const hover = (b & 32) !== 0 && (b & 3) === 3;
+      const ev: InputEvent & { type: "mouse" } = { type: "mouse", x: Number(m[2]), y: Number(m[3]), button, release: m[4] === "m", drag: (b & 32) !== 0 };
+      if (hover) ev.hover = true;
+      events.push(ev);
       i += m[0].length;
       continue;
     }
