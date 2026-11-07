@@ -11,7 +11,6 @@
  */
 
 export type SlashCommand =
-  | { name: "help" }
   | { name: "clear" }
   | { name: "model"; model?: string }
   | { name: "mcp" }
@@ -46,7 +45,6 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "clear", aliases: ["c"], description: "start a new conversation" },
   { name: "session", aliases: ["r", "resume"], description: "switch to a saved session" },
   { name: "usage", aliases: ["u"], description: "tokens and quota" },
-  { name: "help", aliases: ["h", "?"], description: "show commands" },
   { name: "quit", aliases: ["q", "exit"], description: "exit" },
 ];
 
@@ -90,8 +88,6 @@ export function parseSlash(input: string): SlashCommand | undefined {
   const argument = rest.join(" ").trim();
 
   switch (name) {
-    case "help":
-      return { name: "help" };
     case "clear":
       return { name: "clear" };
     case "session":
