@@ -543,23 +543,28 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
   sees directly (a crash on a code path, a broken clipboard, a swallowed EPIPE).
   "User-visible" is not the test; "does it change what the code does" is.
   `[chore]` and `[misc]` commits do not bump unless they touch runtime behaviour.
-- **How much to bump.** Versions are `MAJOR.MINOR.PATCH.BUILD`. Bump exactly
-  one component per commit, never two, and reset the lower ones to 0:
-    - `BUILD` (0.2.0.0 -> 0.2.0.1): the default for an incremental change —
-      a bug fix, a composer tweak, a hover/interaction nicety, a hardening, a
-      small feature. This is the component most commits bump.
-    - `PATCH` (0.2.0.1 -> 0.2.1.0): a generally big change — a substantial
+- **How much to bump.** Versions are `MAJOR.MINOR.PATCH`, with a separate
+  build counter tracked alongside as `(build: N)` in release notes and commit
+  bodies. Bump exactly one component per commit, never two, and reset the lower
+  ones to 0:
+    - build counter (0.2.0 build 0 -> 0.2.0 build 1): the default for an
+      incremental change — a bug fix, a composer tweak, a hover/interaction
+      nicety, a hardening, a small feature. This is the component most commits
+      bump. The version string itself does not change.
+    - `PATCH` (0.2.0 -> 0.2.1): a generally big change — a substantial
       rewrite of a subsystem, a new tool, a new provider transport, or a
       batch of related work that is meaningfully different from the previous
       patch release. When builds accumulate enough to be meaningfully
-      different from the last patch release, bump patch (and reset build to 0).
-    - `MINOR` (0.2.1.0 -> 0.3.0.0): an overhaul or refactor — a rework of a
+      different from the last patch release, bump patch (and reset the build
+      counter to 0).
+    - `MINOR` (0.2.1 -> 0.3.0): an overhaul or refactor — a rework of a
       whole subsystem or a new top-level capability the user could point to
-      and name. Resets patch and build to 0.
-    - `MAJOR` (0.3.0.0 -> 1.0.0.0): a massive milestone only — the product is
+      and name. Resets patch and the build counter to 0.
+    - `MAJOR` (0.3.0 -> 1.0.0): a massive milestone only — the product is
       completely stable and generally usable, or usable commercially. Never
       infer a major bump from the code alone; the user must say so. Resets
-      minor, patch, and build to 0. Needs a migration note in the commit body.
+      minor, patch, and the build counter to 0. Needs a migration note in the
+      commit body.
   When in doubt between build and patch, pick **build**. When in doubt between
   patch and minor, pick **patch**. When in doubt between minor and major, pick
   minor — major is a promise you cannot easily take back.
