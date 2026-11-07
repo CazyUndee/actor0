@@ -795,24 +795,6 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
       );
     }
 
-    case "notice": {
-      const tone =
-        entry.tone === "error" ? color.error : entry.tone === "warn" ? color.warning : color.info;
-      const label = entry.tone === "error" ? "error" : entry.tone === "warn" ? "warning" : "·";
-      return (
-        <Box marginTop={1} flexDirection="column">
-          {/* Errors wrap; everything else truncates. The tail of a failure is
-              the part that says what to do next — "check the URL, the key, and
-              the model name" — and truncating the line throws exactly that
-              away, which is how a wall of HTML used to hide the diagnosis. */}
-          <Text wrap={entry.tone === "error" ? "wrap" : "truncate-end"}>
-            <Text color={tone}>{label}</Text>
-            <Text color={color.muted}> {entry.text}</Text>
-          </Text>
-        </Box>
-      );
-    }
-
     case "help": {
       // A bordered panel, not flat text — the command list is a reference the
       // user returns to, and a box reads as a distinct surface rather than

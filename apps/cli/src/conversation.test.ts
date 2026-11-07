@@ -57,9 +57,10 @@ test("reset clears streamed text so a retry does not double-write", () => {
   ]);
   assert.equal(state.live.text, "", "discarded tokens must not survive the rewind");
   assert.equal(state.live.retrying?.attempt, 1);
-  const notice = lastEntry(state.entries);
-  assert.equal(notice.kind, "notice");
-  assert.match(notice.kind === "notice" ? notice.text : "", /retrying \(attempt 1\)/);
+  // A retry is status about the turn, not conversation content: it goes to the
+  // composer's status line, never into the transcript.
+  assert.equal(state.notice?.tone, "warn");
+  assert.match(state.notice?.text ?? "", /retrying \(attempt 1\)/);
 });
 
 test("a fresh attempt streams cleanly after a reset", () => {
@@ -85,6 +86,7 @@ test("repeated resets count attempts", () => {
 test("reset with nothing streamed does not fabricate a notice", () => {
   const state = applyEvent(initialConversation(), { type: "reset", attemptText: "   " });
   assert.equal(state.entries.length, 0);
+  assert.equal(state.notice, undefined);
   assert.equal(state.live.retrying?.attempt, 1);
 });
 
@@ -241,8 +243,9 @@ test("needs_user blocks the turn without discarding the transcript", () => {
 test("an error becomes a notice and clears the live region", () => {
   const state = feed([{ type: "token", delta: "partial" }, { type: "error", message: "HTTP 500", retriable: true }]);
   assert.equal(state.live.text, "");
-  const entry = lastEntry(state.entries);
-  assert.equal(entry.kind === "notice" && entry.tone, "error");
+  assert.equal(state.notice?.tone, "error");
+  assert.equal(state.notice?.text, "HTTP 500");
+  assert.equal(state.entries.length, 0, "a failure is status, not transcript content");
 });
 
 test("a leading plan is recorded as its own entry", () => {

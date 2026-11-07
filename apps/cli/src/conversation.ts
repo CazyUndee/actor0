@@ -18,7 +18,6 @@ export type Entry =
   | { kind: "assistant"; text: string; partial: boolean }
   | { kind: "reasoning"; text: string; durationSeconds?: number }
   | { kind: "tool"; name: string; target: string; status: "ok" | "error"; output: ToolResult<unknown> }
-  | { kind: "notice"; tone: "info" | "warn" | "error"; text: string }
   | { kind: "help" }
   | { kind: "plan"; title: string; plan: string };
 
@@ -42,6 +41,14 @@ export type Blocked = { reason: string; message: string };
 export type ConversationState = {
   entries: Entry[];
   live: Live;
+  /**
+   * The one line of status the composer's top border shows — "started a new
+   * conversation", "retrying", a failure. It is state, not a transcript
+   * entry: these lines are about the interface, not the conversation, and a
+   * transcript full of them buries the answer the user asked for. Replacing
+   * rather than appending is the same decision seen from the other side.
+   */
+  notice?: { tone: "info" | "warn" | "error"; text: string };
   /** Set when the harness stopped because it could not make progress. */
   blocked?: Blocked;
   /**
@@ -119,7 +126,7 @@ export function entriesFromMessages(messages: ChatMessage[]): Entry[] {
  * stopped once used to wear "the agent needs you" for the rest of the session.
  */
 export function withUserInput(state: ConversationState, text: string): ConversationState {
-  return { ...state, entries: [...state.entries, { kind: "user", text }], blocked: undefined };
+  return { ...state, entries: [...state.entries, { kind: "user", text }], blocked: undefined, notice: undefined };
 }
 
 export function withNotice(
@@ -127,7 +134,7 @@ export function withNotice(
   tone: "info" | "warn" | "error",
   text: string,
 ): ConversationState {
-  return { ...state, entries: [...state.entries, { kind: "notice", tone, text }] };
+  return { ...state, notice: { tone, text } };
 }
 
 /** Show the command list in the transcript. */
@@ -273,9 +280,10 @@ export function applyEvent(
       const base = state.attemptEntries ?? state.entries.length;
       const kept = state.entries.slice(0, base);
       return {
-        entries: discarded
-          ? [...kept, { kind: "notice", tone: "warn", text: `connection interrupted — retrying (attempt ${attempt})` }]
-          : kept,
+        entries: kept,
+        notice: discarded
+          ? { tone: "warn", text: `connection interrupted — retrying (attempt ${attempt})` }
+          : state.notice,
         live: { ...emptyLive(), retrying: { attempt } },
         blocked: undefined,
         attemptEntries: undefined,
@@ -359,7 +367,7 @@ export function applyEvent(
       // is where a final thought belongs. Anything already committed by an
       // earlier tool call is long since in `entries` and is not repeated.
       const flushed = flushReasoning(state, timing);
-      return { ...flushed, entries: [...flushed.entries, answer], live: emptyLive() };
+      return { ...flushed, entries: [...flushed.entries, answer], live: emptyLive(), notice: undefined };
     }
 
     case "needs_user":
@@ -367,13 +375,15 @@ export function applyEvent(
         ...state,
         live: emptyLive(),
         blocked: { reason: event.reason, message: event.message },
+        notice: undefined,
       };
 
     case "error":
       return {
         ...state,
-        entries: [...state.entries, { kind: "notice", tone: "error", text: event.message }],
+        entries: state.entries,
         live: emptyLive(),
+        notice: { tone: "error", text: event.message },
       };
 
     default:

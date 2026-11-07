@@ -610,7 +610,15 @@ test("/session lists saved sessions and enter switches to one, wiping the contex
     // Enter switches to it: the transcript clears and the context indicator is wiped.
     stdin.write("\r");
     await until(screen, (j) => j.includes("switched to session"), 5000);
-    assert.ok(screen.last.join("\n").includes("switched to session"), "a notice confirms the switch");
+    // A notice is status, not conversation: it lives in the composer's top
+    // border, so the row it lands on is the box's top edge — and it appears
+    // there once, not once in the transcript as well.
+    const withNotice = screen.last.filter((row) => row.includes("switched to session"));
+    assert.equal(withNotice.length, 1, "the notice appears once, not once per surface");
+    assert.ok(
+      withNotice[0]!.includes("╭") && withNotice[0]!.includes("╮"),
+      `the notice sits in the composer border: ${withNotice[0]}`,
+    );
   } finally {
     unmount();
   }

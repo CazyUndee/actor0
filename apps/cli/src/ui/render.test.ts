@@ -132,6 +132,17 @@ test("composer topRight tears the hint into the top border", () => {
   assert.ok(top.startsWith("╭") && top.endsWith("╮"), "the border is still a rounded box");
 });
 
+test("a topRight wider than the box is clamped instead of spilling the border", () => {
+  // Notices live in this slot now, and an error can be a whole sentence: a
+  // label wider than the box would push the closing corner off the row.
+  const label = "added example, but it didn't answer: no such host".repeat(3);
+  const built = composerRows({ cols: 40, draft: "", caret: 0, busy: false, maxHeight: 6, topRight: label });
+  const top = built.rows[0]!.map((s) => s.text).join("");
+  assert.equal(top.length, 40, `the top border must stay the box's width: ${top}`);
+  assert.ok(top.includes("…"), `the label is ellipsised, not cut mid-border: ${top}`);
+  assert.ok(top.startsWith("╭") && top.endsWith("╮"), "the border is still a rounded box");
+});
+
 test("composer without topRight has a plain top border", () => {
   const built = composerRows({ cols: 60, draft: "", caret: 0, busy: false, maxHeight: 6 });
   const top = built.rows[0]!.map((s) => s.text).join("");
