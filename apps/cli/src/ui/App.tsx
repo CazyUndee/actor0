@@ -172,7 +172,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // The slash menu's search input: while the menu is open, typing lands here —
   // the composer keeps just the `/` and the list filters live below it.
   const [slashQuery, setSlashQuery] = useState("");
-  const [_mcpQuery, setMcpQuery] = useState("");
+  const mcpQueryRef = useRef("");
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -499,7 +499,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         return;
       case "mcp":
         setMenuIndex(0);
-        setMcpQuery("");
+        mcpQueryRef.current = "";
         setMode("mcp");
         return;
       case "setup":
@@ -917,7 +917,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         setSessionQuery((q) => q + event.text);
         setSessionCursor(0);
       } else if (mode === "mcp") {
-        setMcpQuery((q) => q + event.text);
+        mcpQueryRef.current += event.text;
         setMenuIndex(0);
       }
       // In any other mode a bare character is a command key (a/d/k/j in a
@@ -1707,7 +1707,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const mcpKey = (key: string): void => {
     if (key === "escape") return setMode("chat");
     if (key === "backspace") {
-      setMcpQuery((q) => q.slice(0, -1));
+      mcpQueryRef.current = mcpQueryRef.current.slice(0, -1);
       return;
     }
   };
