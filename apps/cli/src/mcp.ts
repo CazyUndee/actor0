@@ -154,6 +154,134 @@ export function stdioTransport(
   };
 }
 
+// --- HTTP transport -------------------------------------------------------
+
+/**
+ * A JSON-RPC channel to a server over HTTP — the "Streamable HTTP" transport.
+ *
+ * Each request is its own POST. The server answers with either a JSON body or a
+ * `text/event-stream` whose frames carry the same JSON-RPC message(s); the
+ * remote endpoints this CLI talks to use the second, so both are read here. A
+ * session id issued on `initialize` is echoed on every later request, which is
+ * what keeps one conversation on one server-side session.
+ *
+ * There is deliberately no long-lived GET stream. The protocol defines one for
+ * server-initiated messages only, and nothing here consumes those: a request's
+ * response arrives on that request's own response stream, so a GET would be a
+ * connection opened for no reader.
+ */
+export function httpTransport(url: string, options: { headers?: Record<string, string> } = {}): McpTransport {
+  const handlers = new Set<(m: JsonRpcMessage) => void>();
+  const inFlight = new Set<AbortController>();
+  let sessionId: string | undefined;
+  let closed = false;
+
+  const baseHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+    ...options.headers,
+  };
+
+  const deliver = (message: JsonRpcMessage): void => {
+    for (const handler of handlers) handler(message);
+  };
+
+  /** One SSE frame's `data:` lines, as a message (anything else is ignored). */
+  const deliverFrame = (frame: string): void => {
+    const data = frame
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).replace(/^ /, ""))
+      .join("\n");
+    if (!data.trim()) return;
+    try {
+      deliver(JSON.parse(data) as JsonRpcMessage);
+    } catch {
+      // A frame that is not JSON-RPC is an event for somebody else.
+    }
+  };
+
+  /** Read an event stream to its end, delivering each complete frame as it lands. */
+  const readEvents = async (body: ReadableStream<Uint8Array> | null): Promise<void> => {
+    if (!body) return;
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      // Normalise both endings: the spec allows either, and a server that uses
+      // LF alone would otherwise never form a frame.
+      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) deliverFrame(frame);
+    }
+    if (buffer.trim()) deliverFrame(buffer);
+  };
+
+  return {
+    send: (message): void => {
+      if (closed) return;
+      const controller = new AbortController();
+      inFlight.add(controller);
+      const headers: Record<string, string> = { ...baseHeaders };
+      if (sessionId) headers["Mcp-Session-Id"] = sessionId;
+
+      void fetch(url, { method: "POST", headers, body: JSON.stringify(message), signal: controller.signal })
+        .then(async (response) => {
+          const sid = response.headers.get("Mcp-Session-Id");
+          if (sid) sessionId = sid;
+
+          if (!response.ok) {
+            // Reject this request with what the server actually said. A refusal
+            // left to time out tells the reader nothing, and the status line is
+            // usually the whole diagnosis (401, 429, a body naming the limit).
+            const detail = (await response.text().catch(() => "")).trim().slice(0, 300);
+            if ("id" in message) {
+              deliver({
+                jsonrpc: "2.0",
+                id: message.id,
+                error: {
+                  code: response.status,
+                  message: `HTTP ${response.status} ${response.statusText}${detail ? `: ${detail}` : ""}`,
+                },
+              });
+            }
+            return;
+          }
+
+          const type = response.headers.get("content-type") ?? "";
+          if (type.includes("text/event-stream")) return readEvents(response.body);
+
+          const text = await response.text();
+          if (!text.trim()) return; // 202 Accepted — a notification, answered with nothing.
+          try {
+            const parsed = JSON.parse(text) as JsonRpcMessage | JsonRpcMessage[];
+            for (const item of Array.isArray(parsed) ? parsed : [parsed]) deliver(item);
+          } catch {
+            // A body this client cannot parse carries no message for it.
+          }
+        })
+        .catch(() => {
+          // Aborted by close(), or the network gave up. The client's own request
+          // timeout is what reports a server that never answers.
+        })
+        .finally(() => inFlight.delete(controller));
+    },
+    onMessage: (handler): (() => void) => {
+      handlers.add(handler);
+      return () => handlers.delete(handler);
+    },
+    close: (): void => {
+      closed = true;
+      handlers.clear();
+      for (const controller of inFlight) controller.abort();
+      inFlight.clear();
+    },
+  };
+}
+
 // --- server ---------------------------------------------------------------
 
 /** A tool an `McpServer` exposes. */

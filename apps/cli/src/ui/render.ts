@@ -574,7 +574,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
 }
 
 /** The commands list, as the canonical menu (a reference, not a search). */
-export function helpBox(cols: number): Seg[][] {
+export function helpBox(cols: number, height?: number, hitMapOut?: number[]): Seg[][] {
   const width = Math.min(MENU_WIDTH, Math.max(40, cols - 2));
   const items: MenuEntry[] = HELP_TEXT.map(([command, description]) => ({
     marker: "  ",
@@ -583,7 +583,7 @@ export function helpBox(cols: number): Seg[][] {
     selectable: false,
   }));
   items.push({ line: "esc cancels a running turn · Ctrl+D quits", lineTone: color.dim, selectable: false });
-  return menuRows({ title: "commands", items, width });
+  return menuRows({ title: "commands", items, width, height, hitMapOut });
 }
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
 export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, // eslint-disable-next-line @typescript-eslint/no-explicit-any

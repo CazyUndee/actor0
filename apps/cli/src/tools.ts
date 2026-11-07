@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { formatEditDiff } from "./diff.js";
 import { findSkill, loadSkills, renderSkill } from "./skills.js";
 import { invalidateRepoIndex } from "./repo-index.js";
+import { webSearch, formatWebResults } from "./mcp-search.js";
 
 /**
  * The CLI's tools.
@@ -1589,7 +1590,35 @@ const skillTool: CliTool = {
     return renderSkill(found.skill, skillArgs);
   },
 };
-const TOOLS: CliTool[] = [readTool, writeTool, editTool, globTool, shellTool, taskTool, skillTool, rgTool];
+const webSearchTool: CliTool = {
+  definition: {
+    type: "function",
+    function: {
+      name: "web_search",
+      description:
+        "Search the web for information about anything. Returns a list of results with titles, URLs, and snippets. Use for questions about current events, facts, documentation, or anything you don't already know.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The search query." },
+          limit: { type: "number", description: "Maximum number of results to return (default 10, max 20)." },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  label: (args) => `web search: ${String(args.query ?? "")}`,
+  hint: "searching the web",
+  async run(args, ctx) {
+    const query = requireString(args, "query");
+    const limit = Math.floor(Number(args.limit ?? 10)) || 1;
+    const cappedLimit = Math.min(Math.max(limit, 1), 20);
+    const envelope = await webSearch(query, { limit: cappedLimit, signal: ctx.signal });
+    return formatWebResults(envelope);
+  },
+};
+
+const TOOLS: CliTool[] = [readTool, writeTool, editTool, globTool, shellTool, taskTool, skillTool, rgTool, webSearchTool];
 
 /**
  * How many tools the CLI offers, for the prompt to count out loud.

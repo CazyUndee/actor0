@@ -23,7 +23,6 @@ import {
   emptyLive,
   initialConversation,
   totalUsage,
-  withHelp,
   withNotice,
   withUserInput,
   type ConversationState,
@@ -59,6 +58,7 @@ import {
   modelPickerRows,
   thinkingPickerRows,
   usagePanelRows,
+  helpBox,
   sessionPickerRows,
   slashPopupRows,
   MENU_WIDTH,
@@ -118,7 +118,7 @@ export type AppProps = {
   onExit: () => void;
 };
 
-type Mode = "chat" | "menu" | "manage" | "add" | "usage" | "model" | "thinking" | "session" | "mcp";
+type Mode = "chat" | "menu" | "manage" | "add" | "usage" | "model" | "thinking" | "session" | "mcp" | "help";
 
 type AddPhase =
   | { kind: "kind" }
@@ -459,7 +459,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const runCommand = (command: SlashCommand): void => {
     switch (command.name) {
       case "help":
-        setConversation((state) => withHelp(state));
+        // Help is a centered, height-fitted panel like the other menus, not a
+        // transcript entry (which left it left-aligned and clipped at the top
+        // on a short terminal). esc closes it back to chat.
+        setMode("help");
         return;
       case "clear":
         // A new conversation is a new session: fresh id, no messages, and the
@@ -1352,6 +1355,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode === "usage") return usageKey(key);
     if (mode === "session") return sessionKey(key);
     if (mode === "mcp") return mcpKey(key);
+    if (mode === "help") return helpKey(key);
     if (mode === "add") return addKeyHandler(key);
   };
 
@@ -1658,6 +1662,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       }
       setMode("chat");
     }
+  };
+
+  const helpKey = (key: string): void => {
+    // A reference panel: no search, no cursor — esc just closes it.
+    if (key === "escape") return setMode("chat");
   };
 
   const usageKey = (key: string): void => {
@@ -2028,6 +2037,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           sessionQuery,
           Math.min(MENU_WIDTH, innerW - 2),
         );
+        break;
+      case "help":
+        // Centered, height-fitted like the other menu panels; the list of
+        // commands windows inside the box instead of overflowing the terminal.
+        rows = helpBox(Math.min(MENU_WIDTH, innerW - 2), height, hitMap);
         break;
       case "mcp":
         rows = panel(
