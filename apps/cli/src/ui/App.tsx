@@ -933,10 +933,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         const isSub = code >= 100000;
         const itemIndex = isSub ? Math.floor((code - 100000) / 10) : code;
         const subIndex = isSub ? (code - 100000) % 10 : -1;
-        // Hover no longer drives focus: a tiny mouse movement was walking the
-        // cursor (and, in scrollable menus, the view) all the way to the top.
-        // Click (release) still activates the item under the pointer.
-        if (!event.hover) {
+        // Neither hover nor drag may drive focus: any motion report (button held
+        // or not) walks the cursor — and in windowed menus drags the view — to
+        // wherever the pointer lands, including all the way to the top.
+        // Focus changes via keyboard/wheel; a click (release) still activates.
+        if (!event.hover && !event.drag) {
         if (mode === "menu") {
           setMenuIndex(itemIndex);
           if (isSub) setProviderActionCursor(subIndex);
