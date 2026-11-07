@@ -586,7 +586,8 @@ export function helpBox(cols: number): Seg[][] {
   return menuRows({ title: "commands", items, width });
 }
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
-export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, msPerFrame = 150, ...rest: unknown[]): Seg[][] {
+export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, // eslint-disable-next-line @typescript-eslint/no-explicit-any
+msPerFrame = 150, ...rest: any[]): Seg[][] {
   void budget;
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
   let showThinking = false;
