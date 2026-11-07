@@ -190,7 +190,7 @@ test("feeds tool results into a bounded second round", async () => {
   const toolHost: ToolHost = {
     definitions: () => [definition],
     async execute() {
-      return "observed";
+      return { data: "observed", text: "observed" };
     },
   };
   const model = scriptedModel([
@@ -272,7 +272,7 @@ test("a cancel during tool calls answers every call, including the unstarted one
         signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
         controller.abort();
       });
-      return "unreachable";
+      return { data: "unreachable", text: "unreachable" };
     },
   };
   const model = scriptedModel([
@@ -340,7 +340,7 @@ test("a cancel mid-tool is reported to the host, and only for the call that was 
         signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
         controller.abort();
       });
-      return "unreachable";
+      return { data: "unreachable", text: "unreachable" };
     },
   };
   const model = scriptedModel([
@@ -371,7 +371,7 @@ test("a cancel mid-tool is reported to the host, and only for the call that was 
   assert.equal(results.length, 1, "only the running call is reported");
   const reported = results[0] as Extract<HarnessEvent, { type: "tool_result" }>;
   assert.equal(reported.call.id, running.id);
-  assert.equal(reported.output, CANCELLED_TOOL_RESULT);
+  assert.equal(reported.output.data, CANCELLED_TOOL_RESULT);
   assert.equal(reported.error, CANCELLED_TOOL_RESULT, "a cancelled call is an error row, not a tick");
 
   // And the transcript still answers both calls, or a resume is rejected.
@@ -394,7 +394,7 @@ test("a turn that fails after a finished round hands back the exchange", async (
   const toolHost: ToolHost = {
     definitions: () => [definition],
     async execute() {
-      return "observed";
+      return { data: "observed", text: "observed" };
     },
   };
   const model = scriptedModel([
@@ -711,7 +711,7 @@ test("the tool-round budget stops the turn instead of throwing it away", async (
         function: { name: "list_dir", description: "List a directory.", parameters: { type: "object", properties: {} } },
       },
     ],
-    execute: async () => "hello.txt",
+    execute: async () => ({ data: "hello.txt", text: "hello.txt" }),
   };
   const observed: HarnessEvent[] = [];
 
@@ -754,7 +754,7 @@ test("rejection-only rounds respect the round budget", async () => {
     definitions: () => [
       { type: "function", function: { name: "real", description: "real", parameters: { type: "object" } } },
     ],
-    execute: async () => "x",
+    execute: async () => ({ data: "x", text: "x" }),
   };
   const observed: HarnessEvent[] = [];
   const result = await runAgentTurn({
@@ -780,7 +780,7 @@ test("the round budget never fires on a turn that answers", async () => {
     model,
     messages: [],
     input: "hi",
-    toolHost: { definitions: () => [], execute: async () => "" },
+    toolHost: { definitions: () => [], execute: async () => ({ data: "", text: "" }) },
     signal: new AbortController().signal,
     config: { ...fastConfig, maxToolRounds: 1 },
   });
@@ -799,7 +799,7 @@ test("the audit totals rounds, tokens, and tool calls by name", async () => {
   const toolHost: ToolHost = {
     definitions: () => [],
     async execute() {
-      return "ok";
+      return { data: "ok", text: "ok" };
     },
   };
   const model = scriptedModel([

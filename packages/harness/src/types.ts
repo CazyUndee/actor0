@@ -26,6 +26,35 @@ export type ToolDefinition = {
   };
 };
 
+/**
+ * The result of a tool call, as returned by a `ToolHost`.
+ *
+ * `data` is the structured output — a string, an object, a file path, whatever
+ * the tool produces. `text` is the string placed into the `tool` message
+ * content for the model to read; when absent the harness falls back to
+ * `String(data)`. `newMessages` are additional messages the host wants
+ * inserted into the conversation after this result, before the next model
+ * call (used for context injections, synthetic follow-ups, etc.). `isError`
+ * marks the result as a failure so the host and observer can treat it as
+ * such without parsing the text.
+ */
+export type ToolResult<Output = unknown> = {
+  /** The structured output of the tool call. */
+  data: Output;
+  /**
+   * The text representation placed into the tool message content for the model.
+   * When absent, the harness falls back to `String(data)`.
+   */
+  text?: string;
+  /**
+   * Additional messages to insert into the conversation after this result,
+   * before the next model call.
+   */
+  newMessages?: ChatMessage[];
+  /** Whether this result represents an error condition. */
+  isError?: boolean;
+};
+
 export type Usage = {
   prompt_tokens: number;
   completion_tokens: number;
@@ -92,7 +121,7 @@ export type HarnessEvent =
   | { type: "attempt_start" }
   | { type: "reset"; attemptText: string }
   | { type: "tool_start"; call: ToolCall }
-  | { type: "tool_result"; call: ToolCall; output: string; error?: string }
+  | { type: "tool_result"; call: ToolCall; output: ToolResult<unknown>; error?: string }
   | { type: "tool_call"; tool_calls: ToolCall[] }
   /**
    * A tool-call block was refused (unoffered tool, or arguments that were not
@@ -130,7 +159,7 @@ export type ModelClient = {
 
 export type ToolHost = {
   definitions(): ToolDefinition[];
-  execute(call: ToolCall, signal: AbortSignal): Promise<string>;
+  execute(call: ToolCall, signal: AbortSignal): Promise<ToolResult<unknown>>;
 };
 
 export type HarnessObserver = {

@@ -14,6 +14,7 @@ import type {
   ToolHost,
   ToolRoundPolicy,
   TurnAudit,
+  ToolResult,
   Usage,
 } from "./types.js";
 
@@ -476,15 +477,19 @@ export async function runAgentTurn(options: {
         toolCounts[call.function.name] = (toolCounts[call.function.name] ?? 0) + 1;
         await emit(options.observer, { type: "tool_start", call });
         try {
-          const output = await options.toolHost?.execute(call, options.signal);
-          if (output === undefined) throw new Error("tool host returned no result");
+          const result = await options.toolHost?.execute(call, options.signal);
+          if (result === undefined) throw new Error("tool host returned no result");
+          const text = result.text ?? String(result.data);
           messages.push({
             role: "tool",
-            content: output,
+            content: text,
             tool_call_id: call.id,
             name: call.function.name,
           });
-          await emit(options.observer, { type: "tool_result", call, output });
+          for (const message of result.newMessages ?? []) {
+            messages.push(message);
+          }
+          await emit(options.observer, { type: "tool_result", call, output: result });
         } catch (error) {
           if (options.signal.aborted) {
             // This call's answer is unknown and the rest never started; say
@@ -499,23 +504,33 @@ export async function runAgentTurn(options: {
             // and the other one in which a command ran. Only the in-flight
             // call gets an event: the calls after it never started, and a row
             // for those would report work the user never saw begin.
+            const cancelled: ToolResult<unknown> = {
+              data: CANCELLED_TOOL_RESULT,
+              text: CANCELLED_TOOL_RESULT,
+              isError: true,
+            };
             await emit(options.observer, {
               type: "tool_result",
               call,
-              output: CANCELLED_TOOL_RESULT,
+              output: cancelled,
               error: CANCELLED_TOOL_RESULT,
             });
             abortTurn(messages, "", [call, ...result.toolCalls.slice(index + 1)]);
           }
           failedThisRound += 1;
-          const output = `Tool failed: ${errorMessage(error)}`;
+          const failedText = `Tool failed: ${errorMessage(error)}`;
+          const failed: ToolResult<unknown> = {
+            data: errorMessage(error),
+            text: failedText,
+            isError: true,
+          };
           messages.push({
             role: "tool",
-            content: output,
+            content: failedText,
             tool_call_id: call.id,
             name: call.function.name,
           });
-          await emit(options.observer, { type: "tool_result", call, output, error: output });
+          await emit(options.observer, { type: "tool_result", call, output: failed, error: failedText });
         }
       }
       // Only a round where *everything* failed counts. One flaky tool in a
