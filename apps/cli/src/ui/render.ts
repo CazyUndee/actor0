@@ -1031,7 +1031,7 @@ export function addModelsRows(label: string, models: string[], cursor: number, c
     title: `${label} — ${models.length} model${models.length === 1 ? "" : "s"}`,
     items: models.map((m) => ({ label: m, selected: chosen.has(m) })),
     cursor,
-    hint: "type to filter · space toggle · a all · n none · enter use · esc cancel",
+    hint: "type to filter · click/space toggle · a all · n none · enter use · esc cancel",
     height,
     query,
     hitMapOut,

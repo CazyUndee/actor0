@@ -938,26 +938,27 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode !== "chat" && event.button === "left") {
       const popupStart = popupStartRowRef.current;
       const popupCount = popupCountRef.current;
-      // Selection in popups: drag to select, release to copy.
-      if (popupCount > 0 && !event.hover && (event.drag || event.release)) {
+      // A drag begins/extends a text selection; the release that ends that
+      // drag copies it. A plain click (no drag) must fall through to menu
+      // activation below, so the release is only intercepted while a
+      // selection is actually in progress (`selection.dragging`).
+      if (popupCount > 0 && !event.hover && event.drag) {
         const pt = { col: Math.max(0, Math.min(innerW - 1, event.x - 1 - 2)), row: Math.max(popupStart, Math.min(popupStart + popupCount - 1, event.y - 1)) };
-        if (event.drag) {
-          setSelection((s) => s.anchor ? extend(s, pt, Math.max(1, popupStart + popupCount), innerW) : begin(pt, Math.max(1, popupStart + popupCount), innerW));
-          return;
-        }
-        if (event.release) {
-          setSelection((s) => finish(s));
-          const sel = selection;
-          if (hasSelection(sel)) {
-            const text = selectedText(sel, plainRowsRef.current);
-            if (text.trim()) {
-              copyToClipboard(text);
-              flashComposerHint(`copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"}`);
-            }
+        setSelection((s) => s.anchor ? extend(s, pt, Math.max(1, popupStart + popupCount), innerW) : begin(pt, Math.max(1, popupStart + popupCount), innerW));
+        return;
+      }
+      if (popupCount > 0 && event.release && selection.dragging) {
+        setSelection((s) => finish(s));
+        const sel = selection;
+        if (hasSelection(sel)) {
+          const text = selectedText(sel, plainRowsRef.current);
+          if (text.trim()) {
+            copyToClipboard(text);
+            flashComposerHint(`copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"}`);
           }
-          setSelection(emptySelection());
-          return;
         }
+        setSelection(emptySelection());
+        return;
       }
       // Dedup repeated hover reports for the same cell so a scroll-induced
       // re-report cannot snap the cursor back to the pointer's resting cell.
@@ -1151,8 +1152,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
             const models = add.query ? add.models.filter((m) => m.toLowerCase().includes(add.query.toLowerCase())) : add.models;
             const model = models[itemIndex];
             if (model) {
-              setAdd((a) => (a.kind === "models" ? { ...a, cursor: itemIndex } : a));
-              addRegister([model]);
+              // A click ticks the model in (or out) rather than committing it, so
+              // several can be chosen and entered together. Commit on Enter.
+              setAdd((a) => {
+                if (a.kind !== "models") return a;
+                const next = new Set(a.chosen);
+                if (next.has(model)) next.delete(model);
+                else next.add(model);
+                return { ...a, cursor: itemIndex, chosen: next };
+              });
             }
           }
         }
@@ -1759,7 +1767,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       if (key === "n") return addRegister([]);
       if (key === "return") {
         const model = models[add.cursor];
-        addRegister(model ? [model] : []);
+        addRegister(add.chosen.size ? [...add.chosen] : (model ? [model] : []));
       }
       return;
     }
