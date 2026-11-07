@@ -941,13 +941,73 @@ export function thinkingPickerRows(options: { label: string; effort?: string }[]
   });
 }
 /** The `/usage` panel: a period, a total, and a per-model breakdown. */
-export function usagePanelRows(periodLabel: string, sinceTokens: number, sinceTurns: number, allTokens: number, allTurns: number, byModel: { model: string; tokens: number }[], width?: number, height?: number, hitMapOut?: number[]): Seg[][] {
-  const items: MenuEntry[] = [
-    { marker: "  ", label: periodLabel, detail: `${formatTokens(sinceTokens)} tokens · ${sinceTurns} turn${sinceTurns === 1 ? "" : "s"}`, selectable: false },
-    { marker: "  ", label: "all time", detail: `${formatTokens(allTokens)} tokens · ${allTurns} turn${allTurns === 1 ? "" : "s"}`, selectable: false },
-    ...byModel.map((r) => ({ marker: "· ", markerTone: color.muted, label: r.model, detail: formatTokens(r.tokens), selectable: false })),
+export type UsagePeriod = {
+  label: string;
+  tokens: number;
+  turns: number;
+  byModel: { model: string; tokens: number }[];
+};
+
+/**
+ * The usage panel as a real layout, not a pile of divider-separated lines:
+ * a tab strip (today / week / month / all) with the active tab highlighted,
+ * a summary for the active period, and a grouped "by model" section.
+ */
+export function usagePanelRows(periods: UsagePeriod[], active: number, width?: number, height?: number, hitMapOut?: number[]): Seg[][] {
+  const w = Math.max(24, width ?? MENU_WIDTH);
+  const innerW = w - 2;
+  const a = periods[active] ?? periods[0]!;
+  const blank: Seg[] = [{ text: " ".repeat(innerW), dim: true }];
+
+  // Tab strip: every period shown, active in the accent + bold.
+  const tabW = 8;
+  const tabs: Seg[] = [{ text: " ", color: color.dim }];
+  for (let i = 0; i < periods.length; i += 1) {
+    const raw = periods[i]!.label;
+    const cell = raw.length > tabW ? `${raw.slice(0, tabW - 1)}…` : raw;
+    const padded = cell + " ".repeat(tabW - cell.length);
+    tabs.push({ text: padded, color: i === active ? color.accent : color.dim, bold: i === active });
+    if (i < periods.length - 1) tabs.push({ text: " ", color: color.dim });
+  }
+  const divider: Seg[] = [{ text: "─".repeat(innerW), color: color.border }];
+
+  const rows: Seg[][] = [
+    tabs,
+    divider,
+    plain(`  ${formatTokens(a.tokens)} tokens · ${a.turns} turn${a.turns === 1 ? "" : "s"}`, color.text),
+    blank,
+    plain("  by model", color.muted),
   ];
-  return menuRows({ title: "usage", items, width: width ?? MENU_WIDTH, height, hitMapOut });
+
+  // Grouped by-model list: indented, model names column-aligned, tokens right
+  // aligned, no dividers between rows. Capped to the box with a "+N more" tail.
+  const modelW = Math.min(24, Math.max(4, ...a.byModel.map((m) => m.model.length), 4));
+  const bodyRoom = height !== undefined ? Math.max(0, height - 2 - rows.length - 1) : 12;
+  const shown = a.byModel.slice(0, bodyRoom);
+  for (const m of shown) {
+    const label = m.model.length > modelW ? `${m.model.slice(0, modelW - 1)}…` : m.model;
+    rows.push([
+      { text: "  · ", color: color.muted },
+      { text: label, color: color.text },
+      { text: " ".repeat(modelW - label.length + 2), color: color.dim },
+      { text: formatTokens(m.tokens), color: color.muted },
+    ]);
+  }
+  const hidden = a.byModel.length - shown.length;
+  if (hidden > 0) rows.push(plain(`  … ${hidden} more`, color.dim));
+  if (a.byModel.length === 0) rows.push(plain("  no usage recorded", color.dim));
+
+  if (height !== undefined) {
+    const target = Math.max(0, height - 2);
+    while (rows.length < target) rows.push(blank);
+    rows.length = Math.min(rows.length, target);
+  }
+
+  // The panel has no individually clickable rows (tab switching is 1-4/tab/left-right);
+  // report that rather than a stale map, so the mouse never lands on a wrong item.
+  if (hitMapOut) hitMapOut.length = 0;
+  if (hitMapOut) hitMapOut.push(-1, ...rows.map(() => -1), -1);
+  return box(rows, w, { border: color.border, title: "usage" });
 }
 
 /** The slash-command menu: the canonical rectangle whose search bar filters it. */
