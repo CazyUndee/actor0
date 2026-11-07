@@ -1,4 +1,4 @@
-import type { ToolCall, ToolHost } from "./types.js";
+import type { ToolCall, ToolHost, ToolResult } from "./types.js";
 
 /**
  * Combine tool hosts, so a caller can offer one model several sets of tools.
@@ -27,7 +27,7 @@ export function namespacedToolHost(prefix: string, host: ToolHost): ToolHost {
         ...definition,
         function: { ...definition.function, name: `${prefix}${definition.function.name}` },
       })),
-    async execute(call: ToolCall, signal: AbortSignal): Promise<string> {
+    async execute(call: ToolCall, signal: AbortSignal): Promise<ToolResult<unknown>> {
       if (!call.function.name.startsWith(prefix)) {
         throw new Error(`tool "${call.function.name}" is not in the "${prefix}" namespace`);
       }
@@ -50,7 +50,7 @@ export function namespacedToolHost(prefix: string, host: ToolHost): ToolHost {
 export function compositeToolHost(hosts: ToolHost[]): ToolHost {
   return {
     definitions: () => hosts.flatMap((host) => host.definitions()),
-    async execute(call: ToolCall, signal: AbortSignal): Promise<string> {
+    async execute(call: ToolCall, signal: AbortSignal): Promise<ToolResult<unknown>> {
       for (const host of hosts) {
         const offers = host
           .definitions()

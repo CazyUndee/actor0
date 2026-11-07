@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { compositeToolHost, namespacedToolHost } from "./tool-host.js";
-import type { ToolCall, ToolDefinition, ToolHost } from "./types.js";
+import type { ToolCall, ToolDefinition, ToolHost, ToolResult } from "./types.js";
 
 const signal = new AbortController().signal;
 const call = (name: string): ToolCall => ({
@@ -16,9 +16,9 @@ const tool = (name: string): ToolDefinition => ({
 /** A host over `names` that records each name it is asked to run. */
 const host = (names: string[], ran: string[] = []): ToolHost => ({
   definitions: () => names.map(tool),
-  async execute(c: ToolCall) {
+  async execute(c: ToolCall): Promise<ToolResult<unknown>> {
     ran.push(c.function.name);
-    return `${c.function.name} ran`;
+    return { data: `${c.function.name} ran`, text: `${c.function.name} ran` };
   },
 });
 
@@ -32,7 +32,7 @@ test("namespacedToolHost prefixes every tool name and strips it back on the way 
   // The call carries the prefix; the wrapped host must see the bare name, or it
   // would be looking for a tool it does not have.
   const out = await ns.execute(call("fs__read"), signal);
-  assert.equal(out, "read ran");
+  assert.equal(out.text, "read ran");
   assert.deepEqual(ran, ["read"], "the prefix is stripped before the call reaches the host");
 });
 
@@ -48,8 +48,8 @@ test("compositeToolHost merges definitions and routes each call to its owner", a
     composite.definitions().map((d) => d.function.name),
     ["read", "write", "grep"],
   );
-  assert.equal(await composite.execute(call("grep"), signal), "grep ran");
-  assert.equal(await composite.execute(call("write"), signal), "write ran");
+  assert.equal((await composite.execute(call("grep"), signal)).text, "grep ran");
+  assert.equal((await composite.execute(call("write"), signal)).text, "write ran");
   assert.deepEqual(ran, ["grep", "write"], "each call reached only its own host");
 });
 
