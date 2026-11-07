@@ -33,7 +33,7 @@ function toolDisplayName(name: string): string {
  * hundred-line result never floods the transcript.
  */
 function toolOutputLines(status: "ok" | "error", output: string, cols: number): string[] {
-  const text = output.replace(/\r/g, "").trim();
+  const text = output.replace(/\x1b\[[0-9;]*m/g, "").replace(/\r/g, "").trim();
   if (!text) return [];
   const width = Math.max(20, cols - 4);
   const raw = text.split("\n").filter((l, i) => !(i === 0 && /^\S.*\(\d+ .*\):$/.test(l.trim())));
