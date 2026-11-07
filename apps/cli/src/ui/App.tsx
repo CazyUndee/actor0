@@ -118,7 +118,7 @@ export type AppProps = {
   onExit: () => void;
 };
 
-type Mode = "chat" | "menu" | "manage" | "add" | "usage" | "model" | "thinking" | "session";
+type Mode = "chat" | "menu" | "manage" | "add" | "usage" | "model" | "thinking" | "session" | "mcp";
 
 type AddPhase =
   | { kind: "kind" }
@@ -137,8 +137,9 @@ const THINKING = [
 
 const PERIODS: { key: string; label: string; since: (now: Date) => number }[] = [
   { key: "day", label: "today", since: startOfDay },
-  { key: "week", label: "this week", since: startOfWeek },
-  { key: "month", label: "this month", since: startOfMonth },
+  { key: "week", label: "week", since: startOfWeek },
+  { key: "month", label: "month", since: startOfMonth },
+  { key: "all", label: "all", since: () => 0 },
 ];
 
 function wrap(current: number, count: number, delta: number): number {
@@ -171,6 +172,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // The slash menu's search input: while the menu is open, typing lands here —
   // the composer keeps just the `/` and the list filters live below it.
   const [slashQuery, setSlashQuery] = useState("");
+  const [_mcpQuery, setMcpQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -180,6 +182,34 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [onboarding, setOnboarding] = useState(false);
   const [contextTokens, setContextTokens] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
+  // Momentum scrolling: velocity accumulates from wheel ticks (rows per frame,
+  // signed, down = positive) and decays each frame so a fast flick coasts.
+  const scrollVelocityRef = useRef(0);
+  const lastWheelTimeRef = useRef(0);
+  const scrollFrameRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollFrame = () => {
+    scrollFrameRef.current = null;
+    const velocity = scrollVelocityRef.current;
+    if (Math.abs(velocity) < 0.5) {
+      scrollVelocityRef.current = 0;
+      return;
+    }
+    const maxOffset = Math.max(0, transcriptCountRef.current - transcriptVisibleBudgetRef.current);
+    setScrollOffset((o) => {
+      const next = o + velocity;
+      const clamped = Math.min(maxOffset, Math.max(0, next));
+      // Hitting a bound kills momentum (no bounce).
+      if (clamped === maxOffset || clamped === 0) {
+        scrollVelocityRef.current = 0;
+        return clamped;
+      }
+      scrollVelocityRef.current = velocity * 0.88; // friction
+      return clamped;
+    });
+    if (Math.abs(scrollVelocityRef.current) > 0.5) {
+      scrollFrameRef.current = setTimeout(scrollFrame, 0);
+    }
+  };
   // The selection lives in terminal coordinates, like the mouse events that
   // set it, and is drawn over the finished grid rather than stored in it.
   const [selection, setSelection] = useState<SelectionState>(emptySelection);
@@ -463,6 +493,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         setMenuIndex(0);
         setProviderQuery("");
         setMode("menu");
+        return;
+      case "mcp":
+        setMenuIndex(0);
+        setMcpQuery("");
+        setMode("mcp");
         return;
       case "setup":
         setOnboarding(true);
@@ -878,6 +913,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       } else if (mode === "session") {
         setSessionQuery((q) => q + event.text);
         setSessionCursor(0);
+      } else if (mode === "mcp") {
+        setMcpQuery((q) => q + event.text);
+        setMenuIndex(0);
       }
       // In any other mode a bare character is a command key (a/d/k/j in a
       // menu), not text to type — routing it here is what made the vim keys
@@ -1249,10 +1287,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode === "chat") {
       // The open slash menu owns the wheel: it moves through the command list.
       if (slashEngaged) return setSlashIndex((i) => wrapSlash(i, slashMatches.length, dir));
-      return setScrollOffset((o) => {
-        const maxOffset = Math.max(0, transcriptCountRef.current - transcriptVisibleBudgetRef.current);
-        return dir < 0 ? Math.min(o + 3, maxOffset) : Math.max(0, o - 3);
-      });
+      const now = Date.now();
+      const dt = Math.max(1, now - (lastWheelTimeRef.current ?? now));
+      lastWheelTimeRef.current = now;
+      // Faster ticks = more velocity per tick; cap so a single tick can't
+      // jerk the transcript too far.
+      const timeScale = Math.min(1, 16 / dt);
+      scrollVelocityRef.current += dir * 3 * timeScale;
+      scrollVelocityRef.current = Math.max(-30, Math.min(30, scrollVelocityRef.current));
+      if (!scrollFrameRef.current) scrollFrameRef.current = setTimeout(scrollFrame, 0);
     }
     if (mode === "menu") return setMenuIndex((i) => wrap(i, filteredProviders.length + 2, dir));
     if (mode === "model") return setModelCursor((c) => wrap(c, Math.max(1, filteredModels.length), dir));
@@ -1307,6 +1350,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode === "thinking") return thinkingKey(key);
     if (mode === "usage") return usageKey(key);
     if (mode === "session") return sessionKey(key);
+    if (mode === "mcp") return mcpKey(key);
     if (mode === "add") return addKeyHandler(key);
   };
 
@@ -1618,6 +1662,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const usageKey = (key: string): void => {
     if (key === "tab" || key === "right") return setUsageIndex((n) => (n + 1) % PERIODS.length);
     if (key === "left") return setUsageIndex((n) => (n - 1 + PERIODS.length) % PERIODS.length);
+    if (key === "1") return setUsageIndex(0);
+    if (key === "2") return setUsageIndex(1);
+    if (key === "3") return setUsageIndex(2);
+    if (key === "4") return setUsageIndex(3);
     if (key === "escape") return setMode("chat");
   };
 
@@ -1643,6 +1691,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       const target = filteredSessions[Math.min(sessionCursor, filteredSessions.length - 1)];
       if (target) switchToSession(target);
       else setMode("chat");
+    }
+  };
+
+  const mcpKey = (key: string): void => {
+    if (key === "escape") return setMode("chat");
+    if (key === "backspace") {
+      setMcpQuery((q) => q.slice(0, -1));
+      return;
     }
   };
 
@@ -1955,12 +2011,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         break;
       case "usage": {
         const entries = readUsage();
-        const period = PERIODS[usageIndex]!;
-        const since = period.since(new Date()).valueOf();
-        const bucket = usageSince(entries, since);
-        const all = usageSince(entries, 0);
-        const byModel = usageByModel(entries, since);
-        rows = usagePanelRows(`[${period.label}]`, bucket.tokens, bucket.turns, all.tokens, all.turns, byModel, Math.min(MENU_WIDTH, innerW - 2), height, hitMap);
+        const stats = PERIODS.map((p) => {
+          const since = p.since(new Date());
+          const bucket = usageSince(entries, since);
+          return { label: p.label, tokens: bucket.tokens, turns: bucket.turns, byModel: usageByModel(entries, since) };
+        });
+        rows = usagePanelRows(stats, usageIndex, Math.min(MENU_WIDTH, innerW - 2), height, hitMap);
         break;
       }
       case "session":
@@ -1969,6 +2025,18 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           Math.min(sessionCursor, Math.max(0, filteredSessions.length - 1)),
           height,
           sessionQuery,
+          Math.min(MENU_WIDTH, innerW - 2),
+        );
+        break;
+      case "mcp":
+        rows = panel(
+          [
+            [{ text: "MCP servers", color: color.info, bold: true }],
+            [],
+            [{ text: "No MCP servers configured.", color: color.muted }],
+            [{ text: "Configure MCP servers in your config file.", color: color.dim }],
+          ],
+          innerW,
           Math.min(MENU_WIDTH, innerW - 2),
         );
         break;
@@ -2007,7 +2075,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   });
 
   // Restore the terminal on unmount.
-  useEffect(() => () => screen.dispose(), [screen]);
+  useEffect(
+    () => () => {
+      screen.dispose();
+      if (scrollFrameRef.current) clearTimeout(scrollFrameRef.current);
+    },
+    [screen],
+  );
 
   return null;
 }
