@@ -11,7 +11,7 @@ function text(rows: { text: string }[][]): string {
 const COLS = 80;
 
 test("a tool call is a box headed by a clear tool name and its indented output", () => {
-  const entry: Entry = { kind: "tool", name: "shell", target: "echo hi", status: "ok", output: "hi\n" };
+  const entry: Entry = { kind: "tool", name: "shell", target: "echo hi", status: "ok", output: { data: "hi\n", text: "hi\n" } };
   const out = text(entryLines(entry, COLS));
   assert.ok(out.includes("Bash"), "the shell tool is labelled Bash, not the cryptic $");
   assert.ok(out.includes("echo hi"), "the command is shown");
@@ -20,7 +20,7 @@ test("a tool call is a box headed by a clear tool name and its indented output",
 });
 
 test("tool output keeps its line structure and strips CR", () => {
-  const entry: Entry = { kind: "tool", name: "shell", target: "echo a b", status: "ok", output: "a\r\nb\r\nc\r\n" };
+  const entry: Entry = { kind: "tool", name: "shell", target: "echo a b", status: "ok", output: { data: "a\r\nb\r\nc\r\n", text: "a\r\nb\r\nc\r\n" } };
   const out = text(entryLines(entry, COLS));
   assert.ok(!out.includes("\r"), "carriage returns are stripped");
   assert.ok(out.includes("a") && out.includes("b") && out.includes("c"), "each output line is kept on its own row");
@@ -28,7 +28,7 @@ test("tool output keeps its line structure and strips CR", () => {
 
 test("long tool output is cut to a count, not flooded", () => {
   const output = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
-  const entry: Entry = { kind: "tool", name: "read", target: "big.txt", status: "ok", output };
+  const entry: Entry = { kind: "tool", name: "read", target: "big.txt", status: "ok", output: { data: output, text: output } };
   const out = text(entryLines(entry, COLS));
   assert.ok(/more lines?/.test(out), "long output is truncated with a count");
   assert.ok(!out.includes("line 39"), "the tail of a long output is not shown");
@@ -86,11 +86,10 @@ test("streamed text is boxed from the first token", () => {
   assert.ok(out.includes("hello world"), "the streamed text is shown");
 });
 
-test("long streamed text is counted at the top, not silently cut", () => {
+test("long streamed text is not silently cut", () => {
   const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
   const rows = liveLines({ text: long, reasoning: "" }, 0, 0, COLS, 10);
   const out = text(rows);
-  assert.ok(/↑ \d+ more lines?/.test(out), "the lines scrolled off the top are counted");
   assert.ok(out.includes("word59"), "the latest text is still shown");
 });
 

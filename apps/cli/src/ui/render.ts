@@ -667,7 +667,7 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
     // two borders and the count, so the box and its indicator both fit.
     const room = Math.max(1, budget - 5);
     const dropped = Math.max(0, all.length - room);
-    const rows = dropped > 0 ? [plain(`↑ ${dropped} more line${dropped === 1 ? "" : "s"}`, color.dim, true), ...all.slice(all.length - room)] : all;
+    const rows = dropped > 0 ? all.slice(all.length - room) : all;
     if (!live.reasoning.trim()) out.push(blank());
     out.push(...box(rows, cols, { border: color.dim }));
   }
