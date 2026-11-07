@@ -539,29 +539,30 @@ Versions live in three places and all three must move together: `apps/cli/packag
 hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.test.ts`.
 
 - **Bump on every behavioural change.** Any commit tagged `[fix]`, `[feat]`, or
-  `[upgrade]` bumps at least the patch number � including fixes the user never
+  `[upgrade]` bumps at least the build number — including fixes the user never
   sees directly (a crash on a code path, a broken clipboard, a swallowed EPIPE).
   "User-visible" is not the test; "does it change what the code does" is.
   `[chore]` and `[misc]` commits do not bump unless they touch runtime behaviour.
-- **How much to bump.** Versions are `MAJOR.MINOR.PATCH`. Bump exactly one
-  component per commit, never two, and reset the lower ones to 0:
-    - `PATCH` (0.2.0 -> 0.2.1): any `[fix]` or `[chore]` that touches runtime
-      behaviour, and — by default — most `[feat]` too. A UI refinement, a
-      small feature, a hover/interaction nicety, or a hardening all bump
-      patch. This is the default for a normal commit.
-    - `MINOR` (0.2.0 -> 0.3.0): a new **top-level capability** — a new tool,
-      a new provider transport, or an entirely new subsystem the user could
-      point to and name. Most `[feat]`/`[upgrade]` commits are *not* this;
-      a menu, picker, renderer, or mouse change is a patch even when tagged
-      `[feat]`. Resets patch to 0.
-    - `MAJOR` (0.3.0 -> 1.0.0): only when the user explicitly says to bump
-      major. Never infer a major bump from the code alone. Resets minor and
-      patch to 0. Needs a migration note in the commit body.
-  When in doubt between patch and minor, pick **patch** — the bar for minor
-  is a genuinely new capability, not any user-facing change, and a string of
-  over-bumped minors (0.2.0 -> 0.5.0) is version churn that buries the
-  versions that mattered. When in doubt between minor and major, pick minor —
-  major is a promise you cannot easily take back.
+- **How much to bump.** Versions are `MAJOR.MINOR.PATCH.BUILD`. Bump exactly
+  one component per commit, never two, and reset the lower ones to 0:
+    - `BUILD` (0.2.0.0 -> 0.2.0.1): the default for an incremental change —
+      a bug fix, a composer tweak, a hover/interaction nicety, a hardening, a
+      small feature. This is the component most commits bump.
+    - `PATCH` (0.2.0.1 -> 0.2.1.0): a generally big change — a substantial
+      rewrite of a subsystem, a new tool, a new provider transport, or a
+      batch of related work that is meaningfully different from the previous
+      patch release. When builds accumulate enough to be meaningfully
+      different from the last patch release, bump patch (and reset build to 0).
+    - `MINOR` (0.2.1.0 -> 0.3.0.0): an overhaul or refactor — a rework of a
+      whole subsystem or a new top-level capability the user could point to
+      and name. Resets patch and build to 0.
+    - `MAJOR` (0.3.0.0 -> 1.0.0.0): a massive milestone only — the product is
+      completely stable and generally usable, or usable commercially. Never
+      infer a major bump from the code alone; the user must say so. Resets
+      minor, patch, and build to 0. Needs a migration note in the commit body.
+  When in doubt between build and patch, pick **build**. When in doubt between
+  patch and minor, pick **patch**. When in doubt between minor and major, pick
+  minor — major is a promise you cannot easily take back.
 - **Keep the three in sync.** The CLI reads its own version from its
   `package.json` at runtime, so a stale package.json prints a stale `--version`;
   the harness/providers versions are consumed by dependents and by the MCP
