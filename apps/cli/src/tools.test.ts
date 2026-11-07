@@ -55,11 +55,11 @@ test("an approval callback, if one is passed anyway, is never consulted", async 
   assert.equal(readFileSync(join(dir, "out.txt"), "utf8"), "data");
 });
 
-test("the eight tools are advertised, and nothing else", () => {
+test("the nine tools are advertised, and nothing else", () => {
   const names = createToolHost({ cwd: scratch() })
     .definitions()
     .map((d) => d.function.name);
-  assert.deepEqual(names.sort(), ["edit", "glob", "read", "rg", "shell", "skill", "task", "write"]);
+  assert.deepEqual(names.sort(), ["edit", "glob", "read", "rg", "shell", "skill", "task", "web_search", "write"]);
   for (const definition of createToolHost({ cwd: scratch() }).definitions()) {
     assert.equal(definition.type, "function");
     assert.ok(definition.function.description.length > 10, `${definition.function.name} needs a real description`);
@@ -69,7 +69,7 @@ test("the eight tools are advertised, and nothing else", () => {
 
 test("every tool verb in the prompt is a real tool", () => {
   // A tool named in the system prompt but absent from the host is a prompt lie.
-  for (const name of ["read", "write", "edit", "rg", "glob", "shell", "task", "skill"]) {
+  for (const name of ["read", "write", "edit", "rg", "glob", "shell", "task", "skill", "web_search"]) {
     assert.ok(host(scratch()).definitions().some((d) => d.function.name === name), `missing ${name}`);
   }
 });
