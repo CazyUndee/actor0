@@ -83,7 +83,7 @@ test("the task tool delegates to the configured sub-agent and returns its answer
       },
     },
   });
-  const out = await host.execute(call("task", { prompt: "research X", description: "research" }), signal);
+  const out = (await host.execute(call("task", { prompt: "research X", description: "research" }), signal)).text!;
   assert.match(out, /\[sub-agent \(research\) — 2 rounds, 3 tool calls\]/);
   assert.match(out, /did: research X/);
 });
@@ -100,7 +100,7 @@ test("the skill tool loads a body, fills $ARGUMENTS, and errors on an unknown na
   mkdirSync(join(dir, ".actor0", "skills"), { recursive: true });
   writeFileSync(join(dir, ".actor0", "skills", "greet.md"), "---\nname: greet\ndescription: Say hi\n---\n\nSay hello to $ARGUMENTS.\n", "utf8");
   const host = createToolHost({ cwd: dir });
-  const out = await host.execute(call("skill", { name: "greet", args: "Bob" }), signal);
+  const out = (await host.execute(call("skill", { name: "greet", args: "Bob" }), signal)).text!;
   assert.match(out, /\[skill: greet\]/);
   assert.match(out, /Say hello to Bob\./);
   await assert.rejects(() => host.execute(call("skill", { name: "nope" }), signal), /no skill named "nope"/);
@@ -111,13 +111,13 @@ test("the skill tool loads a body, fills $ARGUMENTS, and errors on an unknown na
 test("read returns the file contents unmodified when they fit", async () => {
   const dir = scratch();
   writeFileSync(join(dir, "note.txt"), "hello world");
-  assert.equal(await host(dir).execute(call("read", { path: "note.txt" }), signal), "hello world");
+  assert.equal((await host(dir).execute(call("read", { path: "note.txt" }), signal)).text!, "hello world");
 });
 
 test("read pages and names the exact offset to resume at", async () => {
   const dir = scratch();
   writeFileSync(join(dir, "lines.txt"), "a\nb\nc\nd\ne");
-  const out = await host(dir).execute(call("read", { path: "lines.txt", offset: 2, limit: 2 }), signal);
+  const out = (await host(dir).execute(call("read", { path: "lines.txt", offset: 2, limit: 2 }), signal)).text!;
   assert.match(out, /^2\tb\n3\tc/, "lines carry their file line numbers");
   assert.match(out, /Use offset=4 to continue/, "the next offset must be spelled out, not computed");
 });
@@ -128,7 +128,7 @@ test("a limit that stops short still tells the model where the file continues", 
   // the result says there are more.
   const dir = scratch();
   writeFileSync(join(dir, "lines.txt"), Array.from({ length: 500 }, (_, i) => `line ${i + 1}`).join("\n"));
-  const out = await host(dir).execute(call("read", { path: "lines.txt", limit: 3 }), signal);
+  const out = (await host(dir).execute(call("read", { path: "lines.txt", limit: 3 }), signal)).text!;
   assert.match(out, /Use offset=4 to continue/);
   assert.match(out, /more lines in file/);
 });
@@ -140,7 +140,7 @@ test("a single enormous line is cut, and the cut is reported", async () => {
   // it back into a write. Claude Code puts the same 500-column cap on ripgrep.
   const dir = scratch();
   writeFileSync(join(dir, "bundle.js"), "var a=1;".repeat(20_000));
-  const out = await host(dir).execute(call("read", { path: "bundle.js" }), signal);
+  const out = (await host(dir).execute(call("read", { path: "bundle.js" }), signal)).text!;
   assert.ok(out.length < 1_000, `a 160,000-character line came back as ${out.length} characters`);
   assert.match(out, /\[cut: \+159500 chars\]/, "the marker says how much is missing, not just that something was");
 });
@@ -151,7 +151,7 @@ test("a cut line is never cut silently", async () => {
   // it does not exist.
   const dir = scratch();
   writeFileSync(join(dir, "long.txt"), `${"x".repeat(900)}\nshort\n`);
-  const out = await host(dir).execute(call("read", { path: "long.txt" }), signal);
+  const out = (await host(dir).execute(call("read", { path: "long.txt" }), signal)).text!;
   assert.match(out, /\[1 line longer than 500 characters was cut above\./);
   assert.match(out, /sed -n '1p' long\.txt/, "a count alone is not actionable — the note has to name the line");
   assert.match(out, /short\n/, "the rest of the file comes back untouched");
@@ -160,7 +160,7 @@ test("a cut line is never cut silently", async () => {
 test("the cut notice names every long line, not just the first", async () => {
   const dir = scratch();
   writeFileSync(join(dir, "two.txt"), `${"x".repeat(900)}\n${"y".repeat(700)}\nshort\n`);
-  const out = await host(dir).execute(call("read", { path: "two.txt" }), signal);
+  const out = (await host(dir).execute(call("read", { path: "two.txt" }), signal)).text!;
   assert.match(out, /\[2 lines longer than 500 characters \(lines 1, 2\) were cut above\./);
 });
 
@@ -171,13 +171,13 @@ test("a file whose lines all fit comes back byte for byte", async () => {
   const dir = scratch();
   const body = "hello world\nsecond line\n";
   writeFileSync(join(dir, "note.txt"), body);
-  assert.equal(await host(dir).execute(call("read", { path: "note.txt" }), signal), body);
+  assert.equal((await host(dir).execute(call("read", { path: "note.txt" }), signal)).text!, body);
 });
 
 test("a cut is reported on the paged path too, with the file's line numbers", async () => {
   const dir = scratch();
   writeFileSync(join(dir, "mixed.txt"), ["short", "x".repeat(900), "short"].join("\n"));
-  const out = await host(dir).execute(call("read", { path: "mixed.txt", offset: 1, limit: 3 }), signal);
+  const out = (await host(dir).execute(call("read", { path: "mixed.txt", offset: 1, limit: 3 }), signal)).text!;
   assert.match(out, /^1\tshort\n2\tx{500}/, "the marker lands inside the line, after its number");
   assert.match(
     out,
@@ -191,7 +191,7 @@ test("a line exactly at the cap is left alone", async () => {
   const dir = scratch();
   const line = "x".repeat(500);
   writeFileSync(join(dir, "edge.txt"), `${line}\n`);
-  const out = await host(dir).execute(call("read", { path: "edge.txt" }), signal);
+  const out = (await host(dir).execute(call("read", { path: "edge.txt" }), signal)).text!;
   assert.equal(out, `${line}\n`, "500 columns fits; only what is past them is cut");
 });
 test("a binary file is refused before it is decoded", async () => {
@@ -242,7 +242,7 @@ test("an empty file says so instead of returning nothing", async () => {
   // invents contents. This mirrors the shell tool's `(no output)`.
   const dir = scratch();
   writeFileSync(join(dir, "empty.txt"), "");
-  assert.equal(await host(dir).execute(call("read", { path: "empty.txt" }), signal), "(the file is empty: 0 bytes)");
+  assert.equal((await host(dir).execute(call("read", { path: "empty.txt" }), signal)).text!, "(the file is empty: 0 bytes)");
 });
 
 test("an ordinary file is untouched by the sniff", async () => {
@@ -254,7 +254,7 @@ test("an ordinary file is untouched by the sniff", async () => {
   const body = `${"line of text\n".repeat(1_000)}tail\n`;
   assert.ok(Buffer.byteLength(body) > 8_000, "the file has to outlast the sniff window to mean anything");
   writeFileSync(join(dir, "long.txt"), body);
-  assert.equal(await host(dir).execute(call("read", { path: "long.txt" }), signal), body);
+  assert.equal((await host(dir).execute(call("read", { path: "long.txt" }), signal)).text!, body);
 });
 
 
@@ -268,7 +268,7 @@ test("a paged read reports the file's line count, not the window's", async () =>
     join(dir, "big.txt"),
     Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n"),
   );
-  const out = await host(dir).execute(call("read", { path: "big.txt", limit: 2500 }), signal);
+  const out = (await host(dir).execute(call("read", { path: "big.txt", limit: 2500 }), signal)).text!;
   assert.match(out, /Showing lines 1-2000 of 3000/);
   assert.doesNotMatch(out, /of 2500\b/, "the model's own limit must not become the file's length");
 });
@@ -286,10 +286,10 @@ test("the page that reaches the end of the file says so", async () => {
   let offset: number | undefined;
   let last = "";
   for (let pages = 0; pages < 10; pages++) {
-    last = await host(dir).execute(
+    last = (await host(dir).execute(
       call("read", { path: "big.txt", ...(offset ? { offset } : {}), limit: 2500 }),
       signal,
-    );
+    )).text!;
     const m = /Use offset=(\d+) to continue/.exec(last);
     if (!m) break;
     offset = Number(m[1]);
@@ -307,7 +307,7 @@ test("read pages a big file all the way through without repeating lines", async 
   let offset: number | undefined;
   let seen: string[] = [];
   for (let pages = 0; pages < 25; pages++) {
-    const out = await host(dir).execute(call("read", { path: "big.txt", ...(offset ? { offset } : {}), limit: 4 }), signal);
+    const out = (await host(dir).execute(call("read", { path: "big.txt", ...(offset ? { offset } : {}), limit: 4 }), signal)).text!;
     seen = seen.concat(out.split("\n").filter((l) => /^\d+\t/.test(l)));
     const m = /Use offset=(\d+) to continue/.exec(out);
     if (!m) break;
@@ -340,7 +340,7 @@ test("a missing file throws so the harness can account for it", async () => {
 
 test("write creates parent directories and says it created", async () => {
   const dir = scratch();
-  const out = await host(dir).execute(call("write", { path: "deep/nested/file.txt", content: "x" }), signal);
+  const out = (await host(dir).execute(call("write", { path: "deep/nested/file.txt", content: "x" }), signal)).text!;
   assert.match(out, /^Created /);
   assert.equal(readFileSync(join(dir, "deep", "nested", "file.txt"), "utf8"), "x");
 });
@@ -348,7 +348,7 @@ test("write creates parent directories and says it created", async () => {
 test("write says replaced when it clobbered something", async () => {
   const dir = scratch();
   writeFileSync(join(dir, "a.txt"), "old");
-  const out = await host(dir).execute(call("write", { path: "a.txt", content: "new" }), signal);
+  const out = (await host(dir).execute(call("write", { path: "a.txt", content: "new" }), signal)).text!;
   assert.match(out, /^Replaced /);
   assert.equal(readFileSync(join(dir, "a.txt"), "utf8"), "new");
 });
@@ -365,7 +365,7 @@ test("write can create an empty file, and says it made zero lines", async () => 
   // *missing parameter* sent the model off to rebuild the file line by line.
   const dir = scratch();
   writeFileSync(join(dir, "f.txt"), "was here");
-  const out = await host(dir).execute(call("write", { path: "f.txt", content: "" }), signal);
+  const out = (await host(dir).execute(call("write", { path: "f.txt", content: "" }), signal)).text!;
   assert.equal(readFileSync(join(dir, "f.txt"), "utf8"), "");
   assert.match(out, /0 lines/, `"".split("\\n") is one empty line; the model emptied the file`);
 });
@@ -383,10 +383,10 @@ test("content that is absent is still an error, distinct from content that is em
 test("edit replaces one exact string and leaves the rest alone", async () => {
   const dir = scratch();
   writeFileSync(join(dir, "a.ts"), "const a = 1;\nconst b = 2;\n");
-  const out = await host(dir).execute(
+  const out = (await host(dir).execute(
     call("edit", { path: "a.ts", old_string: "const b = 2;", new_string: "const b = 3;" }),
     signal,
-  );
+  )).text!;
   assert.match(out, /^Edited /);
   assert.equal(readFileSync(join(dir, "a.ts"), "utf8"), "const a = 1;\nconst b = 3;\n");
 });
@@ -394,10 +394,10 @@ test("edit replaces one exact string and leaves the rest alone", async () => {
 test("edit returns a diff of the change, not just a summary", async () => {
   const dir = scratch();
   writeFileSync(join(dir, "a.ts"), "const a = 1;\nconst b = 2;\n");
-  const out = await host(dir).execute(
+  const out = (await host(dir).execute(
     call("edit", { path: "a.ts", old_string: "const b = 2;", new_string: "const b = 3;" }),
     signal,
-  );
+  )).text!;
   assert.match(out, /```diff/, "the output carries a fenced diff for the transcript to render");
   assert.match(out, /-const b = 2;/, "the removed line");
   assert.match(out, /\+const b = 3;/, "the added line");
@@ -429,7 +429,7 @@ test("edit deletes text when the replacement is empty", async () => {
   // fall back to rewriting the whole file by hand.
   const dir = scratch();
   writeFileSync(join(dir, "f.txt"), "keep\nremove me\nalso keep\n");
-  const out = await host(dir).execute(call("edit", { path: "f.txt", old_string: "remove me\n", new_string: "" }), signal);
+  const out = (await host(dir).execute(call("edit", { path: "f.txt", old_string: "remove me\n", new_string: "" }), signal)).text!;
   assert.equal(readFileSync(join(dir, "f.txt"), "utf8"), "keep\nalso keep\n");
   assert.match(out, /1 occurrence replaced/);
 });
@@ -543,20 +543,20 @@ const script = (posix: string, powershell: string, cmd: string): string => {
 const hang = script("sleep 30", "Start-Sleep -Seconds 30", "ping -n 31 127.0.0.1 > nul");
 
 test("shell returns stdout, and the exit code on the last line when non-zero", async () => {
-  const out = await host(scratch()).execute(
+  const out = (await host(scratch()).execute(
     call("shell", { command: script("echo hi; exit 3", "Write-Output hi; exit 3", "echo hi & exit /b 3") }),
     signal,
-  );
+  )).text!;
   assert.match(out, /\bhi\b/);
   assert.match(out, /Command exited with code 3$/, "the code rides last, next to where the model decides");
 });
 
 test("shell reports a non-zero exit in the result, not as a rejection", async () => {
   // The model needs to see and reason about a failure, not have the turn abort.
-  const out = await host(scratch()).execute(
+  const out = (await host(scratch()).execute(
     call("shell", { command: script("echo before; exit 1", "Write-Output before; exit 1", "echo before & exit /b 1") }),
     signal,
-  );
+  )).text!;
   assert.match(out, /Command exited with code 1/);
   assert.match(out, /before/, "the output the command did produce must still arrive");
 });
@@ -587,7 +587,7 @@ test("a non-zero exit is readable back out of the result text", () => {
 test("shell keeps the tail of oversized output, where the error is", async () => {
   // A head cap shows the model the start of a build log and drops the 'ERR!'
   // it was looking for. The cap must keep the end.
-  const out = await host(scratch()).execute(
+  const out = (await host(scratch()).execute(
     call("shell", {
       command: script(
         "echo START_MARKER; yes 0123456789012345678901234567890123456789 | head -4000; echo END_MARKER",
@@ -596,7 +596,7 @@ test("shell keeps the tail of oversized output, where the error is", async () =>
       ),
     }),
     signal,
-  );
+  )).text!;
   assert.match(out, /truncated/);
   assert.doesNotMatch(out, /START_MARKER/, "the head is what gets dropped");
   assert.match(out, /END_MARKER/, "the tail — the part that says what happened — must survive");
@@ -609,7 +609,7 @@ test("the truncation notice counts what was actually thrown away", async () => {
   // the 34KB the accumulator kept, and it said "4,094 earlier bytes dropped"
   // when 130,000 had been. The model reads that as "the rest is here" and
   // answers from output it cannot see, which is worse than saying nothing.
-  const out = await host(scratch()).execute(
+  const out = (await host(scratch()).execute(
     call("shell", {
       command: script(
         "yes 0123456789012345678901234567890123456789 | head -4000",
@@ -618,7 +618,7 @@ test("the truncation notice counts what was actually thrown away", async () => {
       ),
     }),
     signal,
-  );
+  )).text!;
   const notice = /^\[output truncated: ([\d,]+) earlier bytes and ([\d,]+) lines dropped/.exec(out);
   assert.ok(notice, `no truncation notice in: ${out.slice(0, 120)}`);
   const bytes = Number(notice[1]!.replace(/,/g, ""));
@@ -629,38 +629,38 @@ test("the truncation notice counts what was actually thrown away", async () => {
 });
 
 test("output that fits is not announced as truncated", async () => {
-  const out = await host(scratch()).execute(
+  const out = (await host(scratch()).execute(
     call("shell", { command: script("echo small", "Write-Output small", "echo small") }),
     signal,
-  );
+  )).text!;
   assert.doesNotMatch(out, /truncated/);
   assert.match(out, /small/);
 });
 
 test("shell separates stderr so a real error is not lost in the noise", async () => {
-  const out = await host(scratch()).execute(
+  const out = (await host(scratch()).execute(
     call("shell", { command: script("echo oops 1>&2", "[Console]::Error.WriteLine('oops')", "echo oops 1>&2") }),
     signal,
-  );
+  )).text!;
   assert.match(out, /stderr:/);
   assert.match(out, /oops/);
 });
 
 test("shell says so when a command prints nothing", async () => {
-  const out = await host(scratch()).execute(
+  const out = (await host(scratch()).execute(
     call("shell", { command: script("true", "$null = 1", "exit /b 0") }),
     signal,
-  );
+  )).text!;
   assert.equal(out, "(no output)", "no exit-code line on success — it is noise");
 });
 
 test("shell runs in the working directory", async () => {
   const dir = scratch();
   writeFileSync(join(dir, "marker.txt"), "");
-  const out = await host(dir).execute(
+  const out = (await host(dir).execute(
     call("shell", { command: script("ls", "Get-ChildItem | Select-Object -ExpandProperty Name", "dir /b") }),
     signal,
-  );
+  )).text!;
   assert.match(out, /marker\.txt/);
 });
 
@@ -722,13 +722,13 @@ test("a command that reads stdin is told there is none", async () => {
   // sits an order of magnitude above the assertion: a regression waits half
   // a minute and fails, and the fast path still finishes in milliseconds.
   const started = Date.now();
-  const out = await host(scratch()).execute(
+  const out = (await host(scratch()).execute(
     call("shell", {
       command: script("cat", "cmd /c more", "cmd /c more"),
       timeout: 30,
     }),
     signal,
-  );
+  )).text!;
   const elapsed = Date.now() - started;
   assert.ok(elapsed < 10_000, `waited ${elapsed}ms for input that never came`);
   assert.match(out, /no output|exited with code/);
@@ -739,19 +739,19 @@ test("redirecting stdin still works — closing the pipe is not the same as refu
   // opening a file, and must be unaffected.
   const dir = scratch();
   writeFileSync(join(dir, "data.txt"), "piped-in\n");
-  const out = await host(dir).execute(
+  const out = (await host(dir).execute(
     call("shell", {
       command: script("cat data.txt", "Get-Content data.txt", "type data.txt"),
     }),
     signal,
-  );
+  )).text!;
   assert.match(out, /piped-in/);
 });
 
 test("shell has no default timeout — a long command finishes", async () => {
   // pi's contract: no timeout unless asked. A 120s default killed real installs
   // and builds mid-flight; nothing the model does routinely should die by clock.
-  const out = await host(scratch()).execute(
+  const out = (await host(scratch()).execute(
     call("shell", {
       command: script(
         "sleep 2; echo done-slowly",
@@ -760,7 +760,7 @@ test("shell has no default timeout — a long command finishes", async () => {
       ),
     }),
     signal,
-  );
+  )).text!;
   assert.match(out, /done-slowly/);
 });
 
@@ -844,9 +844,9 @@ test("a directory whose name starts with two dots is still inside", async () => 
   writeFileSync(join(dir, "..cache", "a.txt"), "dotted");
   writeFileSync(join(dir, "...data", "b.txt"), "tripled");
 
-  const out = await host(dir).execute(call("read", { path: join("..cache", "a.txt") }), signal);
+  const out = (await host(dir).execute(call("read", { path: join("..cache", "a.txt") }), signal)).text!;
   assert.match(out, /dotted/);
-  assert.match(await host(dir).execute(call("read", { path: "...data/b.txt" }), signal), /tripled/);
+  assert.match((await host(dir).execute(call("read", { path: "...data/b.txt" }), signal)).text!, /tripled/);
 
   // A write through the same name is equally inside.
   await host(dir).execute(call("write", { path: join("..cache", "new.txt"), content: "written" }), signal);
@@ -857,7 +857,7 @@ test("a directory whose name starts with two dots is still inside", async () => 
   // the climb, so the path is it plus the file name — no extra "..".
   const outside = scratch();
   writeFileSync(join(outside, "secret.txt"), "hunter2");
-  const outRead = await host(dir).execute(call("read", { path: join(relative(dir, outside), "secret.txt") }), signal);
+  const outRead = (await host(dir).execute(call("read", { path: join(relative(dir, outside), "secret.txt") }), signal)).text!;
   assert.match(outRead, /hunter2/, "a read may reach outside the working directory");
 });
 
@@ -870,7 +870,7 @@ test("writers stay in the working directory; readers may reach outside", async (
   const attack = host(inner);
 
   // Reads follow the escape and return the content — that is the point.
-  assert.match(await attack.execute(call("read", { path: escape }), signal), /hunter2/);
+  assert.match((await attack.execute(call("read", { path: escape }), signal)).text!, /hunter2/);
   await assert.rejects(
     () => attack.execute(call("write", { path: `..${sep}secret.txt`, content: "clobbered" }), signal),
     /outside the working directory/,
@@ -893,7 +893,7 @@ test("a sibling directory sharing a name prefix is reachable for a read", async 
   mkdirSync(inner);
   mkdirSync(sibling);
   writeFileSync(join(sibling, "notes.txt"), "private");
-  assert.match(await host(inner).execute(call("read", { path: `..${sep}app-backup${sep}notes.txt` }), signal), /private/);
+  assert.match((await host(inner).execute(call("read", { path: `..${sep}app-backup${sep}notes.txt` }), signal)).text!, /private/);
 });
 
 test("a link inside the working directory: reads follow it, writes still do not", async () => {
@@ -920,7 +920,7 @@ test("a link inside the working directory: reads follow it, writes still do not"
   const through = join("link", "secret.txt");
 
   assert.match(
-    await attack.execute(call("read", { path: through }), signal),
+    (await attack.execute(call("read", { path: through }), signal)).text!,
     /hunter2/,
     "a read through a link is inspection, and it reaches the target",
   );
@@ -949,7 +949,7 @@ test("a link to a directory *inside* the working directory is still allowed", as
   } catch {
     return;
   }
-  assert.equal(await host(dir).execute(call("read", { path: join("link", "f.txt") }), signal), "ok");
+  assert.equal((await host(dir).execute(call("read", { path: join("link", "f.txt") }), signal)).text!, "ok");
 });
 
 test("write creates a file whose parent directories do not exist yet", async () => {
@@ -965,8 +965,8 @@ test("paths inside the working directory are fine, however they are spelled", as
   const dir = scratch();
   mkdirSync(join(dir, "a", "b"), { recursive: true });
   writeFileSync(join(dir, "a", "b", "f.txt"), "ok");
-  assert.equal(await host(dir).execute(call("read", { path: "./a/b/f.txt" }), signal), "ok");
-  assert.equal(await host(dir).execute(call("read", { path: join(dir, "a", "b", "f.txt") }), signal), "ok");
+  assert.equal((await host(dir).execute(call("read", { path: "./a/b/f.txt" }), signal)).text!, "ok");
+  assert.equal((await host(dir).execute(call("read", { path: join(dir, "a", "b", "f.txt") }), signal)).text!, "ok");
 });
 
 // --- the tool host itself ---------------------------------------------------
@@ -1139,7 +1139,7 @@ function fixture(): string {
 }
 
 const rg = (dir: string, args: Record<string, unknown>): Promise<string> =>
-  host(dir).execute(call("rg", args), signal);
+  host(dir).execute(call("rg", args), signal).then((r) => r.text!);
 
 // --- rg --------------------------------------------------------------------
 
@@ -1271,7 +1271,7 @@ test("rg is a real tool the prompt can name", () => {
 // --- glob -------------------------------------------------------------------
 
 const glob = (dir: string, args: Record<string, unknown>): Promise<string> =>
-  host(dir).execute(call("glob", args), signal);
+  host(dir).execute(call("glob", args), signal).then((r) => r.text!);
 
 test("glob lists a directory rather than reporting nothing", async () => {
   // The first version of this returned `No path matches apps/cli` for a

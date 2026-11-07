@@ -114,7 +114,8 @@ export function createUnderlying(options: { cwd: string; provider?: ResolvedProv
         default: {
           const name = PRODUCTION_NAME[operation] ?? operation;
           const call: ToolCall = { id: "bench", type: "function", function: { name, arguments: JSON.stringify(args) } };
-          return host.execute(call, signal);
+          const result = await host.execute(call, signal);
+          return result.text ?? String(result.data);
         }
       }
     },

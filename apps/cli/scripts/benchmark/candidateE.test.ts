@@ -52,12 +52,12 @@ test("find_tool returns a callable definition, and the returned tool then runs",
   const signal = new AbortController().signal;
 
   const discovery = await dispatcher.execute(call("find_tool", { query: "search file contents" }), signal);
-  assert.match(discovery, /tool: grep/, "find_tool returns the definition as text");
-  assert.match(discovery, /arguments \(JSON\)/, "the schema is included so the model can call it");
+  assert.match(discovery.text!, /tool: grep/, "find_tool returns the definition as text");
+  assert.match(discovery.text!, /arguments \(JSON\)/, "the schema is included so the model can call it");
 
   // The discovered tool is then called through the same dispatcher, normally.
   const result = await dispatcher.execute(call("grep", { pattern: "hit" }), signal);
-  assert.match(result, /a\.txt/);
+  assert.match(result.text!, /a\.txt/);
   rmSync(dir, { recursive: true, force: true });
 });
 

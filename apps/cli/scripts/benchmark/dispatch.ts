@@ -1,4 +1,4 @@
-import type { ToolCall } from "@actor0/harness";
+import type { ToolCall, ToolResult } from "@actor0/harness";
 import { type CandidateId, type RawCandidate, toOpenAiTools, type OpenAiTool } from "./candidates.js";
 import {
   OPERATION_FIELDS,
@@ -42,7 +42,7 @@ export type Dispatcher = {
   candidate: RawCandidate;
   records: CallRecord[];
   definitions(): OpenAiTool[];
-  execute(call: ToolCall, signal: AbortSignal): Promise<string>;
+  execute(call: ToolCall, signal: AbortSignal): Promise<ToolResult<unknown>>;
 };
 
 /** Candidate A: production tool name → operation. */
@@ -146,7 +146,7 @@ export function createDispatcher(candidate: RawCandidate, underlying: Underlying
     candidate,
     records,
     definitions: () => toOpenAiTools(candidate),
-    async execute(call, signal): Promise<string> {
+    async execute(call, signal): Promise<ToolResult<unknown>> {
       const tool = call.function.name;
       const args = parseArgs(call);
       const res = resolve(candidate.id, call);
@@ -172,25 +172,25 @@ export function createDispatcher(candidate: RawCandidate, underlying: Underlying
       }
       if (schemaError || !res.op) {
         records.push({ candidate: candidate.id, tool, op: res.op, schemaValid: false, semanticValid: false, unsupported: false, error: schemaError ?? "could not resolve the operation" });
-        return `error: ${schemaError ?? "could not resolve the operation"}`;
+        return { text: `error: ${schemaError ?? "could not resolve the operation"}`, data: `error: ${schemaError ?? "could not resolve the operation"}` };
       }
 
       const op = res.op;
       // --- unsupported capability (real + well-formed, but Actor0 cannot do it) ---
       if (!SUPPORTED_OPERATIONS.includes(op)) {
         records.push({ candidate: candidate.id, tool, op, schemaValid: true, semanticValid: false, unsupported: true, error: `${op} is not a supported capability` });
-        return `error: "${op}" is not a capability Actor0 supports.`;
+        return { text: `error: "${op}" is not a capability Actor0 supports.`, data: `error: "${op}" is not a capability Actor0 supports.` };
       }
 
       // --- semantic level ---
       try {
         const output = await underlying.run(op, args, signal);
         records.push({ candidate: candidate.id, tool, op, schemaValid: true, semanticValid: true, unsupported: false });
-        return output;
+        return { text: output, data: output };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         records.push({ candidate: candidate.id, tool, op, schemaValid: true, semanticValid: false, unsupported: false, error: message });
-        return `error: ${message}`;
+        return { text: `error: ${message}`, data: `error: ${message}` };
       }
     },
   };

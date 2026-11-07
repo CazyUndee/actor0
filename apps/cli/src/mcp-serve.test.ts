@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { Readable, Writable } from "node:stream";
 import { hostMcpServer, restrictedToolHost, serveStdio } from "./mcp-serve.js";
 import { connectMcp } from "./mcp.js";
-import type { ToolCall, ToolHost, ToolDefinition } from "@actor0/harness";
+import type { ToolCall, ToolHost, ToolDefinition, ToolResult } from "@actor0/harness";
 
 /**
  * The serving direction of MCP: Actor0's own `ToolHost` behind an `McpServer`.
@@ -21,11 +21,11 @@ const definition = (name: string, description: string, parameters: Record<string
 });
 
 /** A host that records what it was executed with. */
-function fakeHost(tools: ToolDefinition[], output: string): { host: ToolHost; executed: ToolCall[] } {
+function fakeHost(tools: ToolDefinition[], output: ToolResult<unknown>): { host: ToolHost; executed: ToolCall[] } {
   const executed: ToolCall[] = [];
   const host: ToolHost = {
     definitions: () => tools,
-    async execute(call: ToolCall): Promise<string> {
+    async execute(call: ToolCall, _signal: AbortSignal): Promise<ToolResult<unknown>> {
       executed.push(call);
       return output;
     },
@@ -36,7 +36,7 @@ function fakeHost(tools: ToolDefinition[], output: string): { host: ToolHost; ex
 const signal = new AbortController().signal;
 
 test("mcpToolsFromHost maps a host's definitions to MCP tools and routes calls through execute", async () => {
-  const { host, executed } = fakeHost([definition("read", "read a file", { type: "object", properties: { path: { type: "string" } } }), definition("shell", "run a command")], "file-contents");
+  const { host, executed } = fakeHost([definition("read", "read a file", { type: "object", properties: { path: { type: "string" } } }), definition("shell", "run a command")], { data: "file-contents", text: "file-contents" });
   const server = hostMcpServer(host, { name: "actor0" });
   const client = await connectMcp({ server });
   const tools = await client.listTools(signal);
@@ -56,7 +56,7 @@ test("mcpToolsFromHost maps a host's definitions to MCP tools and routes calls t
 test("a failing tool surfaces as a JSON-RPC error the client sees", async () => {
   const host: ToolHost = {
     definitions: () => [definition("boom", "always fails")],
-    async execute(): Promise<string> {
+    async execute(_call: ToolCall, _signal: AbortSignal): Promise<ToolResult<unknown>> {
       throw new Error("kaboom");
     },
   };
@@ -68,7 +68,7 @@ test("a failing tool surfaces as a JSON-RPC error the client sees", async () => 
 test("restrictedToolHost offers only the subset and never lists what it withholds", async () => {
   const { host } = fakeHost(
     [definition("read", "read"), definition("write", "write"), definition("shell", "run"), definition("rg", "search")],
-    "out",
+    { data: "out", text: "out" },
   );
   const restricted = restrictedToolHost(host, ["read", "rg"]);
   assert.deepEqual(restricted.definitions().map((tool) => tool.function.name).sort(), ["read", "rg"]);
@@ -77,7 +77,7 @@ test("restrictedToolHost offers only the subset and never lists what it withhold
     { id: "1", type: "function", function: { name: "rg", arguments: "{}" } },
     signal,
   );
-  assert.equal(out, "out");
+  assert.equal(out.text, "out");
 
   // The refusal names only the offered set: an error that listed `write` and
   // `shell` would advertise capabilities the connection was never given.
@@ -93,7 +93,7 @@ test("restrictedToolHost offers only the subset and never lists what it withhold
 });
 
 test("serveStdio answers initialize, tools/list and tools/call on the injected wire", { timeout: 10_000 }, async () => {
-  const { host } = fakeHost([definition("echo", "echo", { type: "object", properties: { text: { type: "string" } } })], "echo: hi");
+  const { host } = fakeHost([definition("echo", "echo", { type: "object", properties: { text: { type: "string" } } })], { data: "echo: hi", text: "echo: hi" });
   const server = hostMcpServer(host, { name: "actor0" });
 
   const linesOut: string[] = [];

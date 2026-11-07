@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { ToolCall, ToolDefinition, ToolHost } from "@actor0/harness";
+import type { ToolCall, ToolDefinition, ToolHost, ToolResult } from "@actor0/harness";
 import { compositeToolHost, namespacedToolHost } from "@actor0/harness";
 
 /**
@@ -423,10 +423,10 @@ export async function mcpToolHost(clients: McpClient[]): Promise<ToolHost> {
       const prefix = `${client.serverInfo?.name ?? "mcp"}__`;
       const host: ToolHost = {
         definitions: () => definitions,
-        async execute(call: ToolCall, signal: AbortSignal): Promise<string> {
+        async execute(call: ToolCall, signal: AbortSignal): Promise<ToolResult<unknown>> {
           const result = await client.callTool(call.function.name, parseArgs(call.function.arguments), signal);
           if (result.isError) throw new Error(result.text);
-          return result.text;
+          return { data: result.text, text: result.text };
         },
       };
       return namespacedToolHost(prefix, host);

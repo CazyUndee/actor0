@@ -59,7 +59,7 @@ test("mcpToolHost namespaces each server's tools and routes calls to them", asyn
     { id: "1", type: "function", function: { name: "demo__echo", arguments: JSON.stringify({ text: "yo" }) } },
     signal,
   );
-  assert.equal(out, "echo: yo");
+  assert.equal(out.text, "echo: yo");
 });
 
 test("a failing MCP tool surfaces as a thrown error, so the harness records a failure", async () => {
@@ -77,8 +77,8 @@ test("two servers offering the same tool name do not collide", async () => {
   const host = await mcpToolHost([a, b]);
   assert.deepEqual(host.definitions().map((d) => d.function.name).sort(), ["alpha__read", "beta__read"]);
   const call = (name: string) => host.execute({ id: "1", type: "function", function: { name, arguments: "{}" } }, signal);
-  assert.equal(await call("alpha__read"), "alpha-read");
-  assert.equal(await call("beta__read"), "beta-read");
+  assert.equal((await call("alpha__read")).text, "alpha-read");
+  assert.equal((await call("beta__read")).text, "beta-read");
 });
 
 // --- stdio transport, against a real spawned server -----------------------

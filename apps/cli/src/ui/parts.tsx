@@ -611,7 +611,7 @@ export function toolDetail(status: "ok" | "error", output: string): string {
  * by the success path. The one row a user most needs to trust was lying.
  */
 export function toolRowFailed(entry: Entry): boolean {
-  return entry.kind === "tool" && (entry.status === "error" || (entry.name === "shell" && exitedNonZero(entry.output)));
+  return entry.kind === "tool" && (entry.status === "error" || (entry.name === "shell" && exitedNonZero(entry.output.text ?? String(entry.output.data))));
 }
 
 /**
@@ -755,9 +755,10 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
       // point, and a bare "edited file.ts" tells the reader nothing about what
       // moved. The diff is fenced in the tool output; the parenthetical on the
       // row is the token-cheap "1 occurrence · 42 chars" header.
+      const outputText = entry.output.text ?? String(entry.output.data);
       if (entry.name === "edit" && status === "ok") {
-        const diff = parseDiffBlock(entry.output);
-        const detail = /\(([^)]*)\)/.exec(entry.output.split("```diff")[0] ?? "")?.[1];
+        const diff = parseDiffBlock(outputText);
+        const detail = /\(([^)]*)\)/.exec(outputText.split("```diff")[0] ?? "")?.[1];
         return (
           <Box marginTop={1} flexDirection="column">
             <Box>
@@ -774,7 +775,7 @@ export function EntryView({ entry, columns = 80 }: { entry: Entry; columns?: num
           </Box>
         );
       }
-      const detail = toolDetail(status, entry.output);
+      const detail = toolDetail(status, outputText);
       return (
         <Box marginTop={1} flexDirection="column">
           <Box>

@@ -33,7 +33,7 @@ const withWorkspace = async (body: (dir: string) => Promise<void>): Promise<void
 const run = async (candidateId: "A" | "B" | "C" | "D", dir: string, c: ToolCall): Promise<{ output: string; record: CallRecord }> => {
   const candidate = candidateId === "A" ? captureCandidateA(dir) : candidateId === "B" ? CANDIDATE_B : candidateId === "C" ? CANDIDATE_C : CANDIDATE_D;
   const dispatcher = createDispatcher(candidate, createUnderlying({ cwd: dir }));
-  const output = await dispatcher.execute(c, new AbortController().signal);
+  const output = (await dispatcher.execute(c, new AbortController().signal)).text!;
   return { output, record: dispatcher.records[dispatcher.records.length - 1]! };
 };
 
@@ -165,10 +165,10 @@ test("every candidate in the loop plan dispatches a valid call", async () => {
         : isGrouped
           ? { op: "read", path: "note.txt" }
           : { path: "note.txt" };
-      const output = await dispatcher.execute(
+      const output = (await dispatcher.execute(
         call(toolName, toolArgs),
         new AbortController().signal,
-      );
+      )).text!;
       const record = dispatcher.records[dispatcher.records.length - 1]!;
       assert.ok(!/no dispatcher/i.test(output), `${candidate.id}: fell through the dispatcher: ${output}`);
       assert.equal(record.schemaValid, true, `${candidate.id}: the call must be schema-valid`);

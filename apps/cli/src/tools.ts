@@ -1,4 +1,4 @@
-import type { ToolCall, ToolDefinition, ToolHost } from "@actor0/harness";
+import type { ToolCall, ToolDefinition, ToolHost, ToolResult } from "@actor0/harness";
 import { readFile, readdir, realpath, stat, writeFile, mkdir, open } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, dirname, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -1624,7 +1624,7 @@ export function createToolHost(options: { cwd: string; taskDelegate?: TaskDelega
   return {
     definitions: () => TOOLS.map((tool) => tool.definition),
 
-    async execute(call: ToolCall, signal: AbortSignal): Promise<string> {
+    async execute(call: ToolCall, signal: AbortSignal): Promise<ToolResult<unknown>> {
       const tool = BY_NAME.get(call.function.name);
       if (!tool) {
         throw new Error(
@@ -1644,11 +1644,12 @@ export function createToolHost(options: { cwd: string; taskDelegate?: TaskDelega
       }
 
       if (signal.aborted) throw new Error("cancelled before the tool ran");
-      return tool.run(args, {
+      const text = await tool.run(args, {
         cwd: options.cwd,
         signal,
         ...(options.taskDelegate ? { taskDelegate: options.taskDelegate } : {}),
       });
+      return { data: text, text };
     },
   };
 }

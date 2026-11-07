@@ -96,7 +96,7 @@ test("tool_start shows activity in the live region", () => {
 test("tool_result commits a permanent line and clears the spinner", () => {
   const state = feed([
     { type: "tool_start", call: call("read", { path: "a.ts" }) },
-    { type: "tool_result", call: call("read", { path: "a.ts" }), output: "contents" },
+    { type: "tool_result", call: call("read", { path: "a.ts" }), output: { data: "contents", text: "contents" } },
   ]);
   assert.equal(state.live.tool, undefined);
   assert.deepEqual(lastEntry(state.entries), {
@@ -104,7 +104,7 @@ test("tool_result commits a permanent line and clears the spinner", () => {
     name: "read",
     target: "a.ts",
     status: "ok",
-    output: "contents",
+    output: { data: "contents", text: "contents" },
   });
 });
 
@@ -115,7 +115,7 @@ test("reasoning lands before the tool call it led to, not after it", () => {
   const state = feed([
     { type: "reasoning", delta: "Checking repository access" },
     { type: "tool_start", call: call("bash", { command: "ls -la" }) },
-    { type: "tool_result", call: call("bash", { command: "ls -la" }), output: "notes.md" },
+    { type: "tool_result", call: call("bash", { command: "ls -la" }), output: { data: "notes.md", text: "notes.md" } },
     { type: "done", text: "There is one file", complete: true },
   ]);
   assert.deepEqual(
@@ -145,7 +145,7 @@ test("prose streamed before a tool call is committed at the call, not carried in
     { type: "attempt_start" },
     { type: "token", delta: "Let me check the file." },
     { type: "tool_call", tool_calls: [call("read", { path: "a.ts" })] },
-    { type: "tool_result", call: call("read", { path: "a.ts" }), output: "contents" },
+    { type: "tool_result", call: call("read", { path: "a.ts" }), output: { data: "contents", text: "contents" } },
     { type: "attempt_start" },
     { type: "token", delta: "It says hello." },
     { type: "done", text: "It says hello.", complete: true },
@@ -165,7 +165,7 @@ test("a tool call with no prose commits nothing at the call", () => {
   const state = feed([
     { type: "attempt_start" },
     { type: "tool_call", tool_calls: [call("read", { path: "a.ts" })] },
-    { type: "tool_result", call: call("read", { path: "a.ts" }), output: "contents" },
+    { type: "tool_result", call: call("read", { path: "a.ts" }), output: { data: "contents", text: "contents" } },
     { type: "attempt_start" },
     { type: "token", delta: "Done." },
     { type: "done", text: "Done.", complete: true },
@@ -180,7 +180,7 @@ test("reasoning flushed by an early tool is not committed twice", () => {
   const state = feed([
     { type: "reasoning", delta: "first thought" },
     { type: "tool_call", tool_calls: [call("read", { path: "a.ts" })] },
-    { type: "tool_result", call: call("read", { path: "a.ts" }), output: "contents" },
+    { type: "tool_result", call: call("read", { path: "a.ts" }), output: { data: "contents", text: "contents" } },
     { type: "reasoning", delta: "second thought" },
     { type: "done", text: "done", complete: true },
   ]);
@@ -193,7 +193,7 @@ test("a failed tool is distinguished from a successful one", () => {
   const state = applyEvent(initialConversation(), {
     type: "tool_result",
     call: call("read"),
-    output: "Tool failed: ENOENT",
+    output: { data: "Tool failed: ENOENT", text: "Tool failed: ENOENT" },
     error: "Tool failed: ENOENT",
   });
   const entry = lastEntry(state.entries);

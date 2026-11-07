@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
-import type { ToolCall, ToolHost } from "@actor0/harness";
+import type { ToolCall, ToolHost, ToolResult } from "@actor0/harness";
 import { McpServer, type McpServerInfo, type McpServerTool } from "./mcp.js";
 
 /**
@@ -40,15 +40,17 @@ export function mcpToolsFromHost(host: ToolHost): McpServerTool[] {
       name: tool.name,
       description: tool.description,
       inputSchema: tool.parameters,
-      run: (args: Record<string, unknown>): Promise<string> =>
-        host.execute(
+      run: async (args: Record<string, unknown>): Promise<string> => {
+        const result = await host.execute(
           {
             id: "mcp",
             type: "function",
             function: { name: tool.name, arguments: JSON.stringify(args) },
           },
           new AbortController().signal,
-        ),
+        );
+        return result.text ?? String(result.data);
+      },
     };
   });
 }
@@ -70,7 +72,7 @@ export function restrictedToolHost(host: ToolHost, names: string[]): ToolHost {
   const offered = new Set(names);
   return {
     definitions: () => host.definitions().filter((definition) => offered.has(definition.function.name)),
-    async execute(call: ToolCall, signal: AbortSignal): Promise<string> {
+    async execute(call: ToolCall, signal: AbortSignal): Promise<ToolResult<unknown>> {
       if (!offered.has(call.function.name)) {
         const available = host.definitions().filter((definition) => offered.has(definition.function.name));
         throw new Error(
