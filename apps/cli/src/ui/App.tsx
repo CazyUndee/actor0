@@ -371,6 +371,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }, 16);
     return () => clearInterval(id);
   }, [busy]);
+  // Disable mouse capture in non-chat modes so the terminal handles text
+  // selection natively (click-drag to select/copy). Re-enable in chat.
+  useEffect(() => {
+    screen.setMouse(mode === "chat");
+  }, [mode, screen]);
 
   // Start the reasoning clock when the model begins to stream reasoning, and
   // stop it when the live region is cleared (the turn committed or reset).

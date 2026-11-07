@@ -53,6 +53,18 @@ export class Screen {
     this.stream.write(init);
   }
 
+  /** Toggle mouse tracking at runtime. When disabled, the terminal handles
+   *  selection natively (click-drag to select/copy). Used to allow text
+   *  selection in popups and menus. */
+  setMouse(enabled: boolean): void {
+    if (this.mouse === enabled) return;
+    this.mouse = enabled;
+    if (this.live) {
+      if (enabled) this.stream.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+      else this.stream.write("\x1b[?1000l\x1b[?1002l\x1b[?1006l");
+    }
+  }
+
   /**
    * Write a full grid of `rows` lines, top to bottom, in place. Each line is
    * positioned explicitly at its row (CUP) and cleared before it is written —
