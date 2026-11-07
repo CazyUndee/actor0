@@ -18,7 +18,7 @@ import { FlagError, parseFlags, resolveCwd } from "./flags.js";
 const HELP = `actor0 — a terminal client for the Actor0 harness
 
 Usage
-  actor0                 start a conversation, resuming the last session
+  actor0                 start a new conversation
   actor0 --new           start a fresh session
   actor0 --resume        open the picker of saved sessions and start one of them
   actor0 --session <id>  resume a specific session
@@ -95,15 +95,11 @@ async function main(): Promise<void> {
     throw error;
   }
 
-  const { latestSession, loadSession } = await import("./session.js");
+  const { loadSession } = await import("./session.js");
   // --resume preloads nothing: the picker is where the choice happens, and
   // silently resuming the most recent session first would have made the list
   // feel like a formality. Neither --new nor --session preloads either.
-  const restored = flags.new || flags.resume
-    ? undefined
-    : flags.session
-      ? loadSession(flags.session)
-      : latestSession();
+  const restored = flags.session ? loadSession(flags.session) : undefined;
 
   if (flags.session && !restored) {
     process.stderr.write(`no saved session with id ${flags.session}. Try: actor0 --sessions\n`);
