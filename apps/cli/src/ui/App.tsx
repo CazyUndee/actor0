@@ -193,7 +193,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const transcriptStartRowRef = useRef(0); // visible index where transcript begins
   const transcriptCountRef = useRef(0);
   const transcriptVisibleBudgetRef = useRef(0);
-  const popupPlainRef = useRef<string[]>([]);
   const popupStartRowRef = useRef(0);
   const popupCountRef = useRef(0);
   // Wall-clock ms when the current live reasoning segment began; used for the
@@ -941,7 +940,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       const popupCount = popupCountRef.current;
       // Selection in popups: drag to select, release to copy.
       if (popupCount > 0 && !event.hover && (event.drag || event.release)) {
-        const pt = { col: Math.max(0, Math.min(innerW - 1, event.x - 1 - 2)), row: event.y - 1 };
+        const pt = { col: Math.max(0, Math.min(innerW - 1, event.x - 1 - 2)), row: Math.max(popupStart, Math.min(popupStart + popupCount - 1, event.y - 1)) };
         if (event.drag) {
           setSelection((s) => s.anchor ? extend(s, pt, Math.max(1, popupStart + popupCount), innerW) : begin(pt, Math.max(1, popupStart + popupCount), innerW));
           return;
@@ -1869,11 +1868,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       const popupRows = menuContent.length > 0 ? menuContent : slashPopup;
       popupStartRowRef.current = popupStart;
       popupCountRef.current = popupRows.length;
-      popupPlainRef.current = popupRows.map((r) => r.map((seg) => seg.text).join(""));
     } else {
       popupStartRowRef.current = 0;
       popupCountRef.current = 0;
-      popupPlainRef.current = [];
     }
     const contentH = rows - 2;
     // The disclaimer owns the last row; fill everything above it.
