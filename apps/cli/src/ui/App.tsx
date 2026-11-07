@@ -195,6 +195,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // Wall-clock ms when the current live reasoning segment began; used for the
   // running timer on the collapsed block and to stamp committed entries.
   const reasoningStartedAtRef = useRef<number | null>(null);
+  const turnStartedAtRef = useRef<number | null>(null);
+  const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showThinking, setShowThinking] = useState(false);
   // Offsets of each committed entry within `entryRowList`, so a mouse click can
   // be mapped back to the entry (and its expanded state) it landed on.
   const entryOffsetsRef = useRef<number[]>([]);
@@ -528,6 +531,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     setJustFinished(false);
     setConversation((state) => withUserInput(state, input));
     setBusy(true);
+    if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
+    thinkingTimerRef.current = null;
+    setShowThinking(false);
+    turnStartedAtRef.current = Date.now();
+    thinkingTimerRef.current = setTimeout(() => {
+      setShowThinking(true);
+      thinkingTimerRef.current = null;
+    }, 200);
     if (!provider) {
       setOnboarding(true);
       setAdd({ kind: "kind" });
@@ -613,6 +624,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         }
       } finally {
         abortRef.current = null;
+        if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
+        thinkingTimerRef.current = null;
+        setShowThinking(false);
+        turnStartedAtRef.current = null;
         setBusy(false);
         setJustFinished(true);
         if (finishedTimer.current) clearTimeout(finishedTimer.current);
@@ -1793,7 +1808,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // completely rather than clipping the pinned composer.
     const chromeH = top.length + blockedRow.length + (menuSlot ? 1 : 0) + slashPopup.length + menuContent.length + composer.length + 1;
     const transcriptV = menuSlot ? 0 : Math.max(0, rows - 2 - chromeH);
-    const live = menuSlot ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), liveReasoningExpanded, reasoningStartedAtRef.current, timing.spinnerMs);
+    const live = menuSlot ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), liveReasoningExpanded, reasoningStartedAtRef.current, timing.spinnerMs, turnStartedAtRef.current, showThinking);
 
     // One layout for every menu: the top area, a blank line, the menu in its
     // static slot, blank fill, the pinned composer. Menus of every kind sit

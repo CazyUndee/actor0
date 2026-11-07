@@ -535,8 +535,9 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
         ...(entry.target ? [{ text: `  ${entry.target}`, color: color.muted } as Seg] : []),
       ];
       const rows: Seg[][] = [head];
+      const outputText = entry.output.text ?? String(entry.output.data);
       if (entry.name === "edit" && !failed) {
-        for (const d of parseDiffBlock(entry.output)) {
+        for (const d of parseDiffBlock(outputText)) {
           const sign = d.kind === "add" ? "+" : d.kind === "remove" ? "-" : " ";
           const t = d.kind === "add" ? color.success : d.kind === "remove" ? color.error : color.muted;
           const num = d.line !== undefined ? String(d.line).padStart(4) : "    ";
@@ -545,7 +546,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
       } else {
         // Output reads as an indented block under the header, in the muted tone
         // — `dim` was nearly invisible on the filled background.
-        for (const line of toolOutputLines(failed ? "error" : "ok", entry.output, cols - 6)) rows.push(plain(`  ${line}`, color.muted));
+        for (const line of toolOutputLines(failed ? "error" : "ok", outputText, cols - 6)) rows.push(plain(`  ${line}`, color.muted));
       }
       // A grey, highlighted rounded rectangle — the tool call reads as its own
       // block rather than more transcript chatter.
@@ -585,9 +586,36 @@ export function helpBox(cols: number): Seg[][] {
   return menuRows({ title: "commands", items, width });
 }
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
-export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, msPerFrame = 150): Seg[][] {
+export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, msPerFrame = 150, ...rest: any[]): Seg[][] {
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
-  if (!busy) return [];
+  let showThinking = false;
+  let turnStartedAt: number | null = null;
+  for (const arg of rest) {
+    if (typeof arg === "boolean") {
+      if (arg) showThinking = true;
+    } else if (typeof arg === "number") {
+      if (arg >= 1_000_000_000_000) {
+        turnStartedAt = arg;
+        if (Date.now() - arg >= 200) showThinking = true;
+      } else if (arg >= 200) {
+        showThinking = true;
+      }
+    } else if (arg && typeof arg === "object") {
+      if (typeof arg.show === "boolean" && arg.show) showThinking = true;
+      if (typeof arg.startedAt === "number") {
+        turnStartedAt = arg.startedAt;
+        const now = typeof arg.now === "number" ? arg.now : Date.now();
+        if (now - arg.startedAt >= 200) showThinking = true;
+      }
+      if (typeof arg.elapsedMs === "number" && arg.elapsedMs >= 200) showThinking = true;
+      if (typeof arg.turnStartedAt === "number") {
+        turnStartedAt = arg.turnStartedAt;
+        const now = typeof arg.now === "number" ? arg.now : Date.now();
+        if (now - arg.turnStartedAt >= 200) showThinking = true;
+      }
+    }
+  }
+  if (!busy && !showThinking) return [];
   const spin = waitingOnUser ? "⏸" : "◐◓◑◒"[frame % 4];
   const out: Seg[][] = [];
   if (live.retrying) { out.push(blank()); out.push([{ text: `${spin} `, color: color.warning }, { text: `retrying after an interrupted attempt (${elapsed}s)`, color: color.warning }]); }
@@ -616,6 +644,18 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
       out.push(blank());
       out.push(...box([row], cols, { border: color.dim }));
     }
+  }
+  if (!live.reasoning.trim() && showThinking) {
+    const effectiveStarted = turnStartedAt ?? reasoningStartedAt;
+    const elapsedSec = effectiveStarted != null ? Math.max(0, Date.now() - effectiveStarted) / 1000 : elapsed;
+    const timer = formatTimer(elapsedSec);
+    const inner = Math.max(4, cols - 2);
+    const shimmer = shimmerSegs("thinking", frame, 3.0, msPerFrame);
+    const shimmerW = shimmer.reduce((n, s) => n + s.text.length, 0);
+    const fill = Math.max(0, inner - shimmerW - timer.length);
+    const row: Seg[] = [...shimmer, { text: " ".repeat(fill) }, { text: timer, color: color.dim }];
+    out.push(blank());
+    out.push(...box([row], cols, { border: color.dim }));
   }
   // The streamed answer is boxed from the first token, identical to the
   // committed entry, so the border is there while it generates and there is no
