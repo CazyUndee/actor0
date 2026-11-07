@@ -1,4 +1,4 @@
-import type { HarnessEvent, ToolCall, Usage } from "@actor0/harness";
+import type { ChatMessage, HarnessEvent, ToolCall, ToolResult, Usage } from "@actor0/harness";
 
 /**
  * The CLI's view of a conversation, derived purely from harness events.
@@ -17,7 +17,7 @@ export type Entry =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string; partial: boolean }
   | { kind: "reasoning"; text: string; durationSeconds?: number }
-  | { kind: "tool"; name: string; target: string; status: "ok" | "error"; output: string }
+  | { kind: "tool"; name: string; target: string; status: "ok" | "error"; output: ToolResult<unknown> }
   | { kind: "notice"; tone: "info" | "warn" | "error"; text: string }
   | { kind: "help" }
   | { kind: "plan"; title: string; plan: string };
@@ -56,6 +56,57 @@ export type ConversationState = {
 export const emptyLive = (): Live => ({ text: "", reasoning: "", partial: false });
 
 export const initialConversation = (): ConversationState => ({ entries: [], live: emptyLive() });
+
+/**
+ * Rebuild conversation entries from stored messages, for session resume.
+ *
+ * Stored messages carry the full transcript (user, assistant, tool results)
+ * but the UI's `entries` array is only built up through harness events during
+ * a turn. Without this, a resumed session shows an empty transcript even
+ * though the model can see the whole conversation.
+ */
+export function entriesFromMessages(messages: ChatMessage[]): Entry[] {
+  const entries: Entry[] = [];
+  // Index tool results by their call id so we can attach them to the tool entry.
+  const toolResults = new Map<string, ChatMessage>();
+  for (const m of messages) {
+    if (m.role === "tool" && m.tool_call_id) toolResults.set(m.tool_call_id, m);
+  }
+  for (const m of messages) {
+    if (m.role === "user") {
+      if (typeof m.content === "string" && m.content.trim()) {
+        entries.push({ kind: "user", text: m.content });
+      }
+    } else if (m.role === "assistant") {
+      const content = typeof m.content === "string" ? m.content : "";
+      const partial = content.endsWith("[interrupted]") || content.endsWith("[failed]") || content.endsWith("[cut off at the output limit]");
+      // Strip the marker for display — it's metadata, not content.
+      const text = content
+        .replace(/\n\n\[(interrupted|failed|cut off at the output limit)\]$/, "")
+        .trim();
+      if (text) {
+        entries.push({ kind: "assistant", text, partial });
+      }
+      // Tool calls on this assistant message become tool entries.
+      if (m.tool_calls) {
+        for (const call of m.tool_calls) {
+          const result = toolResults.get(call.id);
+          const resultText = result?.content ?? "";
+          const isError = resultText.startsWith("Tool failed:") || resultText.includes("[cancelled]");
+          entries.push({
+            kind: "tool",
+            name: call.function.name,
+            target: call.function.arguments,
+            status: isError ? "error" : "ok",
+            output: { data: resultText, text: resultText, isError },
+          });
+        }
+      }
+    }
+    // tool messages are consumed above; system messages are skipped.
+  }
+  return entries;
+}
 
 /**
  * Echo the user's message into the transcript.
@@ -282,7 +333,7 @@ export function applyEvent(
         name: event.rejection.name,
         target: "protocol block",
         status: "error",
-        output: event.rejection.reason,
+        output: { data: event.rejection.reason, text: event.rejection.reason },
       };
       return { ...flushed, entries: [...flushed.entries, entry] };
     }

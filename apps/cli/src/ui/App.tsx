@@ -19,6 +19,7 @@ import {
 } from "../config.js";
 import {
   applyEvent,
+  entriesFromMessages,
   emptyLive,
   initialConversation,
   totalUsage,
@@ -147,7 +148,7 @@ function wrap(current: number, count: number, delta: number): number {
 
 export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", transport, screen, stdin, onExit, openSessionPicker }: AppProps) {
   const [config, setConfig] = useState<CliConfig>(initialConfig);
-  const [conversation, setConversation] = useState<ConversationState>(() => initialConversation());
+  const [conversation, setConversation] = useState<ConversationState>(() => resumed?.messages?.length ? { entries: entriesFromMessages(resumed.messages), live: emptyLive() } : initialConversation());
   // The draft is edited on every keystroke, and several keystrokes can land
   // in one React batch before a re-render — so a closure `caret` is stale and
   // insertions happen at the wrong offset, reordering characters (typing
@@ -399,7 +400,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     sessionIdRef.current = target.id;
     sessionCreatedAtRef.current = target.createdAt || new Date().toISOString();
     messagesRef.current = target.messages;
-    setConversation(initialConversation());
+    setConversation(target.messages?.length ? { entries: entriesFromMessages(target.messages), live: emptyLive() } : initialConversation());
     setContextTokens(0);
     setScrollOffset(0);
     setMode("chat");
