@@ -448,7 +448,7 @@ export class McpClient {
       {
         protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: this.options.clientInfo ?? { name: "actor0", version: "0.5.6" },
+        clientInfo: this.options.clientInfo ?? { name: "actor0", version: "0.5.7" },
       },
       signal,
     )) as { serverInfo?: McpServerInfo };
