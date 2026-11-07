@@ -463,6 +463,9 @@ const writeTool: CliTool = {
   async run(args, ctx) {
     const target = await within(ctx.cwd, requireString(args, "path"));
     const content = requireText(args, "content");
+    if (content.includes("\u0000")) {
+      throw new Error(`Refusing to write binary content to ${target}.`);
+    }
     const existed = await stat(target).then(
       () => true,
       () => false,
@@ -530,8 +533,18 @@ const editTool: CliTool = {
     // Empty is the *point* of an edit as often as not — that is a deletion.
     const newString = requireText(args, "new_string");
     const replaceAll = args.replace_all === true;
+    if (oldString === newString) {
+      throw new Error(`old_string and new_string are identical in ${target}; nothing to change.`);
+    }
 
+    const beforeStat = await stat(target).catch(() => null);
+    if (beforeStat && beforeStat.size > 1024 * 1024 * 1024) {
+      throw new Error(`File is too large to edit (${beforeStat.size} bytes).`);
+    }
     const raw = await readFile(target, "utf8");
+    if (raw.includes("\u0000")) {
+      throw new Error(`${target} looks like a binary file; edit only operates on text.`);
+    }
     const { bom, body, crlf } = splitTextFile(raw);
     const content = toLf(body);
     const before = toLf(oldString);
@@ -559,6 +572,11 @@ const editTool: CliTool = {
     // replacement in `() => replace` for the same reason.
     const updated = content.split(before).join(after);
     const written = joinTextFile(bom, updated, crlf);
+    // Refuse to clobber a file that changed on disk since we read it.
+    const afterStat = await stat(target).catch(() => null);
+    if (beforeStat && afterStat && beforeStat.mtimeMs !== afterStat.mtimeMs) {
+      throw new Error(`${target} changed on disk since it was read; re-read before editing.`);
+    }
     await writeFile(target, written, "utf8");
     invalidateRepoIndex(ctx.cwd);
     const changed = occurrences === 1 ? "1 occurrence" : `${occurrences} occurrences`;
