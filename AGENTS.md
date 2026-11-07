@@ -544,6 +544,13 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
   experience actually changes. Every commit bumps the build counter; the
   build counter is the thing that moves on every commit. A build is not a
   release — only a version bump is.
+- **Determine the current build number from recent commits.** Before
+  committing, check the most recent commit body for `(build: N)` and use
+  `N + 1`. Do not hardcode `(build: 1)` — multiple agents have each written
+  `(build: 1)` instead of incrementing, which makes the counter useless.
+  If the most recent commit has no build number, treat it as `0` and start
+  at `1`. After a version bump, the build counter resets to `0`, so the
+  next build-class commit is `(build: 1)`.
 - **Versions bump only on user-facing changes.** A `MAJOR.MINOR.PATCH` bump is
   warranted when a commit meaningfully changes the way the user interacts with
   the application or how it responds — a new command, a reworked UI surface, a
