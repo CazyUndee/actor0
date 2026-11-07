@@ -941,7 +941,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // Coordinates arrive 1-based from the terminal.
     const cols = screen.size.cols;
     const innerW = Math.max(8, frameInnerWidth(cols));
-    const count = transcriptCountRef.current;
 
     // Hover events (motion with no button held) must never start a transcript
     // selection — they are only meaningful over menus, handled above.
@@ -972,31 +971,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // In any menu, the mouse drives the cursor (hover = focus) and a click
     // activates the item under the pointer — the same outcome as Enter.
     if (mode !== "chat" && event.button === "left") {
-      const popupStart = popupStartRowRef.current;
-      const popupCount = popupCountRef.current;
-      // A drag begins/extends a text selection; the release that ends that
-      // drag copies it. A plain click (no drag) must fall through to menu
-      // activation below, so the release is only intercepted while a
-      // selection is actually in progress (`selection.dragging`).
-      if (popupCount > 0 && !event.hover && event.drag) {
-        const pt = { col: Math.max(0, Math.min(innerW - 1, event.x - 1 - 2)), row: Math.max(popupStart, Math.min(popupStart + popupCount - 1, event.y - 1)) };
-        setSelection((s) => s.anchor ? extend(s, pt, Math.max(1, popupStart + popupCount), innerW) : begin(pt, Math.max(1, popupStart + popupCount), innerW));
-        return;
-      if (popupCount > 0 && event.release && selection.dragging) {
-        let copiedText = "";
-        setSelection((s) => {
-          const done = finish(s);
-          if (hasSelection(done)) copiedText = selectedText(done, plainRowsRef.current);
-          return done;
-        });
-        if (copiedText.trim()) {
-          copyToClipboard(copiedText);
-          flashComposerHint(`copied ${copiedText.split("\n").length} line${copiedText.split("\n").length === 1 ? "" : "s"}`);
-        }
-        setSelection(emptySelection());
-        return;
-      }
-      }
       // Dedup repeated hover reports for the same cell so a scroll-induced
       // re-report cannot snap the cursor back to the pointer's resting cell.
       if (event.hover) {
@@ -1213,19 +1187,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // to the transcript text, not to screen rows, so it follows the text when
     // the transcript scrolls and can be copied even when scrolled off screen.
     const toContentPoint = (x: number, y: number): { col: number; row: number } => {
-      const v = y - 1; // visible row index (top border is row 0)
-      const startRow = transcriptStartRowRef.current;
-      const winStart = transcriptWindowStartRef.current;
-      const budget = Math.max(1, transcriptVisibleBudgetRef.current || 1);
-      const visibleCount = Math.min(budget, count);
-      let contentRow = 0;
-      if (count > 0) {
-        if (v < startRow) contentRow = 0;
-        else if (v >= startRow + visibleCount) contentRow = count - 1;
-        else contentRow = Math.max(0, Math.min(count - 1, winStart + (v - startRow)));
-      }
+      const v = y - 1;
       const innerCol = Math.max(0, Math.min(innerW - 1, x - 1 - 2));
-      return { col: innerCol, row: contentRow };
+      const rows = Math.max(1, plainRowsRef.current.length);
+      return { col: innerCol, row: Math.max(0, Math.min(rows - 1, v)) };
     };
     if (event.button === "left") {
       const pt = toContentPoint(event.x, event.y);
@@ -1258,18 +1223,16 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         }
       }
       if (event.drag) {
-        setSelection((s) => extend(s, pt, Math.max(1, count), innerW));
+        setSelection((s) => extend(s, pt, Math.max(1, plainRowsRef.current.length), innerW));
         return;
       }
       if (!event.release) {
-        if (count <= 0) return;
-        setSelection(() => begin(pt, Math.max(1, count), innerW));
-        return;
+        setSelection(() => begin(pt, Math.max(1, plainRowsRef.current.length), innerW));
       }
       let copiedText = "";
       setSelection((s) => {
         const done = finish(s);
-        if (count > 0) copiedText = selectedText(done, transcriptPlainRef.current);
+        if (plainRowsRef.current.length > 0) copiedText = selectedText(done, plainRowsRef.current);
         return done;
       });
       if (copiedText.trim()) {
@@ -1324,7 +1287,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       // habit) instead of exiting — the selection is the receipt the user just
       // made, and quitting would throw it away.
       if (hasSelection(selection)) {
-        const text = selectedText(selection, transcriptPlainRef.current);
+        const text = selectedText(selection, plainRowsRef.current);
         if (text.trim()) {
           copyToClipboard(text);
           flashComposerHint(`copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"}`);
@@ -1967,27 +1930,17 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // in terminal coordinates, so shift it into this inner space once, here,
     // where both numbers are known.
     const sel = selection;
-    const winStart = transcriptWindowStartRef.current;
-    const startRow = transcriptStartRowRef.current;
-    const budget = Math.max(1, transcriptVisibleBudgetRef.current || 1);
-    const visibleCount = Math.min(budget, transcriptCountRef.current);
-    const popupStart = popupStartRowRef.current;
-    const popupCount = popupCountRef.current;
-    const selRows = hasSelection(sel)
-      ? spans(sel, innerW)
-          .map((sp) => {
-            const contentIndex = sp.row;
-            if (contentIndex >= winStart && contentIndex < winStart + visibleCount) {
-              const visibleIndex = startRow + (contentIndex - winStart);
-              return { row: visibleIndex, from: sp.from, to: sp.to };
-            }
-            if (contentIndex >= popupStart && contentIndex < popupStart + popupCount) {
-              return { row: contentIndex, from: sp.from, to: sp.to };
-            }
-            return null;
-          })
-          .filter((x): x is { row: number; from: number; to: number } => x !== null)
-      : [];
+     const selRows = hasSelection(sel)
+       ? spans(sel, innerW)
+           .map((sp) => {
+             const row = sp.row;
+             if (row >= 0 && row < visible.length) {
+               return { row, from: sp.from, to: sp.to };
+             }
+             return null;
+           })
+           .filter((x): x is { row: number; from: number; to: number } => x !== null)
+       : [];
     const painted = visible.map((row, i) => {
       const sp = selRows.find((x) => x.row === i);
       if (!sp) return paint(row);
