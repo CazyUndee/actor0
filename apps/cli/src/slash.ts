@@ -14,6 +14,7 @@ export type SlashCommand =
   | { name: "help" }
   | { name: "clear" }
   | { name: "model"; model?: string }
+  | { name: "mcp" }
   | { name: "provider" }
   | { name: "setup" }
   | { name: "usage" }
@@ -104,6 +105,8 @@ export function parseSlash(input: string): SlashCommand | undefined {
     // the command takes no argument is less useful than showing it.
     case "provider":
       return { name: "provider" };
+    case "mcp":
+      return { name: "mcp" };
     case "setup":
       return { name: "setup" };
     case "usage":
