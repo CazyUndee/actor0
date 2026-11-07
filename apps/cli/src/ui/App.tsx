@@ -535,6 +535,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     thinkingTimerRef.current = null;
     setShowThinking(false);
     turnStartedAtRef.current = Date.now();
+    setLiveReasoningExpanded(false);
     thinkingTimerRef.current = setTimeout(() => {
       setShowThinking(true);
       thinkingTimerRef.current = null;

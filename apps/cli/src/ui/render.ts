@@ -646,7 +646,7 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
       out.push(...box([row], cols, { border: color.dim }));
     }
   }
-  if (!live.reasoning.trim() && showThinking) {
+  if (!live.reasoning.trim() && !live.text.trim() && showThinking) {
     const effectiveStarted = turnStartedAt ?? reasoningStartedAt;
     const elapsedSec = effectiveStarted != null ? Math.max(0, Date.now() - effectiveStarted) / 1000 : elapsed;
     const timer = formatTimer(elapsedSec);
