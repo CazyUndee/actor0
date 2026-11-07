@@ -541,8 +541,9 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
 - **Every commit bumps the build, not the version.** A commit increments the
   build counter (tracked in commit bodies and release notes as `(build: N)`).
   The version string (`MAJOR.MINOR.PATCH`) only changes when the user's
-  experience actually changes. Every commit is a build release by default; the
-  build counter is the thing that moves on every commit.
+  experience actually changes. Every commit bumps the build counter; the
+  build counter is the thing that moves on every commit. A build is not a
+  release — only a version bump is.
 - **Versions bump only on user-facing changes.** A `MAJOR.MINOR.PATCH` bump is
   warranted when a commit meaningfully changes the way the user interacts with
   the application or how it responds — a new command, a reworked UI surface, a
