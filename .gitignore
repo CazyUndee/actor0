@@ -30,3 +30,14 @@
 # Python bytecode from the Terminal-Bench adapter, imported on the host.
 __pycache__/
 *.pyc
+
+# Agent scratch: error logs, probe outputs, capture logs, temp scripts,
+# benchmark output. Not part of the product; a stray `git add -A` would
+# happily publish them.
+*.err
+.mcp-serve-stderr.txt
+*-probe.txt
+probe.ts
+halo-tui.md
+run-tools-test.ps1
+benchmark/
