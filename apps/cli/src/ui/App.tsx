@@ -570,6 +570,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
                 reasoningStartedAtMs: reasoningStartedAtRef.current,
               });
               if (event.type === "done") {
+                setScrollOffset(0);
                 const answer = next.entries[next.entries.length - 1];
                 if (answer?.kind === "assistant") updateLive([...messagesRef.current, { role: "assistant", content: answer.text }]);
               }

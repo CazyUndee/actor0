@@ -588,10 +588,10 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
   if (!busy) return [];
   const spin = waitingOnUser ? "⏸" : "◐◓◑◒"[frame % 4];
-  const out: Seg[][] = [blank()];
-  if (live.retrying) out.push([{ text: `${spin} `, color: color.warning }, { text: `retrying after an interrupted attempt (${elapsed}s)`, color: color.warning }]);
-  else if (live.tool) out.push([{ text: `${spin} `, color: color.accent }, { text: `${toolDisplayName(live.tool.name)}${live.tool.target ? `  ${live.tool.target}` : ""}`, color: color.muted }]);
-  else if (live.status) out.push([{ text: `${spin} `, color: color.accent }, { text: live.status, color: color.muted }]);
+  const out: Seg[][] = [];
+  if (live.retrying) { out.push(blank()); out.push([{ text: `${spin} `, color: color.warning }, { text: `retrying after an interrupted attempt (${elapsed}s)`, color: color.warning }]); }
+  else if (live.tool) { out.push(blank()); out.push([{ text: `${spin} `, color: color.accent }, { text: `${toolDisplayName(live.tool.name)}${live.tool.target ? `  ${live.tool.target}` : ""}`, color: color.muted }]); }
+  else if (live.status) { out.push(blank()); out.push([{ text: `${spin} `, color: color.accent }, { text: live.status, color: color.muted }]); }
   if (live.reasoning.trim()) {
     // The current reasoning block: collapsed it is a one-row rounded rectangle
     // identical in height to the composer, with a shimmer on the left and a
