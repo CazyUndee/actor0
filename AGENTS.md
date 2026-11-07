@@ -538,31 +538,38 @@ Versions live in three places and all three must move together: `apps/cli/packag
 `packages/harness/package.json`, and `packages/providers/package.json`, plus the
 hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.test.ts`.
 
-- **Bump only on patch-class changes.** A version bump is warranted when a
-  commit meaningfully changes the way the user interacts with the application
-  or how it responds — a new command, a reworked UI surface, a changed input
-  gesture, a different error or status message, a removed or relocated surface.
-  "Does it change the user's experience?" is the test. Build-class changes — a
-  dependency bump, a CI workflow edit, a test-only change, an internal refactor
-  with no externally visible behaviour change, a fix that never reaches the
-  user — are **build releases, not patches**, and do **not** bump the version.
-  `[chore]` and `[misc]` commits never bump unless they touch runtime behaviour
-  that the user experiences.
-- **How much to bump.** Versions are `MAJOR.MINOR.PATCH`. Bump exactly one
-  component per commit, never two, and reset the lower ones to 0:
+- **Every commit bumps the build, not the version.** A commit increments the
+  build counter (tracked in commit bodies and release notes as `(build: N)`).
+  The version string (`MAJOR.MINOR.PATCH`) only changes when the user's
+  experience actually changes. Every commit is a build release by default; the
+  build counter is the thing that moves on every commit.
+- **Versions bump only on user-facing changes.** A `MAJOR.MINOR.PATCH` bump is
+  warranted when a commit meaningfully changes the way the user interacts with
+  the application or how it responds — a new command, a reworked UI surface, a
+  changed input gesture, a different error or status message, a removed or
+  relocated surface. "Does it change the user's experience?" is the test.
+  Build-class changes — a dependency bump, a CI workflow edit, a test-only
+  change, an internal refactor with no externally visible behaviour change, a
+  fix that never reaches the user — bump the build counter only, never the
+  version. `[chore]` and `[misc]` commits bump the build only unless they touch
+  runtime behaviour the user experiences.
+- **How much to bump the version.** Versions are `MAJOR.MINOR.PATCH`. Bump
+  exactly one component per commit, never two, and reset the lower ones — and
+  the build counter — to 0:
     - `PATCH` (0.2.0 -> 0.2.1): a `[fix]` or `[feat]` that meaningfully changes
       how the user interacts with the CLI and how it responds — e.g. a new
       command, a reworked menu or picker, a changed click/hover/key gesture, a
-      removed or relocated UI surface, a different error or status message. This
-      is the default for a normal user-facing commit.
+      removed or relocated UI surface, a different error or status message.
+      Resets the build counter to 0.
     - `MINOR` (0.2.0 -> 0.3.0): a new **top-level capability** — a new tool,
       a new provider transport, or an entirely new subsystem the user could
       point to and name. Most `[feat]`/`[upgrade]` commits are *not* this;
       a menu, picker, renderer, or mouse change is a patch even when tagged
-      `[feat]`. Resets patch to 0.
+      `[feat]`. Resets patch and the build counter to 0.
     - `MAJOR` (0.3.0 -> 1.0.0): only when the user explicitly says to bump
-      major. Never infer a major bump from the code alone. Resets minor and
-      patch to 0. Needs a migration note in the commit body.
+      major. Never infer a major bump from the code alone. Resets minor,
+      patch, and the build counter to 0. Needs a migration note in the commit
+      body.
   When in doubt between patch and minor, pick **patch** — the bar for minor
   is a genuinely new capability, not any user-facing change, and a string of
   over-bumped minors (0.2.0 -> 0.5.0) is version churn that buries the
@@ -573,8 +580,10 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
   the harness/providers versions are consumed by dependents and by the MCP
   clientInfo fallback. Never leave one behind.
 - **No silent versions.** If a commit touches behaviour, the version field in
-  the same commit's diff is the evidence it was considered. A review that sees
-  a behaviour change with no version change should flag it.
+  the same commit's diff is the evidence a version bump was considered; the
+  build counter in the commit body is the evidence a build bump was
+  considered. A review that sees a behaviour change with no version or build
+  change should flag it.
 - **Tag and release every version bump.** A version bump is not done when the
   `package.json` changes; it is done when there is a git tag `vX.Y.Z` on that
   commit *and* a GitHub release at that tag carrying detailed release notes.
