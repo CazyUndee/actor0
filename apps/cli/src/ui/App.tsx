@@ -1242,7 +1242,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode === "chat") {
       // The open slash menu owns the wheel: it moves through the command list.
       if (slashEngaged) return setSlashIndex((i) => wrapSlash(i, slashMatches.length, dir));
-      return setScrollOffset((o) => (dir < 0 ? o + 3 : Math.max(0, o - 3)));
+      return setScrollOffset((o) => {
+        const maxOffset = Math.max(0, transcriptCountRef.current - transcriptVisibleBudgetRef.current);
+        return dir < 0 ? Math.min(o + 3, maxOffset) : Math.max(0, o - 3);
+      });
     }
     if (mode === "menu") return setMenuIndex((i) => wrap(i, filteredProviders.length + 2, dir));
     if (mode === "model") return setModelCursor((c) => wrap(c, Math.max(1, filteredModels.length), dir));
