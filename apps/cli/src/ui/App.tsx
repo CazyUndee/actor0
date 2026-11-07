@@ -933,7 +933,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         const isSub = code >= 100000;
         const itemIndex = isSub ? Math.floor((code - 100000) / 10) : code;
         const subIndex = isSub ? (code - 100000) % 10 : -1;
-        // Hover parity: move the keyboard cursor to the hovered item.
+        // Hover no longer drives focus: a tiny mouse movement was walking the
+        // cursor (and, in scrollable menus, the view) all the way to the top.
+        // Click (release) still activates the item under the pointer.
+        if (!event.hover) {
         if (mode === "menu") {
           setMenuIndex(itemIndex);
           if (isSub) setProviderActionCursor(subIndex);
@@ -951,6 +954,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           const models = add.query ? add.models.filter((m) => m.toLowerCase().includes(add.query.toLowerCase())) : add.models;
           // itemIndex maps into the filtered? menuRows item index is into filtered list? addModelsRows uses models (filtered) list. filteredModels for app? Actually add uses add.models unfiltered passed to addModelsRows then filtered inside. The hit map item index is into the filtered list passed. Need consistency. Simpler: set cursor to itemIndex clamped.
           setAdd((a) => (a.kind === "models" ? { ...a, cursor: Math.min(itemIndex, Math.max(0, models.length - 1)) } : a));
+        }
         }
         // Slash popup hover is handled by the dedicated branch above.
         // Activation on release (click).
