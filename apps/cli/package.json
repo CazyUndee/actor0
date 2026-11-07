@@ -36,5 +36,9 @@
     "@types/react": "^19",
     "tsx": "^4.20",
     "typescript": "^5.9"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CazyUndee/actor0.git"
   }
 }
