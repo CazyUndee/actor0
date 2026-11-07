@@ -58,7 +58,6 @@ import {
   modelPickerRows,
   thinkingPickerRows,
   usagePanelRows,
-  helpBox,
   sessionPickerRows,
   slashPopupRows,
   MENU_WIDTH,
@@ -118,7 +117,7 @@ export type AppProps = {
   onExit: () => void;
 };
 
-type Mode = "chat" | "menu" | "manage" | "add" | "usage" | "model" | "thinking" | "session" | "mcp" | "help";
+type Mode = "chat" | "menu" | "manage" | "add" | "usage" | "model" | "thinking" | "session" | "mcp";
 
 type AddPhase =
   | { kind: "kind" }
@@ -458,12 +457,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   const runCommand = (command: SlashCommand): void => {
     switch (command.name) {
-      case "help":
-        // Help is a centered, height-fitted panel like the other menus, not a
-        // transcript entry (which left it left-aligned and clipped at the top
-        // on a short terminal). esc closes it back to chat.
-        setMode("help");
-        return;
+
       case "clear":
         // A new conversation is a new session: fresh id, no messages, and the
         // context-window indicator wiped too — otherwise the header still
@@ -1355,7 +1349,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode === "usage") return usageKey(key);
     if (mode === "session") return sessionKey(key);
     if (mode === "mcp") return mcpKey(key);
-    if (mode === "help") return helpKey(key);
     if (mode === "add") return addKeyHandler(key);
   };
 
@@ -1664,11 +1657,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
   };
 
-  const helpKey = (key: string): void => {
-    // A reference panel: no search, no cursor — esc just closes it.
-    if (key === "escape") return setMode("chat");
-  };
-
   const usageKey = (key: string): void => {
     if (key === "tab" || key === "right") return setUsageIndex((n) => (n + 1) % PERIODS.length);
     if (key === "left") return setUsageIndex((n) => (n - 1 + PERIODS.length) % PERIODS.length);
@@ -1846,7 +1834,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   // ---- the face ----
   const liveQuiet = !(conversation.live.text || conversation.live.reasoning.trim() || conversation.live.tool || conversation.live.status || conversation.live.retrying);
-  const face: Face = justFinished ? "happy" : busy && liveQuiet ? "startled" : stateFace({ live: conversation.live, lastEntry: conversation.entries[conversation.entries.length - 1], blocked: Boolean(conversation.blocked), busy });
+  const face: Face = justFinished ? "happy" : busy && liveQuiet ? "startled" : stateFace({ live: conversation.live, lastEntry: conversation.entries[conversation.entries.length - 1], notice: conversation.notice, blocked: Boolean(conversation.blocked), busy });
 
   // ---- build the screen and draw it ----
   const entryRowList = useMemo(() => {
@@ -1872,7 +1860,26 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // The composer (the draft input) is always pinned to the bottom — even
     // while a menu is open; the menu renders above it, never in its place.
     const composerMaxH = Math.max(3, Math.min(12, rows - 9));
-    const composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH, topRight: ctrlCPressed ? "press ctrl c again to exit actor0" : composerHint, topRightColor: ctrlCPressed ? color.warning : composerHintColor }).rows;
+    // One line of status lives in the composer's top border, in this order:
+    // ctrl-c's warning (it is about the keystroke in flight), then a transient
+    // hint, then the conversation's notice. Notices used to be transcript
+    // entries, which put interface chatter in the middle of the answer.
+    const status = ctrlCPressed
+      ? { text: "press ctrl c again to exit actor0", color: color.warning }
+      : composerHint
+        ? { text: composerHint, color: composerHintColor ?? color.dim }
+        : conversation.notice
+          ? {
+            text: conversation.notice.text,
+            color:
+              conversation.notice.tone === "error"
+                ? color.error
+                : conversation.notice.tone === "warn"
+                  ? color.warning
+                  : color.info,
+          }
+          : undefined;
+    const composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH, topRight: status?.text, topRightColor: status?.color }).rows;
     const blockedRow = conversation.blocked ? [[{ text: `the agent needs you: ${conversation.blocked.message} — reply to continue, or /clear`, color: color.warning }]] : [];
 
     // Human-readable header: the provider label, the model, branch, context, session.
@@ -2037,11 +2044,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
           sessionQuery,
           Math.min(MENU_WIDTH, innerW - 2),
         );
-        break;
-      case "help":
-        // Centered, height-fitted like the other menu panels; the list of
-        // commands windows inside the box instead of overflowing the terminal.
-        rows = helpBox(Math.min(MENU_WIDTH, innerW - 2), height, hitMap);
         break;
       case "mcp":
         rows = panel(

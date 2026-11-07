@@ -17,7 +17,6 @@ test("a half-typed slash is not a command yet", () => {
 });
 
 test("the documented commands parse", () => {
-  assert.deepEqual(parseSlash("/help"), { name: "help" });
   assert.deepEqual(parseSlash("/clear"), { name: "clear" });
   assert.deepEqual(parseSlash("/quit"), { name: "quit" });
   assert.deepEqual(parseSlash("/model"), { name: "model" });
@@ -31,7 +30,6 @@ test("/model carries an argument", () => {
 });
 
 test("commands are case-insensitive and tolerate surrounding space", () => {
-  assert.deepEqual(parseSlash("  /HELP  "), { name: "help" });
 });
 
 test("aliases resolve to their command", () => {
@@ -40,7 +38,6 @@ test("aliases resolve to their command", () => {
   assert.deepEqual(parseSlash("/p"), { name: "provider" });
   assert.deepEqual(parseSlash("/s"), { name: "setup" });
   assert.deepEqual(parseSlash("/c"), { name: "clear" });
-  assert.deepEqual(parseSlash("/h"), { name: "help" });
   assert.deepEqual(parseSlash("/q"), { name: "quit" });
   assert.deepEqual(parseSlash("/exit"), { name: "quit" });
   assert.deepEqual(parseSlash("/m gpt-4o"), { name: "model", model: "gpt-4o" }, "an alias takes an argument too");

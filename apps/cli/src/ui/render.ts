@@ -1,6 +1,5 @@
 import chalk from "chalk";
 import type { Entry } from "../conversation.js";
-import { HELP_TEXT } from "../slash.js";
 import { color } from "../theme.js";
 import { parseDiffBlock } from "../diff.js";
 import { formatTokens } from "../usage.js";
@@ -553,38 +552,11 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
       return [blank(), ...box(rows, cols, { border: color.muted, bg: color.surface })];
     }
 
-    case "notice": {
-      const isError = entry.tone === "error";
-      const tone = isError ? color.error : entry.tone === "warn" ? color.warning : color.info;
-      const body = isError ? flattenText(entry.text, proseWidth(cols - 4)) : [entry.text];
-      const rows = body.map((l) => [{ text: isError ? "" : "· ", color: tone }, { text: l, color: isError ? color.error : color.muted }]);
-      // A real error (not a failed tool) gets a red highlighted box.
-      return isError ? [blank(), ...box(rows, cols, { border: color.error })] : [blank(), ...rows];
-    }
-
-    case "help": {
-      const out: Seg[][] = [blank()];
-      for (const l of helpBox(cols)) out.push(l);
-      return out;
-    }
-
     default:
       return [];
   }
 }
 
-/** The commands list, as the canonical menu (a reference, not a search). */
-export function helpBox(cols: number, height?: number, hitMapOut?: number[]): Seg[][] {
-  const width = Math.min(MENU_WIDTH, Math.max(40, cols - 2));
-  const items: MenuEntry[] = HELP_TEXT.map(([command, description]) => ({
-    marker: "  ",
-    label: command,
-    detail: description,
-    selectable: false,
-  }));
-  items.push({ line: "esc cancels a running turn · Ctrl+D quits", lineTone: color.dim, selectable: false });
-  return menuRows({ title: "commands", items, width, height, hitMapOut });
-}
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
 export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, // eslint-disable-next-line @typescript-eslint/no-explicit-any
 msPerFrame = 150, ...rest: any[]): Seg[][] {
@@ -680,9 +652,11 @@ const FACE: Record<Face, string> = {
 };
 
 /** The mood from the conversation's state, worst first. */
-export function stateFace(input: { live: { text: string; reasoning: string }; lastEntry?: Entry; blocked: boolean; busy: boolean }): Face {
-  const { live, lastEntry, blocked, busy } = input;
-  if (lastEntry?.kind === "notice" && lastEntry.tone === "error") return "dead";
+export function stateFace(input: { live: { text: string; reasoning: string }; lastEntry?: Entry; notice?: { tone: "info" | "warn" | "error" }; blocked: boolean; busy: boolean }): Face {
+  const { live, lastEntry, notice, blocked, busy } = input;
+  // A failure is status rather than the last thing said, so the grim face is
+  // read off the composer's notice line, not off the transcript.
+  if (notice?.tone === "error") return "dead";
   if (lastEntry?.kind === "tool" && lastEntry.status === "error") return "suffering";
   if (blocked) return "confused";
   if (live.reasoning.trim()) return "thinking";
@@ -780,7 +754,13 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
 
   let topBorder: Seg[];
   if (opts.topRight) {
-    const label = ` ${opts.topRight} `;
+    // The label carries status — a notice or a hint — and status grows: an
+    // error can be a whole sentence. It is clamped to the border it sits in,
+    // because a label wider than the box pushes the closing corner off the
+    // row and the composer stops being a box.
+    const room = Math.max(1, inner - 5);
+    const status = opts.topRight.length > room ? `${opts.topRight.slice(0, room - 1)}…` : opts.topRight;
+    const label = ` ${status} `;
     const pos = Math.max(2, inner - label.length - 1);
     const rightPad = Math.max(0, inner - pos - label.length);
     topBorder = [
