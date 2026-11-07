@@ -636,8 +636,8 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
       const elapsedSec = reasoningStartedAt != null ? Math.max(0, Date.now() - reasoningStartedAt) / 1000 : 0;
       const timer = formatTimer(elapsedSec);
       const inner = Math.max(4, cols - 2);
-      // A fast, lively sweep (3 per second) so a long TTFT wait does not look dead.
-      const shimmer = shimmerSegs("thinking", frame, 3.0, msPerFrame);
+      // A gentle sweep so a long TTFT wait does not look frantic.
+      const shimmer = shimmerSegs("thinking", frame, 1.2, msPerFrame);
       const shimmerW = shimmer.reduce((n, s) => n + s.text.length, 0);
       const fill = Math.max(0, inner - shimmerW - timer.length);
       const row: Seg[] = [...shimmer, { text: " ".repeat(fill) }, { text: timer, color: color.dim }];
@@ -650,7 +650,7 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
     const elapsedSec = effectiveStarted != null ? Math.max(0, Date.now() - effectiveStarted) / 1000 : elapsed;
     const timer = formatTimer(elapsedSec);
     const inner = Math.max(4, cols - 2);
-    const shimmer = shimmerSegs("thinking", frame, 3.0, msPerFrame);
+    const shimmer = shimmerSegs("reading your message", frame, 1.2, msPerFrame);
     const shimmerW = shimmer.reduce((n, s) => n + s.text.length, 0);
     const fill = Math.max(0, inner - shimmerW - timer.length);
     const row: Seg[] = [...shimmer, { text: " ".repeat(fill) }, { text: timer, color: color.dim }];
