@@ -584,18 +584,26 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
   build counter in the commit body is the evidence a build bump was
   considered. A review that sees a behaviour change with no version or build
   change should flag it.
-- **Tag and release every version bump.** A version bump is not done when the
-  `package.json` changes; it is done when there is a git tag `vX.Y.Z` on that
-  commit *and* a GitHub release at that tag carrying detailed release notes.
-  A version that landed without its tag/release is a gap to backfill before
-  doing anything else. Release notes are written **for the GitHub release**
-  (the rendered release body), not committed into the repo as a `vX.Y.Z.md`
-  file — the release is the source of truth, and the in-repo `v0.2.0.md` is a
-  historical artefact, not the pattern to copy.
-  Detailed means: for the version's range of commits, list the feature / fix /
-  infra commits and, for each user-facing one, what it changes and why; a
-  `[fix]` release still names what was broken and what now works. Write it
-  for the next person auditing the version, not for the changelog skimmer.
+- **Tag and release every version bump.** A version bump is not done when
+  the `package.json` changes; it is done when there is a git tag `vX.Y.Z`
+  on that commit *and* a GitHub release at that tag carrying detailed
+  release notes. A version that landed without its tag/release is a gap to
+  backfill before doing anything else. Release notes are written **for the
+  GitHub release** (the rendered release body), not committed into the repo
+  as a `vX.Y.Z.md` file — the release is the source of truth, and the
+  in-repo `v0.2.0.md` is a historical artefact, not the pattern to copy.
+  Detailed means: for the version's range of commits, list the feature /
+  fix / infra commits and, for each user-facing one, what it changes and
+  why; a `[fix]` release still names what was broken and what now works.
+  Write it for the next person auditing the version, not for the changelog
+  skimmer.
+  **Builds are not released individually.** A build-class commit (no version
+  change, only the build counter moves) is just pushed — no tag, no
+  release. Builds accumulate under the current version tag. When the next
+  version bump lands, its release notes cover every commit (builds and the
+  bump itself) since the previous release, so nothing is lost. A build that
+  quietly shipped without being named in the next release's notes is a
+  gap to backfill.
 
 ## Publishing to npm
 
