@@ -666,8 +666,7 @@ let cachedShell: ResolvedShell | undefined;
  * user launched from a POSIX shell, otherwise PowerShell and then cmd.exe on
  * Windows. `ACTOR0_SHELL` overrides it for anyone who wants a specific one.
  */
-export function resolveShell(): ResolvedShell {
-  if (cachedShell) return cachedShell;
+function resolveShellSync(): ResolvedShell {
   const override = process.env.ACTOR0_SHELL;
   const candidates: ShellCandidate[] = override
     ? [posixShell(override)]
@@ -680,18 +679,36 @@ export function resolveShell(): ResolvedShell {
   for (const candidate of candidates) {
     const result = probe(candidate);
     if (!result.usable) continue;
-    cachedShell = {
+    return {
       ...candidate,
       // POSIX guarantees it, so do not spend a second spawn to learn it; for
       // the Windows shells it is exactly the thing that varies.
       chainsWithAnd: result.chains || candidate.family === "posix",
     };
-    return cachedShell;
   }
   // Nothing ran. Report the first candidate honestly — including that its
   // `&&` support is unknown — so the model's next tool call shows the real
   // failure rather than a note that guesses at the cause.
-  cachedShell = { ...candidates[0]!, chainsWithAnd: candidates[0]!.family === "posix" };
+  return { ...candidates[0]!, chainsWithAnd: candidates[0]!.family === "posix" };
+}
+
+// Provisional shell used until the background probe completes, so the first
+// turn never blocks the event loop on a synchronous spawnSync.
+function provisionalShell(): ResolvedShell {
+  if (process.env.ACTOR0_SHELL) return { ...posixShell(process.env.ACTOR0_SHELL), chainsWithAnd: true };
+  if (process.env.SHELL) return { ...posixShell(process.env.SHELL), chainsWithAnd: true };
+  if (process.platform === "win32") return { ...WINDOWS_SHELLS[0]!, chainsWithAnd: true };
+  return { ...posixShell("/bin/bash"), chainsWithAnd: true };
+}
+
+export function resolveShell(): ResolvedShell {
+  if (cachedShell) return cachedShell;
+  // Return immediately with a provisional value; probe in the background so
+  // the UI never freezes on the first message.
+  cachedShell = provisionalShell();
+  setTimeout(() => {
+    try { cachedShell = resolveShellSync(); } catch { /* keep provisional */ }
+  }, 0);
   return cachedShell;
 }
 
@@ -837,13 +854,16 @@ function appendBounded(acc: Output, next: string): Output {
  * going to work here. The name is now a fact it can check, and the description
  * says which shell this actually is.
  */
+let cachedShellDefinition: ToolDefinition | undefined;
 const shellTool: CliTool = {
-  definition: {
-    type: "function",
-    function: {
-      name: "shell",
-      description: `Run a command in the user's shell, in the working directory. ${shellNotes(resolveShell())} Returns stdout and stderr, then the exit code on the last line. Use for git, listing, searching, package managers, test runners — everything that is not a plain read/write/edit of one file. No timeout by default; pass timeout (seconds, max 3600) for anything that could hang. Output is capped, keeping the tail where errors are.`,
-      parameters: {
+  get definition(): ToolDefinition {
+    if (!cachedShellDefinition) {
+      cachedShellDefinition = {
+        type: "function",
+        function: {
+          name: "shell",
+          description: `Run a command in the user's shell, in the working directory. ${shellNotes(resolveShell())} Returns stdout and stderr, then the exit code on the last line. Use for git, listing, searching, package managers, test runners — everything that is not a plain read/write/edit of one file. No timeout by default; pass timeout (seconds, max 3600) for anything that could hang. Output is capped, keeping the tail where errors are.`,
+          parameters: {
         type: "object",
         properties: {
           command: { type: "string", description: "The command line to run." },
@@ -852,6 +872,9 @@ const shellTool: CliTool = {
         required: ["command"],
       },
     },
+      };
+    }
+    return cachedShellDefinition!;
   },
   label: (args) => String(args.command ?? "").replace(/\s+/g, " ").trim(),
   hint: "everything else — git, test runners, package managers",
