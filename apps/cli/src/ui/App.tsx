@@ -202,6 +202,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // Per-rendered-row item index for the open menu, so a mouse click/hover can
   // be mapped back to the menu item it landed on (-1 = not an item).
   const menuHitMapRef = useRef<number[]>([]);
+  // Timestamp of the last wheel event, so a hover report that the terminal
+  // emits right after a scroll can't clobber the cursor we just moved.
+  const lastWheelAtRef = useRef(0);
+  // Last hover pointer position, so a repeated hover report for the same cell
+  // (common after a scroll) does not re-apply focus.
+  const lastHoverRef = useRef<{ x: number; y: number } | null>(null);
   const slashHitMapRef = useRef<number[]>([]);
   // Inner-row index where the (centered) menu content begins this frame.
   const menuContentStartRowRef = useRef(0);
@@ -883,6 +889,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // Hover events (motion with no button held) must never start a transcript
     // selection — they are only meaningful over menus, handled above.
     if (event.hover && mode === "chat" && !slashEngaged) return;
+    // A terminal often re-emits a hover report immediately after a wheel
+    // scroll; applying it would snap the menu cursor back to wherever the
+    // pointer happens to sit. Ignore hover reports that land within a short
+    // window after a wheel event.
+    if (event.hover && Date.now() - lastWheelAtRef.current < 150) return;
 
     // Slash popup (chat mode): clicking an entry selects and runs it.
     if (mode === "chat" && slashEngaged && event.button === "left") {
@@ -904,6 +915,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // In any menu, the mouse drives the cursor (hover = focus) and a click
     // activates the item under the pointer — the same outcome as Enter.
     if (mode !== "chat" && event.button === "left") {
+      // Dedup repeated hover reports for the same cell so a scroll-induced
+      // re-report cannot snap the cursor back to the pointer's resting cell.
+      if (event.hover) {
+        const prev = lastHoverRef.current;
+        if (prev && prev.x === event.x && prev.y === event.y) return;
+        lastHoverRef.current = { x: event.x, y: event.y };
+      } else {
+        lastHoverRef.current = null;
+      }
       const innerIndex = event.y - 2; // terminal row 1 is the top border
       const contentStart = menuContentStartRowRef.current;
       const mapIndex = innerIndex - contentStart;
@@ -1165,6 +1185,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       return;
     }
     if (event.button !== "wheel-up" && event.button !== "wheel-down") return;
+    lastWheelAtRef.current = Date.now();
     const dir = event.button === "wheel-up" ? -1 : 1;
     // In chat the wheel scrolls the transcript; in a menu it moves the cursor
     // through the (windowed, possibly long) list — same direction as the keys.
