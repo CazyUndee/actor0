@@ -538,36 +538,36 @@ Versions live in three places and all three must move together: `apps/cli/packag
 `packages/harness/package.json`, and `packages/providers/package.json`, plus the
 hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.test.ts`.
 
-- **Bump on every behavioural change.** Any commit tagged `[fix]`, `[feat]`, or
-  `[upgrade]` bumps at least the build number — including fixes the user never
-  sees directly (a crash on a code path, a broken clipboard, a swallowed EPIPE).
-  "User-visible" is not the test; "does it change what the code does" is.
-  `[chore]` and `[misc]` commits do not bump unless they touch runtime behaviour.
-- **How much to bump.** Versions are `MAJOR.MINOR.PATCH`, with a separate
-  build counter tracked alongside as `(build: N)` in release notes and commit
-  bodies. Bump exactly one component per commit, never two, and reset the lower
-  ones to 0:
-    - build counter (0.2.0 build 0 -> 0.2.0 build 1): the default for an
-      incremental change — a bug fix, a composer tweak, a hover/interaction
-      nicety, a hardening, a small feature. This is the component most commits
-      bump. The version string itself does not change.
-    - `PATCH` (0.2.0 -> 0.2.1): a generally big change — a substantial
-      rewrite of a subsystem, a new tool, a new provider transport, or a
-      batch of related work that is meaningfully different from the previous
-      patch release. When builds accumulate enough to be meaningfully
-      different from the last patch release, bump patch (and reset the build
-      counter to 0).
-    - `MINOR` (0.2.1 -> 0.3.0): an overhaul or refactor — a rework of a
-      whole subsystem or a new top-level capability the user could point to
-      and name. Resets patch and the build counter to 0.
-    - `MAJOR` (0.3.0 -> 1.0.0): a massive milestone only — the product is
-      completely stable and generally usable, or usable commercially. Never
-      infer a major bump from the code alone; the user must say so. Resets
-      minor, patch, and the build counter to 0. Needs a migration note in the
-      commit body.
-  When in doubt between build and patch, pick **build**. When in doubt between
-  patch and minor, pick **patch**. When in doubt between minor and major, pick
-  minor — major is a promise you cannot easily take back.
+- **Bump only on patch-class changes.** A version bump is warranted when a
+  commit meaningfully changes the way the user interacts with the application
+  or how it responds — a new command, a reworked UI surface, a changed input
+  gesture, a different error or status message, a removed or relocated surface.
+  "Does it change the user's experience?" is the test. Build-class changes — a
+  dependency bump, a CI workflow edit, a test-only change, an internal refactor
+  with no externally visible behaviour change, a fix that never reaches the
+  user — are **build releases, not patches**, and do **not** bump the version.
+  `[chore]` and `[misc]` commits never bump unless they touch runtime behaviour
+  that the user experiences.
+- **How much to bump.** Versions are `MAJOR.MINOR.PATCH`. Bump exactly one
+  component per commit, never two, and reset the lower ones to 0:
+    - `PATCH` (0.2.0 -> 0.2.1): a `[fix]` or `[feat]` that meaningfully changes
+      how the user interacts with the CLI and how it responds — e.g. a new
+      command, a reworked menu or picker, a changed click/hover/key gesture, a
+      removed or relocated UI surface, a different error or status message. This
+      is the default for a normal user-facing commit.
+    - `MINOR` (0.2.0 -> 0.3.0): a new **top-level capability** — a new tool,
+      a new provider transport, or an entirely new subsystem the user could
+      point to and name. Most `[feat]`/`[upgrade]` commits are *not* this;
+      a menu, picker, renderer, or mouse change is a patch even when tagged
+      `[feat]`. Resets patch to 0.
+    - `MAJOR` (0.3.0 -> 1.0.0): only when the user explicitly says to bump
+      major. Never infer a major bump from the code alone. Resets minor and
+      patch to 0. Needs a migration note in the commit body.
+  When in doubt between patch and minor, pick **patch** — the bar for minor
+  is a genuinely new capability, not any user-facing change, and a string of
+  over-bumped minors (0.2.0 -> 0.5.0) is version churn that buries the
+  versions that mattered. When in doubt between minor and major, pick minor —
+  major is a promise you cannot easily take back.
 - **Keep the three in sync.** The CLI reads its own version from its
   `package.json` at runtime, so a stale package.json prints a stale `--version`;
   the harness/providers versions are consumed by dependents and by the MCP
@@ -575,14 +575,11 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
 - **No silent versions.** If a commit touches behaviour, the version field in
   the same commit's diff is the evidence it was considered. A review that sees
   a behaviour change with no version change should flag it.
-- **Tag and release on substantial changes only.** A version bump does not
-  automatically require a tag or GitHub release. Tag and release when the
-  change is substantial (a new capability, a notable fix, or a batch of
-  related work); routine, incremental fixes ship as commits without a new
-  release. When a release is cut, it is not done until there is a git tag
-  `vX.Y.Z` on that commit *and* a GitHub release at that tag carrying
-  detailed release notes. A version that landed without its tag/release is a
-  gap to backfill before doing anything else. Release notes are written **for the GitHub release**
+- **Tag and release every version bump.** A version bump is not done when the
+  `package.json` changes; it is done when there is a git tag `vX.Y.Z` on that
+  commit *and* a GitHub release at that tag carrying detailed release notes.
+  A version that landed without its tag/release is a gap to backfill before
+  doing anything else. Release notes are written **for the GitHub release**
   (the rendered release body), not committed into the repo as a `vX.Y.Z.md`
   file — the release is the source of truth, and the in-repo `v0.2.0.md` is a
   historical artefact, not the pattern to copy.
