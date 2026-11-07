@@ -1790,7 +1790,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // completely rather than clipping the pinned composer.
     const chromeH = top.length + blockedRow.length + (menuSlot ? 1 : 0) + slashPopup.length + menuContent.length + composer.length + 1;
     const transcriptV = menuSlot ? 0 : Math.max(0, rows - 2 - chromeH);
-    const live = menuSlot ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), liveReasoningExpanded, reasoningStartedAtRef.current);
+    const live = menuSlot ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), liveReasoningExpanded, reasoningStartedAtRef.current, timing.spinnerMs);
 
     // One layout for every menu: the top area, a blank line, the menu in its
     // static slot, blank fill, the pinned composer. Menus of every kind sit

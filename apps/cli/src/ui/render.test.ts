@@ -37,7 +37,6 @@ test("long tool output is cut to a count, not flooded", () => {
 test("reasoning is collapsed to a one-line sentence by default", () => {
   const entry: Entry = { kind: "reasoning", text: "First I need to consider the options carefully and weigh them." };
   const collapsed = text(entryLines(entry, COLS));
-  assert.ok(collapsed.includes("∴ thinking"), "a thinking label");
   assert.ok(collapsed.includes("thinking"), "a one-line sentence, not the full body");
   assert.ok(!collapsed.includes("weigh them"), "the full body is hidden when collapsed");
   assert.equal(collapsed.split("\n").length, 4, "a rounded rectangle: border, one content row, border");
@@ -117,11 +116,11 @@ test("a prompt taller than the box scrolls and counts what is above", () => {
   assert.ok(built.rows.length <= 6, "the box never exceeds its max height");
 });
 
-test("streaming reasoning is a titled multi-row card, not one line", () => {
+test("streaming reasoning is a multi-row card, not one line", () => {
   const reasoning = "First I weigh separate chaining, then open addressing, then the load factor and resizing cost, which is a fair amount of text.";
   const rows = liveLines({ text: "", reasoning }, 0, 0, COLS, 20);
   const out = text(rows);
-  assert.ok(out.includes("∴ thinking"), "the streaming reasoning is a titled card");
+  assert.ok(out.includes("separate chaining"), "the streaming reasoning body is shown, expanded");
   assert.ok(rows.length > 3, `it streams onto several rows (${rows.length})`);
   // Readable contrast: the body is the muted tone, not the near-invisible dim.
   assert.ok(rows.some((r) => r.some((s) => s.color !== undefined && s.text.trim().length > 0)), "the reasoning has visible text");

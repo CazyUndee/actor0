@@ -148,9 +148,10 @@ export function formatTimer(seconds: number): string {
  * from the moving highlight centre, so the whole word reads as steadily lit
  * with a single soft band sweeping across it.
  */
-export function shimmerSegs(text: string, frame: number, speed = 1.2): Seg[] {
-  const period = 1 / 60;
-  const phase = ((frame * period) * speed) % 1.0;
+export function shimmerSegs(text: string, frame: number, speed = 1.2, msPerFrame = 150): Seg[] {
+  // Phase is real elapsed time (frames x the ticker's actual period), not an
+  // assumed 60 fps, so `speed` stays a sweeps/second value at any ticker rate.
+  const phase = (((frame * msPerFrame) / 1000) * speed) % 1.0;
   const center = -0.50 + phase * 2.0;
   const width = 0.18;
   const base = [145, 148, 155];
@@ -510,7 +511,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false):
             { text: entry.durationSeconds != null ? `thought for ${formatTimer(entry.durationSeconds)}` : "thinking", color: color.muted },
           ]];
       if (rows.length === 0) rows.push(plain("…", color.muted));
-      return [blank(), ...box(rows, cols, { border: color.dim, title: "∴ thinking" })];
+      return [blank(), ...box(rows, cols, { border: color.dim })];
     }
 
     case "plan": {
@@ -583,7 +584,7 @@ export function helpBox(cols: number): Seg[][] {
   return menuRows({ title: "commands", items, width });
 }
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
-export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null): Seg[][] {
+export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, msPerFrame = 150): Seg[][] {
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
   if (!busy) return [];
   const spin = waitingOnUser ? "⏸" : "◐◓◑◒"[frame % 4];
@@ -601,17 +602,18 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
       const lines = flattenText(live.reasoning.trimEnd(), proseWidth(cols - 6));
       const rows = lines.map((l) => plain(l, color.muted));
       out.push(blank());
-      out.push(...box(rows, cols, { border: color.dim, title: "∴ thinking" }));
+      out.push(...box(rows, cols, { border: color.dim }));
     } else {
       const elapsedSec = reasoningStartedAt != null ? Math.max(0, Date.now() - reasoningStartedAt) / 1000 : 0;
       const timer = formatTimer(elapsedSec);
       const inner = Math.max(4, cols - 2);
-      const shimmer = shimmerSegs("thinking", frame);
+      // A fast, lively sweep (3 per second) so a long TTFT wait does not look dead.
+      const shimmer = shimmerSegs("thinking", frame, 3.0, msPerFrame);
       const shimmerW = shimmer.reduce((n, s) => n + s.text.length, 0);
       const fill = Math.max(0, inner - shimmerW - timer.length);
       const row: Seg[] = [...shimmer, { text: " ".repeat(fill) }, { text: timer, color: color.dim }];
       out.push(blank());
-      out.push(...box([row], cols, { border: color.dim, title: "∴ thinking" }));
+      out.push(...box([row], cols, { border: color.dim }));
     }
   }
   // The streamed answer is boxed from the first token, identical to the
