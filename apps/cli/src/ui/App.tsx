@@ -1909,7 +1909,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const menuContent = menuOpen ? centerRows(menuContentRows(menuHeight)) : [];
     const slashHitMap: number[] = [];
     const slashPopup =
-      !menuOpen && slashEngaged && slashMatches.length > 0
+      !menuOpen && slashEngaged
         ? centerRows(slashPopupRows(slashMatches.map((c) => ({ name: c.name, description: c.description, alias: c.aliases[0] })), slashSel, slashQuery, Math.min(MENU_WIDTH, innerW - 2), menuHeight, slashHitMap))
         : [];
     slashHitMapRef.current = slashHitMap;
