@@ -45,14 +45,18 @@ const cache = (): Cache => {
 const SKIP_GLOBS = ["!**/node_modules/**"];
 
 /** The files `rg --files` reports for `cwd`, POSIX and cwd-relative. */
+/** Upper bound on how long `rg --files` may block the first turn's event loop. */
+const RG_LIST_TIMEOUT_MS = 5_000;
+
 function listFiles(cwd: string): string[] {
   const run = spawnSync(
     "rg",
     ["--files", "--path-separator", "/", ...SKIP_GLOBS.flatMap((g) => ["--glob", g])],
-    { cwd, encoding: "utf8", windowsHide: true },
+    { cwd, encoding: "utf8", windowsHide: true, timeout: RG_LIST_TIMEOUT_MS },
   );
-  // A missing rg, or any spawn failure, is an empty index — no tree — not a
-  // thrown error that would fail the turn. rg is a search accelerator here.
+  // A missing rg, a spawn failure, or a timeout is an empty index — no tree —
+  // not a thrown error that would fail the turn. rg is a search accelerator
+  // here, and the first turn must not block indefinitely on it.
   if (run.error || typeof run.stdout !== "string") return [];
   return run.stdout
     .split("\n")
