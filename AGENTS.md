@@ -569,11 +569,14 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
 - **No silent versions.** If a commit touches behaviour, the version field in
   the same commit's diff is the evidence it was considered. A review that sees
   a behaviour change with no version change should flag it.
-- **Tag and release every version bump.** A version bump is not done when the
-  `package.json` changes; it is done when there is a git tag `vX.Y.Z` on that
-  commit *and* a GitHub release at that tag carrying detailed release notes.
-  A version that landed without its tag/release is a gap to backfill before
-  doing anything else. Release notes are written **for the GitHub release**
+- **Tag and release on substantial changes only.** A version bump does not
+  automatically require a tag or GitHub release. Tag and release when the
+  change is substantial (a new capability, a notable fix, or a batch of
+  related work); routine, incremental fixes ship as commits without a new
+  release. When a release is cut, it is not done until there is a git tag
+  `vX.Y.Z` on that commit *and* a GitHub release at that tag carrying
+  detailed release notes. A version that landed without its tag/release is a
+  gap to backfill before doing anything else. Release notes are written **for the GitHub release**
   (the rendered release body), not committed into the repo as a `vX.Y.Z.md`
   file — the release is the source of truth, and the in-repo `v0.2.0.md` is a
   historical artefact, not the pattern to copy.
