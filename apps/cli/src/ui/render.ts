@@ -587,6 +587,7 @@ export function helpBox(cols: number): Seg[][] {
 }
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
 export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, msPerFrame = 150, ...rest: any[]): Seg[][] {
+  void budget;
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
   let showThinking = false;
   let turnStartedAt: number | null = null;
@@ -663,13 +664,8 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
   // counted at the top of the box, not silently dropped.
   if (live.text) {
     const all = renderMarkdown(live.text, cols - 4);
-    // Leave room for the leading blank, a collapsed reasoning line, the box's
-    // two borders and the count, so the box and its indicator both fit.
-    const room = Math.max(1, budget - 5);
-    const dropped = Math.max(0, all.length - room);
-    const rows = dropped > 0 ? all.slice(all.length - room) : all;
     if (!live.reasoning.trim()) out.push(blank());
-    out.push(...box(rows, cols, { border: color.dim }));
+    out.push(...box(all, cols, { border: color.dim }));
   }
   return out;
 }
