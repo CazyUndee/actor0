@@ -193,6 +193,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const transcriptStartRowRef = useRef(0); // visible index where transcript begins
   const transcriptCountRef = useRef(0);
   const transcriptVisibleBudgetRef = useRef(0);
+  const popupPlainRef = useRef<string[]>([]);
+  const popupStartRowRef = useRef(0);
+  const popupCountRef = useRef(0);
   // Wall-clock ms when the current live reasoning segment began; used for the
   // running timer on the collapsed block and to stamp committed entries.
   const reasoningStartedAtRef = useRef<number | null>(null);
@@ -371,11 +374,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }, 16);
     return () => clearInterval(id);
   }, [busy]);
-  // Disable mouse capture in non-chat modes so the terminal handles text
-  // selection natively (click-drag to select/copy). Re-enable in chat.
-  useEffect(() => {
-    screen.setMouse(mode === "chat");
-  }, [mode, screen]);
+  // Mouse capture stays on in all modes so selection works everywhere.
 
   // Start the reasoning clock when the model begins to stream reasoning, and
   // stop it when the live region is cleared (the turn committed or reset).
@@ -938,6 +937,29 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // In any menu, the mouse drives the cursor (hover = focus) and a click
     // activates the item under the pointer — the same outcome as Enter.
     if (mode !== "chat" && event.button === "left") {
+      const popupStart = popupStartRowRef.current;
+      const popupCount = popupCountRef.current;
+      // Selection in popups: drag to select, release to copy.
+      if (popupCount > 0 && !event.hover && (event.drag || event.release)) {
+        const pt = { col: Math.max(0, Math.min(innerW - 1, event.x - 1 - 2)), row: event.y - 1 };
+        if (event.drag) {
+          setSelection((s) => s.anchor ? extend(s, pt, Math.max(1, popupStart + popupCount), innerW) : begin(pt, Math.max(1, popupStart + popupCount), innerW));
+          return;
+        }
+        if (event.release) {
+          setSelection((s) => finish(s));
+          const sel = selection;
+          if (hasSelection(sel)) {
+            const text = selectedText(sel, plainRowsRef.current);
+            if (text.trim()) {
+              copyToClipboard(text);
+              flashComposerHint(`copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"}`);
+            }
+          }
+          setSelection(emptySelection());
+          return;
+        }
+      }
       // Dedup repeated hover reports for the same cell so a scroll-induced
       // re-report cannot snap the cursor back to the pointer's resting cell.
       if (event.hover) {
@@ -1839,6 +1861,17 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const inner: Seg[][] = menuSlot
       ? [...top, ...blockedRow, blankRow, ...menuContent, ...slashPopup, ...composer]
       : [...top, ...blockedRow, ...transcript, ...composer];
+    if (menuSlot) {
+      const popupStart = top.length + blockedRow.length + 1;
+      const popupRows = menuContent.length > 0 ? menuContent : slashPopup;
+      popupStartRowRef.current = popupStart;
+      popupCountRef.current = popupRows.length;
+      popupPlainRef.current = popupRows.map((r) => r.map((seg) => seg.text).join(""));
+    } else {
+      popupStartRowRef.current = 0;
+      popupCountRef.current = 0;
+      popupPlainRef.current = [];
+    }
     const contentH = rows - 2;
     // The disclaimer owns the last row; fill everything above it.
     const fitted: Seg[][] = inner.map((r) => fitWidth(r, innerW));
@@ -1855,13 +1888,20 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const startRow = transcriptStartRowRef.current;
     const budget = Math.max(1, transcriptVisibleBudgetRef.current || 1);
     const visibleCount = Math.min(budget, transcriptCountRef.current);
+    const popupStart = popupStartRowRef.current;
+    const popupCount = popupCountRef.current;
     const selRows = hasSelection(sel)
       ? spans(sel, innerW)
           .map((sp) => {
             const contentIndex = sp.row;
-            if (contentIndex < winStart || contentIndex >= winStart + visibleCount) return null;
-            const visibleIndex = startRow + (contentIndex - winStart);
-            return { row: visibleIndex, from: sp.from, to: sp.to };
+            if (contentIndex >= winStart && contentIndex < winStart + visibleCount) {
+              const visibleIndex = startRow + (contentIndex - winStart);
+              return { row: visibleIndex, from: sp.from, to: sp.to };
+            }
+            if (contentIndex >= popupStart && contentIndex < popupStart + popupCount) {
+              return { row: contentIndex, from: sp.from, to: sp.to };
+            }
+            return null;
           })
           .filter((x): x is { row: number; from: number; to: number } => x !== null)
       : [];
