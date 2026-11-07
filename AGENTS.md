@@ -615,6 +615,20 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
 
 ## Publishing to npm
 
+**A release is not done until the npm packages are published.** Creating a
+GitHub release does NOT publish to npm — `publish-libraries` in `release.yml`
+only runs on `workflow_dispatch`. After pushing the tag and creating the
+release, you MUST trigger the publish:
+
+```
+gh workflow run release.yml -f tag=vX.Y.Z
+```
+
+Then verify with `npm view @actor0/cli version` (and harness/providers) that
+all three packages show the new version. A release that has a tag and
+GitHub release but no npm package is a gap to backfill before doing anything
+else.
+
 OIDC trusted publishing only, no token. `publish-libraries` in `release.yml`
 is bound to an npm trusted publisher (GitHub App `GitHub Actions`, workflow
 `release.yml`, job `publish-libraries`, event `workflow_dispatch`) and
