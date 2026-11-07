@@ -642,5 +642,10 @@ field is what tells the user which Node it needs.
 
 ## CI
 
-Always check CI after pushing, and fix it if it is broken. Do not move on
-to the next task while a CI run is red.
+Check CI **every time you commit and push** — every single commit, every single push, no exceptions.
+
+After pushing, check the run (`gh run list`, then `gh run view <id>` / `gh run view <id> --log-failed`).
+If it is red, **fix the cause before doing anything else** — do not leave a red CI run behind and do not move on to the next task.
+
+A commit is not done until its CI run is green. A push is not done until its CI run is green.
+Do not move on to the next task while a CI run is red.
