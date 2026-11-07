@@ -1291,9 +1291,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       const dt = Math.max(1, now - (lastWheelTimeRef.current ?? now));
       lastWheelTimeRef.current = now;
       // Faster ticks = more velocity per tick; cap so a single tick can't
-      // jerk the transcript too far.
+      // jerk the transcript too far. dir < 0 (wheel-up) scrolls up = higher
+      // scrollOffset, so negate dir.
       const timeScale = Math.min(1, 16 / dt);
-      scrollVelocityRef.current += dir * 3 * timeScale;
+      scrollVelocityRef.current += -dir * 3 * timeScale;
       scrollVelocityRef.current = Math.max(-30, Math.min(30, scrollVelocityRef.current));
       if (!scrollFrameRef.current) scrollFrameRef.current = setTimeout(scrollFrame, 0);
     }
