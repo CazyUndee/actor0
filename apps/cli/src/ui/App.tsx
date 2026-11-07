@@ -1733,8 +1733,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const offsets: number[] = [];
     const rows: Seg[][] = [];
     conversation.entries.forEach((entry, i) => {
+      const prev = i > 0 ? conversation.entries[i - 1] : undefined;
+      const tight = prev?.kind === "reasoning" && entry.kind === "assistant";
       offsets.push(rows.length);
-      rows.push(...entryLines(entry, frameInnerWidth(screen.size.cols), expandedReasoning.has(i)));
+      rows.push(...entryLines(entry, frameInnerWidth(screen.size.cols), expandedReasoning.has(i), tight));
     });
     entryOffsetsRef.current = offsets;
     entryRowListLengthRef.current = rows.length;

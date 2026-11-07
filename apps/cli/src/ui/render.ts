@@ -483,7 +483,7 @@ export function managePanelRows(
   });
 }
 /** One committed transcript entry, as rows of segments (each row ≤ `cols`). */
-export function entryLines(entry: Entry, cols: number, expandReasoning = false): Seg[][] {
+export function entryLines(entry: Entry, cols: number, expandReasoning = false, tight = false): Seg[][] {
   switch (entry.kind) {
     case "user":
       return [
@@ -497,7 +497,8 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false):
     case "assistant": {
       const rows = renderMarkdown(entry.text, cols - 4);
       if (entry.partial) rows.push(plain("… response ended before completion", color.warning));
-      return [blank(), ...box(rows, cols, { border: color.dim })];
+      const boxed = box(rows, cols, { border: color.dim });
+      return tight ? boxed : [blank(), ...boxed];
     }
 
     case "reasoning": {
@@ -627,7 +628,7 @@ export function liveLines(live: { text: string; reasoning: string; status?: stri
     const room = Math.max(1, budget - 5);
     const dropped = Math.max(0, all.length - room);
     const rows = dropped > 0 ? [plain(`↑ ${dropped} more line${dropped === 1 ? "" : "s"}`, color.dim, true), ...all.slice(all.length - room)] : all;
-    out.push(blank());
+    if (!live.reasoning.trim()) out.push(blank());
     out.push(...box(rows, cols, { border: color.dim }));
   }
   return out;
