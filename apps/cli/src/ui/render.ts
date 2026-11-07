@@ -33,7 +33,7 @@ function toolDisplayName(name: string): string {
  * hundred-line result never floods the transcript.
  */
 function toolOutputLines(status: "ok" | "error", output: string, cols: number): string[] {
-  const text = output.replace(/\x1b\[[0-9;]*m/g, "").replace(/\r/g, "").trim();
+  const text = output.replace(new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g"), "").replace(/\r/g, "").trim();
   if (!text) return [];
   const width = Math.max(20, cols - 4);
   const raw = text.split("\n").filter((l, i) => !(i === 0 && /^\S.*\(\d+ .*\):$/.test(l.trim())));
@@ -586,7 +586,7 @@ export function helpBox(cols: number): Seg[][] {
   return menuRows({ title: "commands", items, width });
 }
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
-export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, msPerFrame = 150, ...rest: any[]): Seg[][] {
+export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, msPerFrame = 150, ...rest: unknown[]): Seg[][] {
   void budget;
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
   let showThinking = false;
