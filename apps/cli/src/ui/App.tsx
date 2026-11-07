@@ -982,19 +982,20 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         const pt = { col: Math.max(0, Math.min(innerW - 1, event.x - 1 - 2)), row: Math.max(popupStart, Math.min(popupStart + popupCount - 1, event.y - 1)) };
         setSelection((s) => s.anchor ? extend(s, pt, Math.max(1, popupStart + popupCount), innerW) : begin(pt, Math.max(1, popupStart + popupCount), innerW));
         return;
-      }
       if (popupCount > 0 && event.release && selection.dragging) {
-        setSelection((s) => finish(s));
-        const sel = selection;
-        if (hasSelection(sel)) {
-          const text = selectedText(sel, plainRowsRef.current);
-          if (text.trim()) {
-            copyToClipboard(text);
-            flashComposerHint(`copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"}`);
-          }
+        let copiedText = "";
+        setSelection((s) => {
+          const done = finish(s);
+          if (hasSelection(done)) copiedText = selectedText(done, plainRowsRef.current);
+          return done;
+        });
+        if (copiedText.trim()) {
+          copyToClipboard(copiedText);
+          flashComposerHint(`copied ${copiedText.split("\n").length} line${copiedText.split("\n").length === 1 ? "" : "s"}`);
         }
         setSelection(emptySelection());
         return;
+      }
       }
       // Dedup repeated hover reports for the same cell so a scroll-induced
       // re-report cannot snap the cursor back to the pointer's resting cell.
