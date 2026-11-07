@@ -1931,7 +1931,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     const { grid, plain } = buildGrid();
     plainRowsRef.current = plain;
     screen.render(grid);
-    screen.hideCaret();
   });
 
   // Restore the terminal on unmount.

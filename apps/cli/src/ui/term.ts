@@ -48,8 +48,9 @@ export class Screen {
     // in SGR mode (1000h + 1006h) so the wheel can scroll and clicks register.
     // Without this the terminal emits none of the sequences input.ts parses, so
     // the wheel is dead in a real terminal even though the tests inject them.
-    this.stream.write("\x1b[?1049h\x1b[?25l");
-    if (this.mouse) this.stream.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+    let init = "\x1b[?1049h\x1b[?25l";
+    if (this.mouse) init += "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+    this.stream.write(init);
   }
 
   /**
@@ -69,10 +70,18 @@ export class Screen {
    * fills the cleared row and never wraps.
    */
   render(rows: string[]): void {
-    this.begin();
-    for (let i = 0; i < this.rows; i += 1) {
-      this.stream.write(`\x1b[${i + 1};1H\x1b[2K${rows[i] ?? ""}`);
+    let out = "";
+    if (!this.live) {
+      this.live = true;
+      out += "\x1b[?1049h\x1b[?25l";
+      if (this.mouse) out += "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
     }
+    out += "\x1b[?2026h";
+    for (let i = 0; i < this.rows; i += 1) {
+      out += `\x1b[${i + 1};1H\x1b[2K${rows[i] ?? ""}`;
+    }
+    out += "\x1b[?25l\x1b[?2026l";
+    this.stream.write(out);
   }
 
   /** Park the caret at an absolute 1-based row/column (the composer input). */
