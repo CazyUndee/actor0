@@ -1123,27 +1123,4 @@ export function topArea(cols: number, headerInfo: string, face: Face): Seg[][] {
   return rows;
 }
 
-import { renderMascot3D } from "./braille3d.js";
 
-/** Rows for an empty transcript: a slowly rotating 3D braille mascot with a
- *  prompt underneath. Centered in the given budget. */
-export function emptyTranscriptRows(cols: number, frame: number, budget: number): Seg[][] {
-  const cellsW = Math.min(40, Math.max(20, Math.floor(cols / 2)));
-  const cellsH = Math.min(16, Math.max(8, Math.floor(budget * 0.6)));
-  const mascot = renderMascot3D(cellsW, cellsH, frame);
-  const text = "Ask me anything";
-  const pad = Math.max(0, Math.floor((cols - text.length) / 2));
-  const hint = [{ text: " ".repeat(pad) + text, color: color.muted, dim: true }];
-  const out: Seg[][] = [];
-  // Vertical centering: push the mascot down so it sits in the middle.
-  const mascotH = mascot.length;
-  const totalH = mascotH + 2; // mascot + blank + hint
-  const topPad = Math.max(0, Math.floor((budget - totalH) / 2));
-  for (let i = 0; i < topPad; i++) out.push([{ text: " ".repeat(cols), dim: true }]);
-  for (const line of mascot) out.push([{ text: line, color: color.accent }]);
-  out.push([{ text: " ".repeat(cols), dim: true }]);
-  out.push(hint);
-  // Pad to budget.
-  while (out.length < budget) out.push([{ text: " ".repeat(cols), dim: true }]);
-  return out;
-}

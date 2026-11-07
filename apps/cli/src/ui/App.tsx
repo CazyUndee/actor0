@@ -57,7 +57,6 @@ import {
   panel,
   modelPickerRows,
   thinkingPickerRows,
-  emptyTranscriptRows,
   usagePanelRows,
   sessionPickerRows,
   slashPopupRows,
@@ -1894,7 +1893,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // the slot for the transcript.
     const allTranscript: Seg[][] = menuSlot ? [] : [...entryRowList, ...live];
     const transcriptWindowStart = menuSlot ? 0 : Math.max(0, allTranscript.length - transcriptV - Math.min(Math.max(0, scrollOffset), Math.max(0, allTranscript.length - transcriptV)));
-    const transcript: Seg[][] = menuSlot ? [] : (allTranscript.length === 0 && !busy ? emptyTranscriptRows(innerW, frame, transcriptV) : windowRows(allTranscript, transcriptV, scrollOffset));
+    const transcript: Seg[][] = menuSlot ? [] : windowRows(allTranscript, transcriptV, scrollOffset);
     while (!menuSlot && transcript.length < transcriptV) transcript.push(blankRow);
 
     // Keep refs in sync for selection (content-row anchoring + off-screen copy).
