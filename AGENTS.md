@@ -614,3 +614,8 @@ not a broken workflow. `@actor0/cli` is published through the same job
 (`npm i -g @actor0/cli` gives the `actor0` binary); its bundle inlines
 every dependency, so the tarball is self-contained and the `engines`
 field is what tells the user which Node it needs.
+
+## CI
+
+Always check CI after pushing, and fix it if it is broken. Do not move on
+to the next task while a CI run is red.
