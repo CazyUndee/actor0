@@ -99,7 +99,7 @@ packages/harness    transport-neutral runtime: the turn loop, streaming,
                     completion detection. Imports NOTHING from the CLI.
 packages/providers   the three transports (OpenAI-compatible, Anthropic
                     Messages, ChatGPT/Codex), one shared auth shape.
-apps/cli             the terminal client: Ink/React UI, the eight tools,
+apps/cli             the terminal client: Ink/React UI, the nine tools,
                     BYOK config, session persistence. Consumes the harness.
 ```
 

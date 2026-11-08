@@ -48,7 +48,7 @@ export class Screen {
     // in SGR mode (1000h + 1006h) so the wheel can scroll and clicks register.
     // Without this the terminal emits none of the sequences input.ts parses, so
     // the wheel is dead in a real terminal even though the tests inject them.
-    let init = "\x1b[?1049h\x1b[?25l";
+    let init = "\x1b[?1049h\x1b[?25l\x1b[?1004h";
     if (this.mouse) init += "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
     this.stream.write(init);
   }
@@ -85,7 +85,7 @@ export class Screen {
     let out = "";
     if (!this.live) {
       this.live = true;
-      out += "\x1b[?1049h\x1b[?25l";
+      out += "\x1b[?1049h\x1b[?25l\x1b[?1004h";
       if (this.mouse) out += "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
     }
     out += "\x1b[?2026h";
@@ -111,6 +111,6 @@ export class Screen {
     if (!this.live) return;
     this.live = false;
     if (this.mouse) this.stream.write("\x1b[?1000l\x1b[?1002l\x1b[?1006l");
-    this.stream.write("\x1b[?25h\x1b[?1049l");
+    this.stream.write("\x1b[?1004l\x1b[?25h\x1b[?1049l");
   }
 }

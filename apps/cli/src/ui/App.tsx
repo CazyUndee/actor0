@@ -35,7 +35,7 @@ import { contextWindowTokens } from "@actor0/harness";
 import { parseSlash, matchSlashCommands, type SlashCommand } from "../slash.js";
 import { color } from "../theme.js";
 import { Screen } from "./term.js";
-import { begin, emptySelection, extend, finish, hasSelection, selectedText, spans, type SelectionState } from "./selection.js";
+import { begin, emptySelection, extend, finish, hasSelection, selectedText, visibleSpans, type SelectionState } from "./selection.js";
 import { copyToClipboard } from "./clipboard.js";
 import { parseInput, type InputEvent } from "./input.js";
 
@@ -60,6 +60,7 @@ import {
   usagePanelRows,
   sessionPickerRows,
   slashPopupRows,
+  mcpPanelRows,
   MENU_WIDTH,
   addKindRows,
   addUrlRows,
@@ -115,6 +116,8 @@ export type AppProps = {
   stdin: NodeJS.ReadStream;
   /** Called on quit, after the screen is restored. */
   onExit: () => void;
+  /** Injectable clipboard writer for deterministic TUI tests. */
+  clipboard?: (text: string) => boolean;
 };
 
 type Mode = "chat" | "menu" | "manage" | "add" | "usage" | "model" | "thinking" | "session" | "mcp";
@@ -146,7 +149,7 @@ function wrap(current: number, count: number, delta: number): number {
   return (((current + delta) % count) + count) % count;
 }
 
-export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", transport, screen, stdin, onExit, openSessionPicker }: AppProps) {
+export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", transport, screen, stdin, onExit, openSessionPicker, clipboard = copyToClipboard }: AppProps) {
   const [config, setConfig] = useState<CliConfig>(initialConfig);
   const [conversation, setConversation] = useState<ConversationState>(() => resumed?.messages?.length ? { entries: entriesFromMessages(resumed.messages), live: emptyLive() } : initialConversation());
   // The draft is edited on every keystroke, and several keystrokes can land
@@ -209,10 +212,15 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       scrollFrameRef.current = setTimeout(scrollFrame, 0);
     }
   };
-  // The selection lives in terminal coordinates, like the mouse events that
-  // set it, and is drawn over the finished grid rather than stored in it.
-  const [selection, setSelection] = useState<SelectionState>(emptySelection);
-  const plainRowsRef = useRef<string[]>([]);
+  // Selection anchors are transcript-content coordinates. Mouse cells are
+  // translated through the current scroll window before they reach this state.
+  const [selection, setSelectionState] = useState<SelectionState>(emptySelection);
+  const selectionRef = useRef<SelectionState>(emptySelection());
+  const setSelection = (next: SelectionState | ((current: SelectionState) => SelectionState)): void => {
+    const value = typeof next === "function" ? next(selectionRef.current) : next;
+    selectionRef.current = value;
+    setSelectionState(value);
+  };
   // Full transcript content (committed + live), as plain inner rows and as
   // Seg rows, so a selection can be anchored to text rather than to the screen
   // and copied even when the selected rows are scrolled out of view.
@@ -379,13 +387,20 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // on a resized terminal and everything after it is misaligned.
   const [, forceRedraw] = useState(0);
   useEffect(() => {
-    const onResize = (): void => {
-      screen.setSize(process.stdout.rows ?? 24, process.stdout.columns ?? 80);
+    const redraw = (): void => {
+      screen.setSize(process.stdout.rows ?? screen.size.rows, process.stdout.columns ?? screen.size.cols);
+      setSelection(emptySelection());
       forceRedraw((n) => n + 1);
     };
+    const onResize = (): void => redraw();
+    const onResume = (): void => redraw();
     process.stdout.on("resize", onResize);
+    // Returning to a suspended terminal (for example `fg`) does not guarantee
+    // a resize event. Repaint the whole grid and discard transient selection.
+    if (process.platform !== "win32") process.on("SIGCONT", onResume);
     return () => {
       process.stdout.off("resize", onResize);
+      if (process.platform !== "win32") process.off("SIGCONT", onResume);
     };
   }, [screen]);
 
@@ -883,6 +898,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   const dispatch = (event: InputEvent): void => {
     if (event.type === "mouse") return handleMouse(event);
+    if (event.type === "focus") {
+      if (!event.focused) setSelection(emptySelection());
+      forceRedraw((n) => n + 1);
+      return;
+    }
     if (event.type === "text") {
       // Always edit the draft in chat, even while the slash menu is open —
       // the menu filters on the draft, so blocking input here is what made
@@ -1185,11 +1205,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // Convert a terminal cell into content-row space: the selection is anchored
     // to the transcript text, not to screen rows, so it follows the text when
     // the transcript scrolls and can be copied even when scrolled off screen.
-    const toContentPoint = (x: number, y: number): { col: number; row: number; contentRow: number } => {
+    const toContentPoint = (x: number, y: number): { col: number; row: number } => {
       const visibleRow = y - 2;
       const innerCol = Math.max(0, Math.min(innerW - 1, x - 1 - 2));
-      const rows = Math.max(1, plainRowsRef.current.length);
-      const vr = Math.max(0, Math.min(rows - 1, visibleRow));
       const startRow = transcriptStartRowRef.current;
       const winStart = transcriptWindowStartRef.current;
       const budget = Math.max(1, transcriptVisibleBudgetRef.current || 1);
@@ -1201,7 +1219,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         else if (visibleRow >= startRow + visibleCount) contentRow = count - 1;
         else contentRow = Math.max(0, Math.min(count - 1, winStart + (visibleRow - startRow)));
       }
-      return { col: innerCol, row: vr, contentRow };
+      return { col: innerCol, row: contentRow };
     };
     if (event.button === "left") {
       const pt = toContentPoint(event.x, event.y);
@@ -1214,7 +1232,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         for (let i = 0; i < offsets.length; i += 1) {
           const start = offsets[i]!;
           const end = offsets[i + 1] ?? entryLength;
-          if (pt.contentRow >= start && pt.contentRow < end) { entryIndex = i; break; }
+          if (pt.row >= start && pt.row < end) { entryIndex = i; break; }
         }
         if (entryIndex !== undefined && conversation.entries[entryIndex]?.kind === "reasoning") {
           toggleReasoning(entryIndex);
@@ -1225,7 +1243,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         // it to the full chain without truncation.
         if (
           mode === "chat" &&
-          pt.contentRow >= entryLength &&
+          pt.row >= entryLength &&
           conversation.live.reasoning.trim() &&
           !conversation.live.text
         ) {
@@ -1234,27 +1252,26 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         }
       }
       if (event.drag) {
-        setSelection((s) => s.anchor ? extend(s, pt, Math.max(1, plainRowsRef.current.length), innerW) : begin(pt, Math.max(1, plainRowsRef.current.length), innerW));
+        setSelection((s) => s.anchor ? extend(s, pt, Math.max(1, transcriptPlainRef.current.length), innerW) : begin(pt, Math.max(1, transcriptPlainRef.current.length), innerW));
         return;
       }
-      // A plain click (press + release with no drag) must not leave a
-      // one-cell selection highlight behind. Selection only starts on the
-      // first drag motion, so a click never creates a selection at all.
-      // Reset on press so a new drag starts from the current pointer rather
-      // than extending the previous (still-highlighted) selection.
       if (!event.release) {
+        // Anchor on mouse-down, not the first motion report: terminals can send
+        // several motion events after the pointer has already crossed cells.
+        setSelection(begin(pt, Math.max(1, transcriptPlainRef.current.length), innerW));
+        return;
+      }
+      const current = selectionRef.current;
+      if (!hasSelection(current)) return;
+      const done = finish(current);
+      if (done.anchor && done.focus && done.anchor.row === done.focus.row && done.anchor.col === done.focus.col) {
         setSelection(emptySelection());
         return;
       }
-      if (!hasSelection(selection)) return;
-      let copiedText = "";
-      setSelection((s) => {
-        const done = finish(s);
-        if (plainRowsRef.current.length > 0) copiedText = selectedText(done, plainRowsRef.current);
-        return done;
-      });
+      setSelection(done);
+      const copiedText = selectedText(done, transcriptPlainRef.current);
       if (copiedText.trim()) {
-        copyToClipboard(copiedText);
+        clipboard(copiedText);
         flashComposerHint(`copied ${copiedText.split("\n").length} line${copiedText.split("\n").length === 1 ? "" : "s"}`);
       }
       return;
@@ -1304,10 +1321,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       // If there is a selection on screen, Ctrl+C copies it (native-terminal
       // habit) instead of exiting — the selection is the receipt the user just
       // made, and quitting would throw it away.
-      if (hasSelection(selection)) {
-        const text = selectedText(selection, plainRowsRef.current);
+      const currentSelection = selectionRef.current;
+      if (hasSelection(currentSelection)) {
+        const text = selectedText(currentSelection, transcriptPlainRef.current);
         if (text.trim()) {
-          copyToClipboard(text);
+          clipboard(text);
           flashComposerHint(`copied ${text.split("\n").length} line${text.split("\n").length === 1 ? "" : "s"}`);
         }
         setSelection(emptySelection());
@@ -1834,7 +1852,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     return rows;
   }, [conversation.entries, screen.size.cols, expandedReasoning]);
 
-  const buildGrid = (): { grid: string[]; plain: string[] } => {
+  const buildGrid = (): { grid: string[] } => {
     const cols = screen.size.cols;
     const rows = screen.size.rows;
     const innerW = frameInnerWidth(cols);
@@ -1848,7 +1866,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // hint, then the conversation's notice. Notices used to be transcript
     // entries, which put interface chatter in the middle of the answer.
     const status = ctrlCPressed
-      ? { text: "press ctrl c again to exit actor0", color: color.warning }
+      ? { text: "press control c again to quit actor0", color: color.warning }
       : composerHint
         ? { text: composerHint, color: composerHintColor ?? color.dim }
         : conversation.notice
@@ -1943,22 +1961,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     fitted.push(fitWidth(disclaimerRow, innerW));
     const visible = fitted.slice(0, contentH);
 
-    // Terminal row 0 is the top border; content starts one row down, and each
-    // content row is `│ ` (2 columns) before the inner text. The selection is
-    // in terminal coordinates, so shift it into this inner space once, here,
-    // where both numbers are known.
-    const sel = selection;
-     const selRows = hasSelection(sel)
-       ? spans(sel, innerW)
-           .map((sp) => {
-             const row = sp.row;
-             if (row >= 0 && row < visible.length) {
-               return { row, from: sp.from, to: sp.to };
-             }
-             return null;
-           })
-           .filter((x): x is { row: number; from: number; to: number } => x !== null)
-       : [];
+    // Selection rows are transcript-content coordinates. Translate through
+    // the current scroll window only while painting, so the anchor stays with
+    // the text as the user scrolls rather than sticking to a screen row.
+    const selRows = hasSelection(selection)
+      ? visibleSpans(selection, innerW, transcriptWindowStartRef.current, transcriptStartRowRef.current, transcriptV)
+      : [];
     const painted = visible.map((row, i) => {
       const sp = selRows.find((x) => x.row === i);
       if (!sp) return paint(row);
@@ -1966,12 +1974,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       const to = Math.min(innerW - 1, sp.to);
       return to >= from ? paint(highlight(row, from, to, color.selectionBg)) : paint(row);
     });
-    const plain = visible.map((row) => row.map((s) => s.text).join(""));
     const grid: string[] = [topFrameBorder("actor0", version, cols)];
     for (const line of painted) grid.push(`│ ${line} │`);
     grid.push(bottomFrameBorder(cols));
 
-    return { grid, plain };
+    return { grid };
   };
 
   function menuContentRows(height: number): Seg[][] {
@@ -2019,16 +2026,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         );
         break;
       case "mcp":
-        rows = panel(
-          [
-            [{ text: "MCP servers", color: color.info, bold: true }],
-            [],
-            [{ text: "No MCP servers configured.", color: color.muted }],
-            [{ text: "Configure MCP servers in your config file.", color: color.dim }],
-          ],
-          innerW,
-          Math.min(MENU_WIDTH, innerW - 2),
-        );
+        rows = mcpPanelRows(Math.min(MENU_WIDTH, innerW - 2), height, hitMap);
         break;
       case "add":
         rows = addRows(height, hitMap);
@@ -2059,8 +2057,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   // The blinking terminal caret is never shown: the composer draws its own
   // block cursor into the grid, so the app owns the whole frame like a GUI.
   useEffect(() => {
-    const { grid, plain } = buildGrid();
-    plainRowsRef.current = plain;
+    const { grid } = buildGrid();
     screen.render(grid);
   });
 

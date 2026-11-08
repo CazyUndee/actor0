@@ -921,7 +921,7 @@ export function thinkingPickerRows(options: { label: string; effort?: string }[]
     hitMapOut,
   });
 }
-/** The `/usage` panel: a period, a total, and a per-model breakdown. */
+/** The `/usage` menu: period summary and per-model rows in the canonical menu frame. */
 export type UsagePeriod = {
   label: string;
   tokens: number;
@@ -935,60 +935,43 @@ export type UsagePeriod = {
  * a summary for the active period, and a grouped "by model" section.
  */
 export function usagePanelRows(periods: UsagePeriod[], active: number, width?: number, height?: number, hitMapOut?: number[]): Seg[][] {
-  const w = Math.max(24, width ?? MENU_WIDTH);
-  const innerW = w - 2;
-  const a = periods[active] ?? periods[0]!;
-  const blank: Seg[] = [{ text: " ".repeat(innerW), dim: true }];
-
-  // Tab strip: every period shown, active in the accent + bold.
-  const tabW = 8;
-  const tabs: Seg[] = [{ text: " ", color: color.dim }];
-  for (let i = 0; i < periods.length; i += 1) {
-    const raw = periods[i]!.label;
-    const cell = raw.length > tabW ? `${raw.slice(0, tabW - 1)}…` : raw;
-    const padded = cell + " ".repeat(tabW - cell.length);
-    tabs.push({ text: padded, color: i === active ? color.accent : color.dim, bold: i === active });
-    if (i < periods.length - 1) tabs.push({ text: " ", color: color.dim });
-  }
-  const divider: Seg[] = [{ text: "─".repeat(innerW), color: color.border }];
-
-  const rows: Seg[][] = [
-    tabs,
-    divider,
-    plain(`  ${formatTokens(a.tokens)} tokens · ${a.turns} turn${a.turns === 1 ? "" : "s"}`, color.text),
-    blank,
-    plain("  by model", color.muted),
+  const period = periods[active] ?? periods[0]!;
+  const items: MenuEntry[] = [
+    { line: periods.map((p, i) => (i === active ? `[ ${p.label} ]` : `  ${p.label}  `)).join("  "), selectable: false },
+    { line: `${formatTokens(period.tokens)} tokens · ${period.turns} turn${period.turns === 1 ? "" : "s"}`, selectable: false },
+    { line: "by model", lineTone: color.muted, selectable: false },
+    ...period.byModel.map((model) => ({
+      marker: "· ",
+      markerTone: color.muted,
+      label: model.model,
+      detail: formatTokens(model.tokens),
+      selectable: false,
+    })),
   ];
+  if (period.byModel.length === 0) items.push({ line: "no usage recorded", lineTone: color.dim, selectable: false });
+  return menuRows({
+    title: "usage",
+    info: true,
+    items,
+    width,
+    height,
+    emptyText: "no usage recorded",
+    hitMapOut,
+  });
+}
 
-  // Grouped by-model list: indented, model names column-aligned, tokens right
-  // aligned, no dividers between rows. Capped to the box with a "+N more" tail.
-  const modelW = Math.min(24, Math.max(4, ...a.byModel.map((m) => m.model.length), 4));
-  const bodyRoom = height !== undefined ? Math.max(0, height - 2 - rows.length - 1) : 12;
-  const shown = a.byModel.slice(0, bodyRoom);
-  for (const m of shown) {
-    const label = m.model.length > modelW ? `${m.model.slice(0, modelW - 1)}…` : m.model;
-    rows.push([
-      { text: "  · ", color: color.muted },
-      { text: label, color: color.text },
-      { text: " ".repeat(modelW - label.length + 2), color: color.dim },
-      { text: formatTokens(m.tokens), color: color.muted },
-    ]);
-  }
-  const hidden = a.byModel.length - shown.length;
-  if (hidden > 0) rows.push(plain(`  … ${hidden} more`, color.dim));
-  if (a.byModel.length === 0) rows.push(plain("  no usage recorded", color.dim));
-
-  if (height !== undefined) {
-    const target = Math.max(0, height - 2);
-    while (rows.length < target) rows.push(blank);
-    rows.length = Math.min(rows.length, target);
-  }
-
-  // The panel has no individually clickable rows (tab switching is 1-4/tab/left-right);
-  // report that rather than a stale map, so the mouse never lands on a wrong item.
-  if (hitMapOut) hitMapOut.length = 0;
-  if (hitMapOut) hitMapOut.push(-1, ...rows.map(() => -1), -1);
-  return box(rows, w, { border: color.border, title: "usage" });
+/** The MCP information screen, using the same menu frame as every other picker. */
+export function mcpPanelRows(width?: number, height?: number, hitMapOut?: number[]): Seg[][] {
+  return menuRows({
+    title: "MCP servers",
+    width,
+    height,
+    items: [
+      { line: "No MCP servers configured.", selectable: false },
+      { line: "Configure MCP servers in your config file.", lineTone: color.dim, selectable: false },
+    ],
+    hitMapOut,
+  });
 }
 
 /** The slash-command menu: the canonical rectangle whose search bar filters it. */

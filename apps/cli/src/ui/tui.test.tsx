@@ -14,6 +14,7 @@ import { detectEnvironment } from "../environment.js";
 import type { Screen } from "./term.js";
 
 const tick = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
+const stripSgr = (value: string): string => value.replace(new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g"), "");
 
 /**
  * Poll the last frame until `pred` holds — a fixed tick is a load flake: on a
@@ -78,7 +79,7 @@ function manyModels(): CliConfig {
   });
 }
 
-async function mount(opts: { transport?: ModelClient; onExit?: () => void; cfg?: CliConfig; openSessionPicker?: boolean } = {}): Promise<{ screen: FakeScreen; stdin: PassThrough; unmount: () => void; dir: string }> {
+async function mount(opts: { transport?: ModelClient; onExit?: () => void; cfg?: CliConfig; openSessionPicker?: boolean; clipboard?: (text: string) => boolean; resumed?: { id: string; createdAt: string; updatedAt: string; messages: { role: "user" | "assistant" | "system" | "tool"; content: string }[] } } = {}): Promise<{ screen: FakeScreen; stdin: PassThrough; unmount: () => void; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), "actor0-tui-"));
   const prev = process.env.ACTOR0_CONFIG_DIR;
   const prevData = process.env.ACTOR0_DATA_DIR;
@@ -96,10 +97,12 @@ async function mount(opts: { transport?: ModelClient; onExit?: () => void; cfg?:
     createElement(App, {
       cwd: process.cwd(),
       config: opts.cfg ?? config(),
+      ...(opts.resumed ? { resumed: opts.resumed } : {}),
       version: "9.9.9",
       screen: screen as unknown as Screen,
       stdin: stdin as unknown as NodeJS.ReadStream,
       onExit: opts.onExit ?? (() => {}),
+      ...(opts.clipboard ? { clipboard: opts.clipboard } : {}),
       ...(opts.transport ? { transport: opts.transport } : {}),
       ...(opts.openSessionPicker ? { openSessionPicker: true } : {}),
     }),
@@ -550,9 +553,9 @@ test("Ctrl+C arms the exit hint instead of quitting immediately", async () => {
   const { screen, stdin, unmount } = await mount({ onExit: () => { exited = true; } });
   try {
     stdin.write("\x03");
-    await until(screen, (j) => j.includes("press ctrl c again to exit actor0"));
+    await until(screen, (j) => j.includes("press control c again to quit actor0"));
     assert.equal(exited, false, "the first Ctrl+C did not exit");
-    assert.ok(screen.last.join("\n").includes("press ctrl c again to exit actor0"), "the hint is torn into the composer");
+    assert.ok(screen.last.join("\n").includes("press control c again to quit actor0"), "the hint is torn into the composer");
   } finally {
     unmount();
   }
@@ -567,6 +570,109 @@ test("Ctrl+C twice within 2s exits", async () => {
     stdin.write("\x03");
     await tick(100);
     assert.equal(exited, true, "the second Ctrl+C called onExit");
+  } finally {
+    unmount();
+  }
+});
+
+test("Ctrl+C with no selection shows the quit hint, then quits on the second press", async () => {
+  let exits = 0;
+  const { screen, stdin, unmount } = await mount({ onExit: () => { exits += 1; } });
+  try {
+    stdin.write("\x03");
+    await until(screen, (j) => j.includes("press control c again to quit actor0"));
+    assert.equal(exits, 0, "the first press only arms the confirmation");
+    stdin.write("\x03");
+    await tick(80);
+    assert.equal(exits, 1, "the second press quits");
+  } finally {
+    unmount();
+  }
+});
+
+test("Ctrl+C copies the selected transcript text even after it scrolls off-screen", async () => {
+  const copied: string[] = [];
+  let exits = 0;
+  const paragraphs = Array.from({ length: 55 }, (_, i) => "paragraph-" + i + " " + (i === 54 ? "COPY-ME-EXACTLY" : "ordinary transcript text") + " end").join("\n\n");
+  const resumed = {
+    id: "selection-test",
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    messages: [
+      { role: "user" as const, content: "seed transcript" },
+      { role: "assistant" as const, content: paragraphs },
+    ],
+  };
+  const { screen, stdin, unmount } = await mount({
+    resumed,
+    onExit: () => { exits += 1; },
+    clipboard: (value) => { copied.push(value); return true; },
+  });
+  try {
+    await until(screen, (j) => j.includes("paragraph-54"));
+    const targetRow = screen.last.findIndex((row) => row.includes("COPY-ME-EXACTLY"));
+    assert.notEqual(targetRow, -1, "the marker is initially visible: " + screen.last.join("\n"));
+    const plainRow = stripSgr(screen.last[targetRow]!);
+    const start = plainRow.indexOf("COPY-ME-EXACTLY");
+    const y = targetRow + 1;
+    const x1 = start + 1;
+    const x2 = start + "COPY-ME-EXACTLY".length;
+    stdin.write("\x1b[<0;" + x1 + ";" + y + "M");
+    stdin.write("\x1b[<32;" + x2 + ";" + y + "M");
+    stdin.write("\x1b[<0;" + x2 + ";" + y + "m");
+    await until(screen, (j) => j.includes("copied 1 line"));
+    assert.equal(copied.at(-1), "COPY-ME-EXACTLY", "mouse selection copies the exact selected characters");
+
+    copied.length = 0;
+    for (let i = 0; i < 18; i += 1) stdin.write("\x1b[<64;1;1M");
+    await until(screen, (j) => !j.includes("COPY-ME-EXACTLY"));
+    stdin.write("\x03");
+    await until(screen, (j) => j.includes("copied 1 line"));
+    assert.equal(copied.at(-1), "COPY-ME-EXACTLY", "Ctrl+C reads the full transcript buffer, not the visible screen slice");
+    assert.equal(exits, 0, "copying a selection does not trigger the quit path");
+  } finally {
+    unmount();
+  }
+});
+
+test("terminal focus loss clears a selection and focus regain repaints the TUI", async () => {
+  const copied: string[] = [];
+  const resumed = {
+    id: "focus-test",
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    messages: [
+      { role: "user" as const, content: "focus marker text" },
+      { role: "assistant" as const, content: "response remains available" },
+    ],
+  };
+  const { screen, stdin, unmount } = await mount({
+    resumed,
+    clipboard: (value) => { copied.push(value); return true; },
+  });
+  try {
+    await until(screen, (j) => j.includes("focus marker text"));
+    const rowIndex = screen.last.findIndex((row) => row.includes("focus marker text"));
+    const plainRow = stripSgr(screen.last[rowIndex]!);
+    const start = plainRow.indexOf("focus marker text");
+    const y = rowIndex + 1;
+    const x1 = start + 1;
+    const x2 = start + "focus marker text".length;
+    stdin.write("\x1b[<0;" + x1 + ";" + y + "M\x1b[<32;" + x2 + ";" + y + "M\x1b[<0;" + x2 + ";" + y + "m");
+    await until(screen, (j) => j.includes("copied 1 line"));
+    copied.length = 0;
+
+    const beforeFocus = screen.grids.length;
+    stdin.write("\x1b[O");
+    await until(screen, (j) => j.includes("focus marker text"));
+    stdin.write("\x03");
+    await until(screen, (j) => j.includes("press control c again to quit actor0"));
+    assert.equal(copied.length, 0, "Ctrl+C after focus loss does not reuse a stale selection");
+
+    stdin.write("\x1b[I");
+    stdin.write("still-responsive");
+    await until(screen, (j) => j.includes("still-responsive"));
+    assert.ok(screen.grids.length > beforeFocus, "the screen repaints after focus changes and accepts input");
   } finally {
     unmount();
   }

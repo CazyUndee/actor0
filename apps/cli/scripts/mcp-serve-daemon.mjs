@@ -238,7 +238,7 @@ async function startTunnel() {
   tunnel.unref();
   appendFileSync(tunnelLogFile, `${new Date().toISOString()} started detached tunnel-client (pid ${tunnel.pid}, profile ${tunnelProfile})\n`);
 
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     if (await tunnelIsUp()) {
       console.log(`tunnel up: pid ${readFileSync(tunnelPidFile, "utf8").trim()}, health http://127.0.0.1:${tunnelHealthPort}/ui — refresh the ChatGPT connector and open a new conversation`);
@@ -282,7 +282,7 @@ async function start() {
     note(`started detached daemon (spawn pid ${daemon.pid})`);
 
     let listening = false;
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       listening = await portIsListening(port);
       if (listening) break;

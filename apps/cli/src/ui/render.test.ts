@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { composerRows, entryLines, formatTimer, liveLines, windowRows } from "./render.js";
+import { addErrorRows, addKeyRows, addKindRows, addManualRows, addModelsRows, addUrlRows, addWorkingRows, composerRows, entryLines, formatTimer, liveLines, managePanelRows, mcpPanelRows, modelPickerRows, pickerRows, providerPanelRows, sessionPickerRows, slashPopupRows, thinkingPickerRows, usagePanelRows, windowRows } from "./render.js";
 import type { Entry } from "../conversation.js";
 
 /** Join rendered rows to plain text (no colour), for assertions. */
@@ -9,6 +9,34 @@ function text(rows: { text: string }[][]): string {
 }
 
 const COLS = 80;
+
+test("every menu and picker adapter uses the dedicated rounded menu style", () => {
+  const menus = [
+    providerPanelRows([{ name: "agnes", label: "Agnes", active: true }], 0, ""),
+    managePanelRows({ name: "agnes", label: "Agnes", model: "flash", endpoint: "https://example.test", auth: "API key" }, 0),
+    pickerRows({ title: "test picker", items: [{ label: "one" }], cursor: 0 }),
+    modelPickerRows([{ model: "model-a", provider: "provider-a" }], 0),
+    sessionPickerRows([{ id: "session-a", updatedAt: "now", messageCount: 2 }], 0),
+    thinkingPickerRows([{ label: "high", effort: "high" }], 0),
+    usagePanelRows([{ label: "today", tokens: 12, turns: 1, byModel: [{ model: "model-a", tokens: 12 }] }], 0),
+    mcpPanelRows(),
+    slashPopupRows([{ name: "help", description: "Show help" }], 0),
+    addKindRows(false, [{ id: "openai", label: "OpenAI", auth: ["api-key"] }], 0),
+    addUrlRows("OpenAI", "https://example.test").rows,
+    addKeyRows("OpenAI", "secret").rows,
+    addWorkingRows("Adding provider", "Fetching models"),
+    addErrorRows("Could not connect"),
+    addModelsRows("OpenAI", ["model-a"], 0, new Set(), 12),
+    addManualRows("OpenAI", "model-a").rows,
+  ];
+
+  for (const [index, rows] of menus.entries()) {
+    const rendered = text(rows);
+    assert.ok(rendered.startsWith("╭"), "menu " + index + " starts with the rounded top border");
+    assert.ok(rendered.includes("⌕") && rendered.includes("search"), "menu " + index + " uses the shared search row");
+    assert.ok(rendered.includes("╰"), "menu " + index + " ends with the rounded bottom border");
+  }
+});
 
 test("a tool call is a box headed by a clear tool name and its indented output", () => {
   const entry: Entry = { kind: "tool", name: "shell", target: "echo hi", status: "ok", output: { data: "hi\n", text: "hi\n" } };

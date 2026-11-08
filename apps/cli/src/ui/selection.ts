@@ -128,3 +128,16 @@ export function spans(s: SelectionState, cols: number): { row: number; from: num
   }
   return out;
 }
+
+/** Map content-row spans into the current viewport without changing the selection. */
+export function visibleSpans(
+  s: SelectionState,
+  cols: number,
+  windowStart: number,
+  visibleStart: number,
+  visibleCount: number,
+): { row: number; from: number; to: number }[] {
+  return spans(s, cols)
+    .map((span) => ({ ...span, row: visibleStart + span.row - windowStart }))
+    .filter((span) => span.row >= visibleStart && span.row < visibleStart + visibleCount);
+}

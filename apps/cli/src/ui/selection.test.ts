@@ -10,6 +10,7 @@ import {
   hasSelection,
   selectedText,
   spans,
+  visibleSpans,
 } from "./selection.js";
 import { highlight } from "./render.js";
 
@@ -51,16 +52,20 @@ test("trailing padding is trimmed, because every row is padded", () => {
   assert.equal(selectedText(s, padded), "ab\ncd");
 });
 
-test("a selection is anchored to text rows, not screen rows", () => {
-  // Scrolling the transcript changes which rows are on screen, but the
-  // selection's row indices refer to the content array passed in, so the
-  // same selection still selects the same text.
-  const lines = ["alpha", "beta", "gamma"];
-  const s = extend(begin({ col: 0, row: 1 }, 3, 5), { col: 4, row: 1 }, 3, 5);
-  assert.equal(selectedText(s, lines), "beta");
-  // Re-slicing (as a scroll would) keeps the selection valid on the same
-  // content identity.
-  assert.equal(selectedText(s, lines.slice()), "beta");
+test("selection follows its transcript text when the viewport scrolls", () => {
+  const transcript = ["zero", "alpha", "beta", "gamma", "delta", "epsilon"];
+  const selection = extend(begin({ col: 0, row: 2 }, transcript.length, 10), { col: 3, row: 2 }, transcript.length, 10);
+
+  assert.equal(selectedText(selection, transcript), "beta");
+  assert.deepEqual(visibleSpans(selection, 10, 0, 4, 3), [
+    { row: 6, from: 0, to: 3 },
+  ], "at the bottom, the highlight is painted at the row containing beta");
+
+  assert.deepEqual(visibleSpans(selection, 10, 2, 4, 3), [
+    { row: 4, from: 0, to: 3 },
+  ], "after scrolling up, the highlight moves with beta instead of staying at row 6");
+  assert.deepEqual(visibleSpans(selection, 10, 4, 4, 2), [], "when beta is off-screen, its highlight is not painted on unrelated text");
+  assert.equal(selectedText(selection, transcript), "beta", "copy still reads the original transcript row while it is off-screen");
 });
 
 test("spans are inclusive per row and clamped to the width", () => {

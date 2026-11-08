@@ -307,7 +307,7 @@ easy to miss:
    verbatim. `glob` was a later tool and this was the place AGENTS.md
    had not counted, which is how a green suite still shipped a tool the
    error message did not offer.
-2. **"the eight tools are advertised, and nothing else"** — the count is in
+2. **"the nine tools are advertised, and nothing else"** — the count is in
    the test's own name, so it fails when the tool set changes, which is
    the point. Keep the name honest.
 3. **"every tool verb in the prompt is a real tool"** — the list is written
@@ -460,14 +460,11 @@ The tests write `$$`, `$&` and `$'` into a file and read it back.
 - A shell command has **no** default timeout, deliberately: a 120s default
   killed real installs. The ceiling is an hour. Three tests in `tools.test.ts`
   pin this; they are not stale.
-- **Change a pinned dependency version only when it is worth it.** A bump for
-  its own sake is churn: a bigger diff to review, a new binary to re-verify,
-  and a chance to reintroduce a bug that was not there. Bump when there is a
-  reason — a fix you need, a feature you are using, a security patch — and say
-  which in the commit. This matters most for the external binaries the CLI
-  spawns (`mst`, `webclaw`), whose versions are pinned in `web-search.ts` and
-  SHA256-verified on install: leave them where they are unless a concrete need
-  says otherwise.
+- Web search and page extraction use Parallel's hosted Search MCP endpoint
+  (`https://search.parallel.ai/mcp`), configurable with
+  `ACTOR0_SEARCH_MCP_URL`. The MCP transport owns the server session; search
+  result IDs are not MCP session IDs. There are no downloaded search binaries
+  or pinned `mst`/`webclaw` versions to maintain.
 - Tool calls run in sequence, in the order the model asked for them.
 - History compaction only ever clears tool *payloads*. It never drops a
   message, never reorders, and never cuts mid-conversation-unit — a cut there

@@ -167,3 +167,9 @@ export function repoName(cwd: string): string {
 export function setCachedRepoIndex(index: RepoIndex): void {
   cache().set(index.cwd, index);
 }
+
+
+/** Return the cached index if available, or undefined. Never blocks. */
+export function tryGetRepoIndex(cwd: string): RepoIndex | undefined {
+  return cache().get(cwd);
+}

@@ -22,6 +22,11 @@ test("ESC followed by a printable char is Escape then the char", () => {
   assert.deepEqual(events, [{ type: "key", key: "escape" }, { type: "text", text: "x" }]);
 });
 
+test("terminal focus-in and focus-out reports parse as focus events", () => {
+  assert.deepEqual(parseInput("\x1b[I").events, [{ type: "focus", focused: true }]);
+  assert.deepEqual(parseInput("\x1b[O").events, [{ type: "focus", focused: false }]);
+});
+
 test("a mouse wheel event parses", () => {
   const { events } = parseInput("\x1b[<64;10;5M");
   assert.deepEqual(events, [{ type: "mouse", x: 10, y: 5, button: "wheel-up", release: false, drag: false }]);

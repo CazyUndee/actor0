@@ -17,7 +17,24 @@ import type { Seg } from "./render.js";
  * wherever `flattenText` did.
  */
 
-/** Inline markdown → styled segments. Code first, so a backtick run is literal. */
+/**
+ * Inline markdown → styled segments. Code first, so a backtick run is literal.
+ *
+ * A single forward pass: at each position the leading character decides which
+ * pattern can start there (`` ` `` code, `*`/`_` emphasis, `[` link), and the
+ * closing marker is located with `indexOf` from the current position. A
+ * failed check costs only the distance to the next marker of that character,
+ * and a successful match jumps the cursor past its close, so the whole scan
+ * is linear in the input — the previous version ran up to five anchored
+ * regexes over a `text.slice(i)` copy at every position, which was O(n²) per
+ * paragraph and dominated the live region's per-frame cost on long answers.
+ *
+ * Match shapes are the original regexes exactly: `**bold**` needs a doubled
+ * close (a `**a*` is not bold and not italic), `__bold__` is the underscore
+ * twin, `[label](url)` accepts an empty URL but never a missing `)`, and
+ * emphasis is non-nested — `**_x_**` is bold whose content literally reads
+ * `_x_`, which is what `[^*]+` always meant.
+ */
 function inline(text: string, base: Omit<Seg, "text"> = {}): Seg[] {
   const out: Seg[] = [];
   let buf = "";
@@ -26,41 +43,52 @@ function inline(text: string, base: Omit<Seg, "text"> = {}): Seg[] {
     buf = "";
   };
   let i = 0;
-  while (i < text.length) {
-    const rest = text.slice(i);
-    // `inline code`
-    const code = /^`([^`]+)`/.exec(rest);
-    if (code) {
-      flush();
-      out.push({ text: code[1]!, color: color.accentText, bg: color.surface, ...base });
-      i += code[0]!.length;
-      continue;
+  const n = text.length;
+  while (i < n) {
+    const c = text[i]!;
+    if (c === "`") {
+      // `inline code`: a backtick, at least one non-backtick char, a backtick.
+      const j = text.indexOf("`", i + 1);
+      if (j >= i + 2) {
+        flush();
+        out.push({ text: text.slice(i + 1, j), color: color.accentText, bg: color.surface, ...base });
+        i = j + 1;
+        continue;
+      }
+    } else if (c === "*" || c === "_") {
+      // **bold** / __bold__ first: a doubled marker, at least one char, a doubled close.
+      if (text[i + 1] === c) {
+        const j = text.indexOf(c, i + 2);
+        if (j >= i + 3 && text[j + 1] === c) {
+          flush();
+          out.push({ text: text.slice(i + 2, j), bold: true, ...base });
+          i = j + 2;
+          continue;
+        }
+      }
+      // *italic* / _italic_
+      const j = text.indexOf(c, i + 1);
+      if (j >= i + 2) {
+        flush();
+        out.push({ text: text.slice(i + 1, j), dim: true, ...base });
+        i = j + 1;
+        continue;
+      }
+    } else if (c === "[") {
+      // [label](url): label is at least one char, the URL may be empty but the
+      // closing paren is not optional — `[a](b` stays literal.
+      const j = text.indexOf("]", i + 1);
+      if (j >= i + 2 && text[j + 1] === "(") {
+        const k = text.indexOf(")", j + 2);
+        if (k >= j + 2) {
+          flush();
+          out.push({ text: text.slice(i + 1, j), color: color.accent, ...base });
+          i = k + 1;
+          continue;
+        }
+      }
     }
-    // **bold**
-    const bold = /^\*\*([^*]+)\*\*/.exec(rest) ?? /^__([^_]+)__/.exec(rest);
-    if (bold) {
-      flush();
-      out.push({ text: bold[1]!, bold: true, ...base });
-      i += bold[0]!.length;
-      continue;
-    }
-    // [link](url) — the label reads as a link; the URL is not worth a row.
-    const link = /^\[([^\]]+)\]\([^)]*\)/.exec(rest);
-    if (link) {
-      flush();
-      out.push({ text: link[1]!, color: color.accent, ...base });
-      i += link[0]!.length;
-      continue;
-    }
-    // *italic* / _italic_
-    const ital = /^\*([^*]+)\*/.exec(rest) ?? /^_([^_]+)_/.exec(rest);
-    if (ital) {
-      flush();
-      out.push({ text: ital[1]!, dim: true, ...base });
-      i += ital[0]!.length;
-      continue;
-    }
-    buf += text[i]!;
+    buf += c;
     i += 1;
   }
   flush();

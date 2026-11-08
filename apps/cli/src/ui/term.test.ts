@@ -21,6 +21,7 @@ test("render positions each row explicitly and never joins lines with CR/LF", ()
   const screen = new Screen(stream);
   screen.render(["aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc", "dddddddddd"]);
   const out = chunks.join("");
+  assert.ok(out.includes("\x1b[?1004h"), "the first rendered frame enables terminal focus reporting");
   // The bug this guards: lines are exactly `cols` wide, so writing the last
   // column leaves the terminal in pending-wrap; a CR/LF after it realises the
   // wrap, skips a row, and the frame scrolls — duplicating the bottom. Every
@@ -56,8 +57,10 @@ test("begin turns on SGR mouse reporting and dispose turns it off", () => {
   // scrolls in a real terminal — the tests inject the bytes and miss this.
   assert.ok(on.includes("\x1b[?1000h"), "mouse tracking is enabled");
   assert.ok(on.includes("\x1b[?1006h"), "SGR extended coordinates are enabled");
+  assert.ok(on.includes("\x1b[?1004h"), "terminal focus reporting is enabled");
   chunks.length = 0;
   screen.dispose();
   const off = chunks.join("");
   assert.ok(off.includes("\x1b[?1000l") && off.includes("\x1b[?1006l"), "mouse tracking is disabled on exit");
+  assert.ok(off.includes("\x1b[?1004l"), "terminal focus reporting is disabled on exit");
 });

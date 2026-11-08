@@ -30,7 +30,8 @@ export type KeyName =
 export type InputEvent =
   | { type: "text"; text: string }
   | { type: "key"; key: KeyName; ctrl?: boolean }
-  | { type: "mouse"; x: number; y: number; button: "left" | "wheel-up" | "wheel-down"; release: boolean; drag: boolean; hover?: boolean };
+  | { type: "mouse"; x: number; y: number; button: "left" | "wheel-up" | "wheel-down"; release: boolean; drag: boolean; hover?: boolean }
+  | { type: "focus"; focused: boolean };
 
 // eslint-disable-next-line no-control-regex -- matches the ESC that begins every SGR mouse report
 const MOUSE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
@@ -96,6 +97,11 @@ export function parseInput(buffer: string): { events: InputEvent[]; rest: string
     const c = CSI.exec(buffer.slice(i));
     if (c) {
       const code = c[2];
+      // DECSET 1004 focus reporting: terminals send CSI I on focus-in and
+      // CSI O on focus-out. Clearing transient UI on focus loss prevents a
+      // stale selection highlight surviving a tab switch.
+      if (code === "I") { events.push({ type: "focus", focused: true }); i += c[0].length; continue; }
+      if (code === "O") { events.push({ type: "focus", focused: false }); i += c[0].length; continue; }
       const map: Record<string, KeyName> = { A: "up", B: "down", C: "right", D: "left", H: "home", F: "end" };
       if (map[code]) events.push({ type: "key", key: map[code]! });
       else if (code === "~") {
