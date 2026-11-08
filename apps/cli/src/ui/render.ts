@@ -558,7 +558,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
 }
 
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
-export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number } }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, // eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number }; readingToolOutput?: boolean }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, // eslint-disable-next-line @typescript-eslint/no-explicit-any
 msPerFrame = 150, ...rest: any[]): Seg[][] {
   void budget;
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
@@ -624,7 +624,8 @@ msPerFrame = 150, ...rest: any[]): Seg[][] {
     const elapsedSec = effectiveStarted != null ? Math.max(0, Date.now() - effectiveStarted) / 1000 : elapsed;
     const timer = formatTimer(elapsedSec);
     const inner = Math.max(4, cols - 2);
-    const shimmer = shimmerSegs("reading your message", frame, 1.2, msPerFrame);
+    const shimmerLabel = live.readingToolOutput ? "reading tool output" : "reading your message";
+    const shimmer = shimmerSegs(shimmerLabel, frame, 1.2, msPerFrame);
     const shimmerW = shimmer.reduce((n, s) => n + s.text.length, 0);
     const fill = Math.max(0, inner - shimmerW - timer.length);
     const row: Seg[] = [...shimmer, { text: " ".repeat(fill) }, { text: timer, color: color.dim }];

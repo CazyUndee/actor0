@@ -30,6 +30,8 @@ export type Live = {
   status?: string;
   /** Tool currently executing, if any. */
   tool?: { name: string; target: string };
+  /** True after a tool result lands and before the model starts answering. */
+  readingToolOutput?: boolean;
   /** Set when the harness rewound output and is retrying. */
   retrying?: { attempt: number };
   /** True once the harness reports the answer is incomplete. */
@@ -241,11 +243,11 @@ export function applyEvent(
       // reasoning to a committed entry before the answer starts, so the
       // "thinking" block disappears the moment the model stops thinking.
       const flushed = flushReasoning(state, timing);
-      return { ...flushed, live: { ...flushed.live, text: flushed.live.text + event.delta } };
+      return { ...flushed, live: { ...flushed.live, text: flushed.live.text + event.delta, readingToolOutput: false } };
     }
 
     case "reasoning":
-      return { ...state, live: { ...state.live, reasoning: state.live.reasoning + event.delta } };
+      return { ...state, live: { ...state.live, reasoning: state.live.reasoning + event.delta, readingToolOutput: false } };
 
     case "status":
       return { ...state, live: { ...state.live, status: event.status } };
@@ -311,7 +313,7 @@ export function applyEvent(
       // spinner is cleared in the same step. Any thinking that led here is
       // committed first, or it would surface later as if the tool had prompted it.
       const flushed = flushReasoning(state, timing);
-      return { ...flushed, entries: [...flushed.entries, entry], live: { ...flushed.live, tool: undefined } };
+      return { ...flushed, entries: [...flushed.entries, entry], live: { ...flushed.live, tool: undefined, readingToolOutput: true } };
     }
 
     case "tool_call": {
