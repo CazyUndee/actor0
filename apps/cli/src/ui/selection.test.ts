@@ -51,6 +51,18 @@ test("trailing padding is trimmed, because every row is padded", () => {
   assert.equal(selectedText(s, padded), "ab\ncd");
 });
 
+test("a selection is anchored to text rows, not screen rows", () => {
+  // Scrolling the transcript changes which rows are on screen, but the
+  // selection's row indices refer to the content array passed in, so the
+  // same selection still selects the same text.
+  const lines = ["alpha", "beta", "gamma"];
+  const s = extend(begin({ col: 0, row: 1 }, 3, 5), { col: 4, row: 1 }, 3, 5);
+  assert.equal(selectedText(s, lines), "beta");
+  // Re-slicing (as a scroll would) keeps the selection valid on the same
+  // content identity.
+  assert.equal(selectedText(s, lines.slice()), "beta");
+});
+
 test("spans are inclusive per row and clamped to the width", () => {
   const s = extend(begin({ col: 2, row: 0 }, ROWS, COLS), { col: 4, row: 1 }, ROWS, COLS);
   assert.deepEqual(spans(s, COLS), [
