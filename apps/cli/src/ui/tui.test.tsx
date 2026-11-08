@@ -662,17 +662,25 @@ test("terminal focus loss clears a selection and focus regain repaints the TUI",
     await until(screen, (j) => j.includes("copied 1 line"));
     copied.length = 0;
 
-    const beforeFocus = screen.grids.length;
+    const beforeFocusOut = screen.grids.length;
     stdin.write("\x1b[O");
-    await until(screen, (j) => j.includes("focus marker text"));
+    await until(screen, (j) => j.includes("focus marker text") && screen.grids.length > beforeFocusOut);
+    // FakeScreen runs without ANSI colour, so verify the focus event itself
+    // caused a new frame; the Ctrl+C assertion below verifies the selection
+    // state was cleared rather than merely hidden.
+
+    const beforeFocusIn = screen.grids.length;
+    stdin.write("\x1b[I");
+    await until(screen, (j) => j.includes("focus marker text") && screen.grids.length > beforeFocusIn);
+    assert.ok(screen.last[rowIndex]!.includes("focus marker text"), "focus-in repaints the transcript");
+
     stdin.write("\x03");
     await until(screen, (j) => j.includes("press control c again to quit actor0"));
     assert.equal(copied.length, 0, "Ctrl+C after focus loss does not reuse a stale selection");
 
-    stdin.write("\x1b[I");
     stdin.write("still-responsive");
     await until(screen, (j) => j.includes("still-responsive"));
-    assert.ok(screen.grids.length > beforeFocus, "the screen repaints after focus changes and accepts input");
+    assert.ok(screen.grids.length > beforeFocusIn, "the composer remains responsive after focus changes");
   } finally {
     unmount();
   }
