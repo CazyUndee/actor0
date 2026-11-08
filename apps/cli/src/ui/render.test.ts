@@ -149,3 +149,25 @@ test("composer without topRight has a plain top border", () => {
   assert.ok(!top.includes("press ctrl"), "no hint when topRight is absent");
   assert.ok(top.startsWith("╭") && top.endsWith("╮"), "the border is still a rounded box");
 });
+
+test("windowRows clamps offset at the top of the transcript", () => {
+  const all = Array.from({ length: 100 }, (_, i) => `line-${i}`);
+  const height = 20;
+  // Offset 0 = bottom: shows last 20 lines
+  const bottom = windowRows(all, height, 0);
+  assert.equal(bottom.length, 20);
+  assert.equal(bottom[0], "line-80");
+  assert.equal(bottom[19], "line-99");
+
+  // Offset way past max (1000) should clamp to max (80)
+  const clamped = windowRows(all, height, 1000);
+  assert.equal(clamped.length, 20);
+  assert.equal(clamped[0], "line-0"); // top of transcript
+  assert.equal(clamped[19], "line-19");
+});
+
+test("windowRows returns empty for zero height", () => {
+  const all = ["a", "b", "c"];
+  assert.deepEqual(windowRows(all, 0, 0), []);
+  assert.deepEqual(windowRows(all, -1, 0), []);
+});
