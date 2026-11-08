@@ -5,6 +5,7 @@ import type { CliConfig } from "../config.js";
 import { App } from "./App.js";
 import { Screen } from "./term.js";
 import { setCachedEnvironment } from "./env-cache.js";
+import { setCachedShell } from "../tools.js";
 
 type WorkerLike = { once: (event: string, cb: (...args: unknown[]) => void) => void; terminate: () => Promise<number>; };
 
@@ -52,6 +53,26 @@ function warmEnvironment(onWorker: (w: WorkerLike | null) => void): void {
   })();
 }
 
+function warmShell(onWorker: (w: WorkerLike | null) => void): void {
+  void (async () => {
+    try {
+      const { Worker } = await import("node:worker_threads");
+      const { fileURLToPath } = await import("node:url");
+      const { dirname, join } = await import("node:path");
+      const path = join(dirname(fileURLToPath(import.meta.url)), "shell-worker.mjs");
+      const worker = new Worker(path) as unknown as WorkerLike;
+      onWorker(worker);
+      worker.once("message", (shell: unknown) => {
+        setCachedShell(shell as Parameters<typeof setCachedShell>[0]);
+        void worker.terminate();
+      });
+      worker.once("error", () => void worker.terminate());
+    } catch {
+      onWorker(null);
+    }
+  })();
+}
+
 export interface BootOptions {
   cwd: string;
   config: CliConfig;
@@ -75,6 +96,7 @@ export async function bootTui(opts: BootOptions): Promise<() => Promise<void>> {
   // first frame. detectEnvironment (in the turn path) reads the warmed cache.
   let worker: WorkerLike | null = null;
   warmEnvironment((w) => { worker = w; });
+  warmShell(() => {});
   const { PassThrough } = await import("node:stream");
   const sink = new PassThrough();
   sink.resume();

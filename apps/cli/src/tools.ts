@@ -5,7 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { formatEditDiff } from "./diff.js";
 import { findSkill, loadSkills, renderSkill } from "./skills.js";
 import { invalidateRepoIndex } from "./repo-index.js";
-import { webSearch, formatWebResults } from "./mcp-search.js";
+import { webSearch, formatWebResults } from "./web-search.js";
 
 /**
  * The CLI's tools.
@@ -672,6 +672,11 @@ function probe(candidate: ShellCandidate): { usable: boolean; chains: boolean } 
 /** Resolved once: the probe spawns a process and this is on every tool call. */
 let cachedShell: ResolvedShell | undefined;
 
+/** Warm the shell cache from a worker thread result. */
+export function setCachedShell(shell: ResolvedShell): void {
+  cachedShell = shell;
+}
+
 /**
  * The shell this machine actually has, and how to talk to it.
  *
@@ -685,7 +690,7 @@ let cachedShell: ResolvedShell | undefined;
  * user launched from a POSIX shell, otherwise PowerShell and then cmd.exe on
  * Windows. `ACTOR0_SHELL` overrides it for anyone who wants a specific one.
  */
-function resolveShellSync(): ResolvedShell {
+export function resolveShellSync(): ResolvedShell {
   const override = process.env.ACTOR0_SHELL;
   const candidates: ShellCandidate[] = override
     ? [posixShell(override)]
