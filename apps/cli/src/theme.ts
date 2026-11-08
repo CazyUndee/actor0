@@ -13,14 +13,24 @@ import { cronix } from "./theme.generated.js";
  */
 
 export const color = {
-  /** Default body text. */
+  /** Default body text. Meets WCAG AAA against the background. */
   text: cronix.color.text,
-  /** De-emphasised text: hints, paths, timestamps. */
+  /** De-emphasised text: hints, paths, timestamps. Meets WCAG AA against the background. */
   muted: cronix.color.textMuted,
-  /** Barely-there text: rules, inactive affordances. */
-  dim: cronix.color.textDim,
-  /** The accent that marks the user's own input and interactive affordances. */
-  accent: cronix.color.accentLight,
+  /**
+   * Barely-there text: rules, inactive affordances.
+   * CronixUI's `textDim` (#444342) is only ~2:1 against the black terminal
+   * background and is effectively invisible, so it is remapped to `textMuted`
+   * (~4.7:1), which is readable while still sitting below body text.
+   */
+  dim: cronix.color.textMuted,
+  /**
+   * The accent that marks the user's own input and interactive affordances.
+   * `accentLight` (#8a3535) is only ~2.5:1 as text, so it is remapped to
+   * `accentText` (#c97a7a, ~6.2:1), the token designed for accent-coloured
+   * text on the dark background.
+   */
+  accent: cronix.color.accentText,
   accentText: cronix.color.accentText,
   success: cronix.color.successText,
   warning: cronix.color.warningText,
@@ -28,8 +38,12 @@ export const color = {
   info: cronix.color.infoText,
   /** Filled background for highlighted blocks (tool calls). */
   surface: cronix.color.surface2,
-  /** The frame's border grey. */
-  border: cronix.color.borderFocus,
+  /**
+   * The frame's border grey.
+   * `borderFocus` (#474747) is ~2:1 against the background and vanishes, so it
+   * is remapped to `textMuted` (~4.7:1), which passes the 3:1 UI-component bar.
+   */
+  border: cronix.color.textMuted,
   /**
    * Text-selection background. The surface tokens are all dark fills meant to
    * sit under text; a selection has to be legible the other way, so it reuses
