@@ -1234,12 +1234,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         }
       }
       if (event.drag) {
-        setSelection((s) => extend(s, pt, Math.max(1, plainRowsRef.current.length), innerW));
+        setSelection((s) => s.anchor ? extend(s, pt, Math.max(1, plainRowsRef.current.length), innerW) : begin(pt, Math.max(1, plainRowsRef.current.length), innerW));
         return;
       }
-      if (!event.release) {
-        setSelection(() => begin(pt, Math.max(1, plainRowsRef.current.length), innerW));
-      }
+      // A plain click (press + release with no drag) must not leave a
+      // one-cell selection highlight behind. Selection only starts on the
+      // first drag motion, so a click never creates a selection at all.
+      if (!event.release) return;
+      if (!hasSelection(selection)) return;
       let copiedText = "";
       setSelection((s) => {
         const done = finish(s);
