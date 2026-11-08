@@ -92,7 +92,7 @@ function probeCommands(shell: ResolvedShell, names: readonly string[]): Set<stri
   try {
     const run = spawnSync(shell.command, [...shell.prefixArgs, script], {
       encoding: "utf8",
-      timeout: 5_000,
+      timeout: 2_000,
       windowsHide: true,
     });
     // A failed probe is not a failed session: it means the inventory is
