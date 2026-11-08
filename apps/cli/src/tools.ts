@@ -730,9 +730,6 @@ export function resolveShell(): ResolvedShell {
   // Return immediately with a provisional value; probe in the background so
   // the UI never freezes on the first message.
   cachedShell = provisionalShell();
-  setTimeout(() => {
-    try { cachedShell = resolveShellSync(); } catch { /* keep provisional */ }
-  }, 0);
   return cachedShell;
 }
 
