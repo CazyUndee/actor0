@@ -485,10 +485,17 @@ export function managePanelRows(
 export function entryLines(entry: Entry, cols: number, expandReasoning = false, tight = false): Seg[][] {
   switch (entry.kind) {
     case "user": {
-      // The user's own message: wrapped to width and boxed like an answer,
-      // but with the crimson accent border and a grey fill so it reads as
-      // the user's side of the conversation.
-      const wrapped = wrapText(entry.text, cols - 4).split("\n").map((l) => plain(l, color.text));
+      // The user's own message: wrapped to width, right-aligned, and boxed
+      // like an answer — but with the crimson accent border and a grey fill
+      // so it reads as the user's side of the conversation.
+      const inner = Math.max(4, cols - 2);
+      const wrapped = wrapText(entry.text, cols - 4)
+        .split("\n")
+        .map((l) => {
+          const row = plain(l, color.text);
+          const pad = Math.max(0, inner - segWidth(row));
+          return pad > 0 ? [{ text: " ".repeat(pad), bg: color.selectionBg }, ...row] : row;
+        });
       return [blank(), ...box(wrapped, cols, { border: color.accent, bg: color.selectionBg })];
     }
 
