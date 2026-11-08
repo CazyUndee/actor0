@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { composerRows, entryLines, formatTimer, liveLines } from "./render.js";
+import { composerRows, entryLines, formatTimer, liveLines, windowRows } from "./render.js";
 import type { Entry } from "../conversation.js";
 
 /** Join rendered rows to plain text (no colour), for assertions. */
