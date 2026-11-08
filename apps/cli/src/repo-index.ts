@@ -46,7 +46,7 @@ const SKIP_GLOBS = ["!**/node_modules/**"];
 
 /** The files `rg --files` reports for `cwd`, POSIX and cwd-relative. */
 /** Upper bound on how long `rg --files` may block the first turn's event loop. */
-const RG_LIST_TIMEOUT_MS = 5_000;
+const RG_LIST_TIMEOUT_MS = 2_000;
 
 function listFiles(cwd: string): string[] {
   const run = spawnSync(
@@ -160,4 +160,10 @@ export function queryRepoIndex(index: RepoIndex, query: string, limit = 50): str
 /** The top-level name of the repo, for a caption. */
 export function repoName(cwd: string): string {
   return basename(cwd) || "repo";
+}
+
+
+/** Warm the repo index cache from a worker thread result. */
+export function setCachedRepoIndex(index: RepoIndex): void {
+  cache().set(index.cwd, index);
 }
