@@ -557,9 +557,29 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
   }
 }
 
+/**
+ * One slot each, held by the caller (the App owns one): the two content
+ * boxes of the live region — the streamed answer and the expanded reasoning
+ * chain — are pure functions of (text, cols) and of nothing else. The
+ * animation state (`frame`, `elapsed`, spinner, shimmer) must not make them
+ * re-layout: at a 16 ms tick on a long answer that is the whole cost of the
+ * frame, so a warm frame hits in O(1) and only a new token or a resize
+ * recomputes. The rows are shared with the cache on purpose — nothing
+ * downstream mutates a row, and the committed `entryRowList` already works
+ * the same way through its memo.
+ */
+export type LiveLayoutCache = {
+  answer: { text: string; cols: number; rows: Seg[][] } | null;
+  reasoning: { text: string; cols: number; rows: Seg[][] } | null;
+};
+
+export function newLiveLayoutCache(): LiveLayoutCache {
+  return { answer: null, reasoning: null };
+}
+
 /** The in-flight region (spinner, reasoning, streamed text) as rows of segments. */
 export function liveLines(live: { text: string; reasoning: string; status?: string; tool?: { name: string; target: string }; retrying?: { attempt: number }; readingToolOutput?: boolean }, frame: number, elapsed: number, cols: number, budget: number, waitingOnUser = false, expandReasoning = true, reasoningStartedAt: number | null = null, // eslint-disable-next-line @typescript-eslint/no-explicit-any
-msPerFrame = 150, ...rest: any[]): Seg[][] {
+msPerFrame = 150, layoutCache: LiveLayoutCache | undefined = undefined, ...rest: any[]): Seg[][] {
   void budget;
   const busy = Boolean(live.text || live.reasoning || live.tool || live.status || live.retrying);
   let showThinking = false;
@@ -602,10 +622,11 @@ msPerFrame = 150, ...rest: any[]): Seg[][] {
     // any other long text with no truncation — it never yields to the row
     // budget, even if it runs past the bottom of the screen.
     if (expandReasoning) {
-      const lines = flattenText(live.reasoning.trimEnd(), proseWidth(cols - 6));
-      const rows = lines.map((l) => plain(l, color.muted));
+      const hit = layoutCache?.reasoning && layoutCache.reasoning.text === live.reasoning && layoutCache.reasoning.cols === cols ? layoutCache.reasoning.rows : null;
+      const boxed = hit ?? box(flattenText(live.reasoning.trimEnd(), proseWidth(cols - 6)).map((l) => plain(l, color.muted)), cols, { border: color.dim });
+      if (layoutCache && !hit) layoutCache.reasoning = { text: live.reasoning, cols, rows: boxed };
       out.push(blank());
-      out.push(...box(rows, cols, { border: color.dim }));
+      out.push(...boxed);
     } else {
       const elapsedSec = reasoningStartedAt != null ? Math.max(0, Date.now() - reasoningStartedAt) / 1000 : 0;
       const timer = formatTimer(elapsedSec);
@@ -637,8 +658,10 @@ msPerFrame = 150, ...rest: any[]): Seg[][] {
   // snap when it lands. When it outgrows the viewport the older lines are
   // counted at the top of the box, not silently dropped.
   if (live.text) {
-    const all = renderMarkdown(live.text, cols - 4);
-    out.push(...box(all, cols, { border: color.dim }));
+    const hit = layoutCache?.answer && layoutCache.answer.text === live.text && layoutCache.answer.cols === cols ? layoutCache.answer.rows : null;
+    const all = hit ?? box(renderMarkdown(live.text, cols - 4), cols, { border: color.dim });
+    if (layoutCache && !hit) layoutCache.answer = { text: live.text, cols, rows: all };
+    out.push(...all);
   }
   return out;
 }

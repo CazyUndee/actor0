@@ -81,6 +81,7 @@ import {
   segWidth,
   type Face,
   type Seg,
+  newLiveLayoutCache,
 } from "./render.js";
 import { PROVIDER_KINDS, type ProviderKind } from "../provider-presets.js";
 import { providerLabel } from "../provider-presets.js";
@@ -230,6 +231,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const transcriptStartRowRef = useRef(0); // visible index where transcript begins
   const transcriptCountRef = useRef(0);
   const transcriptVisibleBudgetRef = useRef(0);
+  const liveLayoutCacheRef = useRef(newLiveLayoutCache());
   const popupStartRowRef = useRef(0);
   const popupCountRef = useRef(0);
   // Wall-clock ms when the current live reasoning segment began; used for the
@@ -1921,7 +1923,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // completely rather than clipping the pinned composer.
     const chromeH = top.length + blockedRow.length + (menuSlot ? 1 : 0) + slashPopup.length + menuContent.length + composer.length + 1;
     const transcriptV = menuSlot ? 0 : Math.max(0, rows - 2 - chromeH);
-    const live = menuSlot ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), liveReasoningExpanded, reasoningStartedAtRef.current, 16, turnStartedAtRef.current, showThinking);
+    const live = menuSlot ? [] : liveLines(conversation.live, frame, elapsed, innerW, transcriptV, Boolean(conversation.blocked), liveReasoningExpanded, reasoningStartedAtRef.current, 16, liveLayoutCacheRef.current, turnStartedAtRef.current, showThinking);
 
     // One layout for every menu: the top area, a blank line, the menu in its
     // static slot, blank fill, the pinned composer. Menus of every kind sit
