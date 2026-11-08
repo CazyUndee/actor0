@@ -3,7 +3,7 @@ import type { Entry } from "../conversation.js";
 import { color } from "../theme.js";
 import { parseDiffBlock } from "../diff.js";
 import { formatTokens } from "../usage.js";
-import { flattenText, proseWidth, toolRowFailed } from "./parts.js";
+import { flattenText, proseWidth, toolRowFailed, wrapText } from "./parts.js";
 import { renderMarkdown } from "./markdown.js";
 
 /** A clear, human name for a tool — "Bash", not the cryptic "$". */
@@ -484,14 +484,13 @@ export function managePanelRows(
 /** One committed transcript entry, as rows of segments (each row ≤ `cols`). */
 export function entryLines(entry: Entry, cols: number, expandReasoning = false, tight = false): Seg[][] {
   switch (entry.kind) {
-    case "user":
-      return [
-        blank(),
-        [
-          { text: "❯ ", color: color.accent, bold: true },
-          { text: entry.text, color: color.text },
-        ],
-      ];
+    case "user": {
+      // The user's own message: wrapped to width and boxed like an answer,
+      // but with the crimson accent border and a grey fill so it reads as
+      // the user's side of the conversation.
+      const wrapped = wrapText(entry.text, cols - 4).split("\n").map((l) => plain(l, color.text));
+      return [blank(), ...box(wrapped, cols, { border: color.accent, bg: color.selectionBg })];
+    }
 
     case "assistant": {
       const rows = renderMarkdown(entry.text, cols - 4);
@@ -796,35 +795,25 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
     const pos = Math.max(2, inner - label.length - 1);
     const rightPad = Math.max(0, inner - pos - label.length);
     topBorder = [
-      { text: "╭", color: color.dim },
-      { text: "─".repeat(pos), color: color.dim },
-      { text: label, color: opts.topRightColor ?? color.dim },
-      { text: "─".repeat(rightPad), color: color.dim },
-      { text: "╮", color: color.dim },
+      { text: "╭", color: color.accent },
+      { text: "─".repeat(pos), color: color.accent },
+      { text: label, color: opts.topRightColor ?? color.accent },
+      { text: "─".repeat(rightPad), color: color.accent },
+      { text: "╮", color: color.accent },
     ];
   } else {
-    topBorder = [{ text: `╭${"─".repeat(inner)}╮`, color: color.dim }];
+    topBorder = [{ text: `╭${"─".repeat(inner)}╮`, color: color.accent }];
   }
   const rows: Seg[][] = [topBorder];
-  if (above > 0) rows.push([{ text: "│", color: color.dim }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.dim }]);
-  visible.forEach((row, vi) => {
-    const isCaretRow = startIdx + vi === caretRow;
+  if (above > 0) rows.push([{ text: "│", color: color.accent }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.accent }]);
+  visible.forEach((row) => {
     const content: Seg[] = [];
     if (row.first) content.push({ text: glyph, color: opts.busy ? color.dim : color.accent, bold: true });
-    if (isCaretRow) {
-      // A GUI-style block cursor drawn into the grid: the character under the
-      // caret (or a space at the end) is reverse-filled, so there is no blinking
-      // terminal caret at all.
-      const at = caretCol < row.text.length ? row.text[caretCol]! : " ";
-      content.push({ text: row.text.slice(0, caretCol), color: color.text });
-      content.push({ text: at, color: color.surface, bg: color.text });
-      if (caretCol < row.text.length) content.push({ text: row.text.slice(caretCol + 1), color: color.text });
-    } else {
-      content.push({ text: row.text, color: color.text });
-    }
-    rows.push([{ text: "│", color: color.dim }, ...fitWidth(content, inner), { text: "│", color: color.dim }]);
+    // No block caret: the draft renders as plain text, no reverse-filled cell.
+    content.push({ text: row.text, color: color.text, bg: color.selectionBg });
+    rows.push([{ text: "│", color: color.accent }, ...fitWidth(content, inner), { text: "│", color: color.accent }]);
   });
-  rows.push(plain(`╰${"─".repeat(inner)}╯`, color.dim));
+  rows.push(plain(`╰${"─".repeat(inner)}╯`, color.accent));
 
   // inputRow is the caret's row within `rows` (rows[0] is the top border);
   // inputCol is the composer-box column just after its character.
