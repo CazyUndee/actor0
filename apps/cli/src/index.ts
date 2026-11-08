@@ -51,6 +51,8 @@ async function readVersion(): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  const { enableCompileCache } = await import("node:module") as unknown as { enableCompileCache: (options?: unknown) => void };
+  enableCompileCache();
   const flags = parseFlags(process.argv.slice(2));
 
   if (flags.help) {
