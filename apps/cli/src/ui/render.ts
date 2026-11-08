@@ -256,7 +256,7 @@ export type MenuEntry = {
 };
 
 /** The canonical search-bar row: fixed `⌕  search` label, `│` divider, input. */
-function menuSearchRow(query: string, live: boolean, info: boolean): Seg[] {
+function menuSearchRow(query: string, info: boolean): Seg[] {
   const out: Seg[] = [
     { text: "⌕  ", color: color.dim },
     { text: "search", color: color.dim },
@@ -265,7 +265,6 @@ function menuSearchRow(query: string, live: boolean, info: boolean): Seg[] {
     { text: " ", color: color.dim },
   ];
   if (query) out.push({ text: query, color: info ? color.muted : color.text, bold: !info });
-  else if (live) out.push({ text: "▏", color: color.accent });
   return out;
 }
 
@@ -292,7 +291,7 @@ export function menuRows(o: {
   const innerW = width - 2;
   const query = o.query ?? "";
   const divider: Seg[] = [{ text: "─".repeat(innerW), color: color.border }];
-  const rows: Seg[][] = [menuSearchRow(query, o.live ?? false, o.info ?? false), divider];
+  const rows: Seg[][] = [menuSearchRow(query, o.info ?? false), divider];
   const hitMapInner: number[] = [-1, -1];
 
   // Column layout: a fixed 2-column marker, an aligned label column, and the
@@ -746,8 +745,10 @@ export function frameLine(text: string, columns: number): string {
 export function composerRows(opts: { cols: number; draft: string; caret: number; busy: boolean; maxHeight?: number; topRight?: string; topRightColor?: string }): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const width = Math.max(20, opts.cols);
   const inner = width - 2;
-  // No leading glyph: the composer is just a bordered text box.
-  const firstWidth = inner;
+  // A column of breathing room separates the draft from the left border, so
+  // every visual row wraps at inner - gutter, leaving the gutter for padding.
+  const gutter = 1;
+  const lineW = Math.max(4, inner - gutter);
   const caret = Math.max(0, Math.min(opts.caret, opts.draft.length));
 
   // Hard-wrap the draft into visual rows of fixed width, so a long line wraps
@@ -760,7 +761,7 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   let lineStart = 0;
   for (let li = 0; li < logical.length; li += 1) {
     const line = logical[li]!;
-    const lineWidth = li === 0 ? firstWidth : inner;
+    const lineWidth = lineW;
     const n = Math.max(1, Math.ceil(line.length / lineWidth));
     for (let wi = 0; wi < n; wi += 1) {
       all.push({ text: line.slice(wi * lineWidth, wi * lineWidth + lineWidth), start: lineStart + wi * lineWidth, first: li === 0 && wi === 0 });
@@ -814,7 +815,8 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   if (above > 0) rows.push([{ text: "│", color: color.crimson }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.crimson }]);
   visible.forEach((row) => {
     const content: Seg[] = [];
-    // No leading glyph, no block caret: the draft renders as plain text.
+    // A leading gutter keeps the draft from touching the left border.
+    content.push({ text: " ".repeat(gutter), bg: color.selectionBg });
     content.push({ text: row.text, color: color.text, bg: color.selectionBg });
     rows.push([{ text: "│", color: color.crimson }, ...fitWidth(content, inner), { text: "│", color: color.crimson }]);
   });
@@ -823,7 +825,7 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   // inputRow is the caret's row within `rows` (rows[0] is the top border);
   // inputCol is the composer-box column just after its character.
   const inputRow = 1 + (above > 0 ? 1 : 0) + (caretRow - startIdx);
-  return { rows, inputRow, inputCol: 2 + caretCol };
+  return { rows, inputRow, inputCol: 2 + gutter + caretCol };
 }
 
 export interface PickerItem {

@@ -69,6 +69,7 @@ import {
   addErrorRows,
   addModelsRows,
   addManualRows,
+  SEARCH_INPUT_COL,
   stateFace,
   topArea,
   windowRows,
@@ -1870,7 +1871,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     return rows;
   }, [conversation.entries, screen.size.cols, expandedReasoning]);
 
-  const buildGrid = (): { grid: string[] } => {
+  const buildGrid = (): { grid: string[]; caret?: { row: number; col: number } } => {
     const cols = screen.size.cols;
     const rows = screen.size.rows;
     const innerW = frameInnerWidth(cols);
@@ -1898,7 +1899,10 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
                   : color.info,
           }
           : undefined;
-    const composer = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH, topRight: status?.text, topRightColor: status?.color }).rows;
+    const composerBuilt = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH, topRight: status?.text, topRightColor: status?.color });
+    const composer = composerBuilt.rows;
+    const composerInputRow = composerBuilt.inputRow;
+    const composerInputCol = composerBuilt.inputCol;
     const blockedRow = conversation.blocked ? [[{ text: `the agent needs you: ${conversation.blocked.message} — reply to continue, or /clear`, color: color.warning }]] : [];
 
     // Human-readable header: the provider label, the model, branch, context, session.
@@ -1996,7 +2000,24 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     for (const line of painted) grid.push(`│ ${line} │`);
     grid.push(bottomFrameBorder(cols));
 
-    return { grid };
+    // Native terminal cursor: position it over the active text input so the
+    // real (blinking) cursor shows instead of a drawn-in block caret.
+    let cursorPos: { row: number; col: number } | undefined;
+    if (!menuOpen) {
+      const composerTop = top.length + blockedRow.length + transcript.length;
+      cursorPos = { row: 2 + composerTop + composerInputRow, col: 2 + composerInputCol };
+    } else {
+      // Menu search bar: first row of the menu slot.
+      const searchRow = top.length + blockedRow.length + 1; // inner index of menuContent[0]
+      const menuQuery = mode === "menu" ? providerQuery
+        : mode === "model" ? modelQuery
+        : mode === "thinking" ? thinkingQuery
+        : mode === "session" ? sessionQuery
+        : mode === "add" ? (add.kind === "models" ? add.query : add.kind === "kind" ? addKindQuery : "")
+        : "";
+      cursorPos = { row: 2 + searchRow, col: 2 + SEARCH_INPUT_COL + (menuQuery?.length ?? 0) };
+    }
+    return { grid, caret: cursorPos };
   };
 
   function menuContentRows(height: number): Seg[][] {
@@ -2072,11 +2093,13 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
 
   // Draw on every state change. A full-screen grid is small; rewriting it each
   // frame is cheap and — unlike re-reconciling an Ink tree — never drops a byte.
-  // The blinking terminal caret is never shown: the composer draws its own
-  // block cursor into the grid, so the app owns the whole frame like a GUI.
+  // The native terminal caret is parked over the active text input afterwards,
+  // so the real blinking cursor follows the draft / search bar.
   useEffect(() => {
-    const { grid } = buildGrid();
+    const { grid, caret } = buildGrid();
     screen.render(grid);
+    if (caret) screen.caret(caret.row, caret.col);
+    else screen.hideCaret();
   });
 
   // Restore the terminal on unmount.
