@@ -545,7 +545,9 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
   build counter is the thing that moves on every commit. A build is not a
   release — only a version bump is.
 - **Determine the current build number from recent commits.** Before
-  committing, check the most recent commit body for `(build: N)` and use
+  committing, run `bash scripts/build-number.sh` to count commits since the
+  last release tag (`vX.Y.Z`). The output is the build number to use.
+  Alternatively, check the most recent commit body for `(build: N)` and use
   `N + 1`. Do not hardcode `(build: 1)` — multiple agents have each written
   `(build: 1)` instead of incrementing, which makes the counter useless.
   If the most recent commit has no build number, treat it as `0` and start
