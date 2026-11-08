@@ -185,34 +185,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [onboarding, setOnboarding] = useState(false);
   const [contextTokens, setContextTokens] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
-  // Momentum scrolling: velocity accumulates from wheel ticks (rows per frame,
-  // signed, down = positive) and decays each frame so a fast flick coasts.
-  const scrollVelocityRef = useRef(0);
-  const lastWheelTimeRef = useRef(0);
-  const scrollFrameRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scrollFrame = () => {
-    scrollFrameRef.current = null;
-    const velocity = scrollVelocityRef.current;
-    if (Math.abs(velocity) < 0.5) {
-      scrollVelocityRef.current = 0;
-      return;
-    }
-    const maxOffset = Math.max(0, transcriptCountRef.current - transcriptVisibleBudgetRef.current);
-    setScrollOffset((o) => {
-      const next = o + velocity;
-      const clamped = Math.min(maxOffset, Math.max(0, next));
-      // Hitting a bound kills momentum (no bounce).
-      if (clamped === maxOffset || clamped === 0) {
-        scrollVelocityRef.current = 0;
-        return clamped;
-      }
-      scrollVelocityRef.current = velocity * 0.88; // friction
-      return clamped;
-    });
-    if (Math.abs(scrollVelocityRef.current) > 0.5) {
-      scrollFrameRef.current = setTimeout(scrollFrame, 0);
-    }
-  };
+  // Wheel scrolling is one-to-one with ticks: each wheel notch moves a fixed
+  // number of rows, clamped to the transcript. Momentum/coasting made the
+  // feel fiddly (slow ticks dropped below the threshold, fast ticks jumped),
+  // so each tick scrolls the same amount, predictably.
+  const SCROLL_ROWS_PER_TICK = 3;
   // Selection anchors are transcript-content coordinates. Mouse cells are
   // translated through the current scroll window before they reach this state.
   const [selection, setSelectionState] = useState<SelectionState>(emptySelection);
@@ -1286,16 +1263,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (mode === "chat") {
       // The open slash menu owns the wheel: it moves through the command list.
       if (slashEngaged) return setSlashIndex((i) => wrapSlash(i, slashMatches.length, dir));
-      const now = Date.now();
-      const dt = Math.max(1, now - (lastWheelTimeRef.current ?? now));
-      lastWheelTimeRef.current = now;
-      // Faster ticks = more velocity per tick; cap so a single tick can't
-      // jerk the transcript too far. dir < 0 (wheel-up) scrolls up = higher
-      // scrollOffset, so negate dir.
-      const timeScale = Math.min(1, 16 / dt);
-      scrollVelocityRef.current += -dir * 3 * timeScale;
-      scrollVelocityRef.current = Math.max(-30, Math.min(30, scrollVelocityRef.current));
-      if (!scrollFrameRef.current) scrollFrameRef.current = setTimeout(scrollFrame, 0);
+      // dir < 0 is wheel-up = scroll up = higher scrollOffset.
+      const delta = -dir * SCROLL_ROWS_PER_TICK;
+      setScrollOffset((o) => {
+        const maxOffset = Math.max(0, transcriptCountRef.current - transcriptVisibleBudgetRef.current);
+        return Math.min(maxOffset, Math.max(0, o + delta));
+      });
     }
     if (mode === "menu") return setMenuIndex((i) => wrap(i, filteredProviders.length + 2, dir));
     if (mode === "model") return setModelCursor((c) => wrap(c, Math.max(1, filteredModels.length), dir));
@@ -2067,7 +2040,6 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   useEffect(
     () => () => {
       screen.dispose();
-      if (scrollFrameRef.current) clearTimeout(scrollFrameRef.current);
     },
     [screen],
   );
