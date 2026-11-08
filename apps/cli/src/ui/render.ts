@@ -492,7 +492,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
       const lines = wrapText(entry.text, wrapW).split("\n");
       const widest = Math.max(0, ...lines.map((l) => l.length));
       const inner = Math.max(4, widest + 2);
-      const boxed = box(lines.map((l) => plain(` ${l}`, color.text)), inner + 2, { border: color.crimson, bg: color.selectionBg });
+      const boxed = box(lines.map((l) => plain(` ${l}`, color.text)), inner + 2, { border: color.crimson });
       const pad = Math.max(0, cols - (inner + 2));
       const aligned = boxed.map((r) => (pad > 0 ? [{ text: " ".repeat(pad) }, ...r] : r));
       return [blank(), ...aligned];
@@ -816,8 +816,8 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   visible.forEach((row) => {
     const content: Seg[] = [];
     // A leading gutter keeps the draft from touching the left border.
-    content.push({ text: " ".repeat(gutter), bg: color.selectionBg });
-    content.push({ text: row.text, color: color.text, bg: color.selectionBg });
+    content.push({ text: " ".repeat(gutter) });
+    content.push({ text: row.text, color: color.text });
     rows.push([{ text: "│", color: color.crimson }, ...fitWidth(content, inner), { text: "│", color: color.crimson }]);
   });
   rows.push(plain(`╰${"─".repeat(inner)}╯`, color.crimson));
