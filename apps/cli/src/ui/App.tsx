@@ -2005,7 +2005,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     let cursorPos: { row: number; col: number } | undefined;
     if (!menuOpen) {
       const composerTop = top.length + blockedRow.length + transcript.length;
-      cursorPos = { row: 2 + composerTop + composerInputRow, col: 2 + composerInputCol };
+      cursorPos = { row: 2 + composerTop + composerInputRow, col: 1 + composerInputCol };
     } else {
       // Menu search bar: first row of the menu slot.
       const searchRow = top.length + blockedRow.length + 1; // inner index of menuContent[0]
