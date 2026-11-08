@@ -624,11 +624,15 @@ msPerFrame = 150, layoutCache: LiveLayoutCache | undefined = undefined, ...rest:
     if (expandReasoning) {
       const hit = layoutCache?.reasoning && layoutCache.reasoning.text === live.reasoning && layoutCache.reasoning.cols === cols ? layoutCache.reasoning.rows : null;
       const reasoningLines = flattenText(live.reasoning.trimEnd(), proseWidth(cols - 6)).map((l) => plain(l, color.muted));
-      if (reasoningLines.length === 0) return out;
-      const boxed = hit ?? box(reasoningLines, cols, { border: color.dim });
-      if (layoutCache && !hit) layoutCache.reasoning = { text: live.reasoning, cols, rows: boxed };
-      out.push(blank());
-      out.push(...boxed);
+      if (reasoningLines.length === 0) {
+        // nothing to draw; leave the cache untouched and fall through to the
+        // answer path instead of aborting the whole live region.
+      } else {
+        const boxed = hit ?? box(reasoningLines, cols, { border: color.dim });
+        if (layoutCache && !hit) layoutCache.reasoning = { text: live.reasoning, cols, rows: boxed };
+        out.push(blank());
+        out.push(...boxed);
+      }
     } else {
       const elapsedSec = reasoningStartedAt != null ? Math.max(0, Date.now() - reasoningStartedAt) / 1000 : 0;
       const timer = formatTimer(elapsedSec);
