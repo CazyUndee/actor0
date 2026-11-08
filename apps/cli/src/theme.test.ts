@@ -59,3 +59,12 @@ test("dim text is subordinate: visible but below muted so it recedes", () => {
   // `dim` must recede behind `muted`, otherwise everything shouts equally.
   assert.ok(dimRatio < mutedRatio, `${color.dim} (${dimRatio.toFixed(2)}) must be below muted (${mutedRatio.toFixed(2)})`);
 });
+
+
+test("crimson is deep crimson red, not pink", () => {
+  const c = color.crimson;
+  const rgb = [c.slice(1, 3), c.slice(3, 5), c.slice(5, 7)].map((h) => Number.parseInt(h, 16));
+  assert.ok(rgb[0] > rgb[1] && rgb[0] > rgb[2], `${c} should be red-dominant (crimson)`);
+  assert.notStrictEqual(c, color.accentText, `${c} must not be the pink accentText`);
+  assert.strictEqual(c, cronix.color.accent, `${c} is the design system's accent crimson`);
+});

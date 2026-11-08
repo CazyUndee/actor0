@@ -35,6 +35,13 @@ export const color = {
    */
   accent: cronix.color.accentText,
   accentText: cronix.color.accentText,
+  /**
+   * Actual crimson for filled accents and box borders — the user's own
+   * message blocks and the composer box. Distinct from `accent`: `accent`
+   * is a readable text colour (#c97a7a), which reads as pink on a border;
+   * `crimson` (#6b2323) is the design system's real crimson red.
+   */
+  crimson: cronix.color.accent,
   success: cronix.color.successText,
   warning: cronix.color.warningText,
   error: cronix.color.errorText,

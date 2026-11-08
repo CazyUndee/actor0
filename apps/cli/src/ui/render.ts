@@ -496,7 +496,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
           const pad = Math.max(0, inner - segWidth(row));
           return pad > 0 ? [{ text: " ".repeat(pad), bg: color.selectionBg }, ...row] : row;
         });
-      return [blank(), ...box(wrapped, cols, { border: color.accent, bg: color.selectionBg })];
+      return [blank(), ...box(wrapped, cols, { border: color.crimson, bg: color.selectionBg })];
     }
 
     case "assistant": {
@@ -802,25 +802,25 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
     const pos = Math.max(2, inner - label.length - 1);
     const rightPad = Math.max(0, inner - pos - label.length);
     topBorder = [
-      { text: "╭", color: color.accent },
-      { text: "─".repeat(pos), color: color.accent },
+      { text: "╭", color: color.crimson },
+      { text: "─".repeat(pos), color: color.crimson },
       { text: label, color: opts.topRightColor ?? color.accent },
-      { text: "─".repeat(rightPad), color: color.accent },
-      { text: "╮", color: color.accent },
+      { text: "─".repeat(rightPad), color: color.crimson },
+      { text: "╮", color: color.crimson },
     ];
   } else {
-    topBorder = [{ text: `╭${"─".repeat(inner)}╮`, color: color.accent }];
+    topBorder = [{ text: `╭${"─".repeat(inner)}╮`, color: color.crimson }];
   }
   const rows: Seg[][] = [topBorder];
-  if (above > 0) rows.push([{ text: "│", color: color.accent }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.accent }]);
+  if (above > 0) rows.push([{ text: "│", color: color.crimson }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.crimson }]);
   visible.forEach((row) => {
     const content: Seg[] = [];
-    if (row.first) content.push({ text: glyph, color: opts.busy ? color.dim : color.accent, bold: true });
+    if (row.first) content.push({ text: glyph, color: opts.busy ? color.dim : color.crimson, bold: true });
     // No block caret: the draft renders as plain text, no reverse-filled cell.
     content.push({ text: row.text, color: color.text, bg: color.selectionBg });
-    rows.push([{ text: "│", color: color.accent }, ...fitWidth(content, inner), { text: "│", color: color.accent }]);
+    rows.push([{ text: "│", color: color.crimson }, ...fitWidth(content, inner), { text: "│", color: color.crimson }]);
   });
-  rows.push(plain(`╰${"─".repeat(inner)}╯`, color.accent));
+  rows.push(plain(`╰${"─".repeat(inner)}╯`, color.crimson));
 
   // inputRow is the caret's row within `rows` (rows[0] is the top border);
   // inputCol is the composer-box column just after its character.
