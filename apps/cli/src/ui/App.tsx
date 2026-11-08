@@ -1185,11 +1185,23 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // Convert a terminal cell into content-row space: the selection is anchored
     // to the transcript text, not to screen rows, so it follows the text when
     // the transcript scrolls and can be copied even when scrolled off screen.
-    const toContentPoint = (x: number, y: number): { col: number; row: number } => {
-      const v = y - 1;
+    const toContentPoint = (x: number, y: number): { col: number; row: number; contentRow: number } => {
+      const visibleRow = y - 2;
       const innerCol = Math.max(0, Math.min(innerW - 1, x - 1 - 2));
       const rows = Math.max(1, plainRowsRef.current.length);
-      return { col: innerCol, row: Math.max(0, Math.min(rows - 1, v)) };
+      const vr = Math.max(0, Math.min(rows - 1, visibleRow));
+      const startRow = transcriptStartRowRef.current;
+      const winStart = transcriptWindowStartRef.current;
+      const budget = Math.max(1, transcriptVisibleBudgetRef.current || 1);
+      const count = transcriptCountRef.current;
+      const visibleCount = Math.min(budget, count);
+      let contentRow = 0;
+      if (count > 0) {
+        if (visibleRow < startRow) contentRow = 0;
+        else if (visibleRow >= startRow + visibleCount) contentRow = count - 1;
+        else contentRow = Math.max(0, Math.min(count - 1, winStart + (visibleRow - startRow)));
+      }
+      return { col: innerCol, row: vr, contentRow };
     };
     if (event.button === "left") {
       const pt = toContentPoint(event.x, event.y);
@@ -1202,7 +1214,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         for (let i = 0; i < offsets.length; i += 1) {
           const start = offsets[i]!;
           const end = offsets[i + 1] ?? entryLength;
-          if (pt.row >= start && pt.row < end) { entryIndex = i; break; }
+          if (pt.contentRow >= start && pt.contentRow < end) { entryIndex = i; break; }
         }
         if (entryIndex !== undefined && conversation.entries[entryIndex]?.kind === "reasoning") {
           toggleReasoning(entryIndex);
@@ -1213,7 +1225,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         // it to the full chain without truncation.
         if (
           mode === "chat" &&
-          pt.row >= entryLength &&
+          pt.contentRow >= entryLength &&
           conversation.live.reasoning.trim() &&
           !conversation.live.text
         ) {
