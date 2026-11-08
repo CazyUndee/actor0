@@ -1240,7 +1240,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       // A plain click (press + release with no drag) must not leave a
       // one-cell selection highlight behind. Selection only starts on the
       // first drag motion, so a click never creates a selection at all.
-      if (!event.release) return;
+      // Reset on press so a new drag starts from the current pointer rather
+      // than extending the previous (still-highlighted) selection.
+      if (!event.release) {
+        setSelection(emptySelection());
+        return;
+      }
       if (!hasSelection(selection)) return;
       let copiedText = "";
       setSelection((s) => {
