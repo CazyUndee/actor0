@@ -13,17 +13,20 @@ import { cronix } from "./theme.generated.js";
  */
 
 export const color = {
-  /** Default body text. Meets WCAG AAA against the background. */
+  /** Default body text — the highest-contrast role; everything else defers to it. */
   text: cronix.color.text,
-  /** De-emphasised text: hints, paths, timestamps. Meets WCAG AA against the background. */
+  /** De-emphasised but still readable: hints, paths, timestamps. */
   muted: cronix.color.textMuted,
   /**
-   * Barely-there text: rules, inactive affordances.
-   * CronixUI's `textDim` (#444342) is only ~2:1 against the black terminal
-   * background and is effectively invisible, so it is remapped to `textMuted`
-   * (~4.7:1), which is readable while still sitting below body text.
+   * Subordinate text: rules, fence markers, inactive affordances.
+   *
+   * Deliberately below WCAG AA so it recedes behind body and muted text —
+   * `dim` must not compete for attention. CronixUI's `textDim` (#444342,
+   * ~2:1) is the right token: visible but clearly secondary. Raising it to
+   * `textMuted` made every fence marker and hint shout, destroying the
+   * visual hierarchy.
    */
-  dim: cronix.color.textMuted,
+  dim: cronix.color.textDim,
   /**
    * The accent that marks the user's own input and interactive affordances.
    * `accentLight` (#8a3535) is only ~2.5:1 as text, so it is remapped to
@@ -39,9 +42,8 @@ export const color = {
   /** Filled background for highlighted blocks (tool calls). */
   surface: cronix.color.surface2,
   /**
-   * The frame's border grey.
-   * `borderFocus` (#474747) is ~2:1 against the background and vanishes, so it
-   * is remapped to `textMuted` (~4.7:1), which passes the 3:1 UI-component bar.
+   * The frame's border grey — visible enough to define structure without
+   * competing with the content inside it.
    */
   border: cronix.color.textMuted,
   /**

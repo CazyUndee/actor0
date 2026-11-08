@@ -32,10 +32,6 @@ test("muted text meets WCAG AA against the background", () => {
   assert.ok(contrast(color.muted, bg) >= 4.5, `${color.muted} on ${bg}`);
 });
 
-test("dim text meets WCAG AA against the background", () => {
-  assert.ok(contrast(color.dim, bg) >= 4.5, `${color.dim} on ${bg}`);
-});
-
 test("accent text meets WCAG AA against the background", () => {
   assert.ok(contrast(color.accent, bg) >= 4.5, `${color.accent} on ${bg}`);
 });
@@ -53,4 +49,13 @@ test("status colours meet WCAG AA against the background", () => {
 
 test("frame border meets the 3:1 UI-component bar against the background", () => {
   assert.ok(contrast(color.border, bg) >= 3, `${color.border} on ${bg}`);
+});
+
+test("dim text is subordinate: visible but below muted so it recedes", () => {
+  const dimRatio = contrast(color.dim, bg);
+  const mutedRatio = contrast(color.muted, bg);
+  // `dim` must not be invisible (~1:1) — it still has to be seeable.
+  assert.ok(dimRatio >= 2, `${color.dim} on ${bg} is too faint`);
+  // `dim` must recede behind `muted`, otherwise everything shouts equally.
+  assert.ok(dimRatio < mutedRatio, `${color.dim} (${dimRatio.toFixed(2)}) must be below muted (${mutedRatio.toFixed(2)})`);
 });
