@@ -485,18 +485,18 @@ export function managePanelRows(
 export function entryLines(entry: Entry, cols: number, expandReasoning = false, tight = false): Seg[][] {
   switch (entry.kind) {
     case "user": {
-      // The user's own message: wrapped to width, right-aligned, and boxed
-      // like an answer — but with the crimson accent border and a grey fill
-      // so it reads as the user's side of the conversation.
-      const inner = Math.max(4, cols - 2);
-      const wrapped = wrapText(entry.text, cols - 4)
-        .split("\n")
-        .map((l) => {
-          const row = plain(l, color.text);
-          const pad = Math.max(0, inner - segWidth(row));
-          return pad > 0 ? [{ text: " ".repeat(pad), bg: color.selectionBg }, ...row] : row;
-        });
-      return [blank(), ...box(wrapped, cols, { border: color.crimson, bg: color.selectionBg })];
+      // The user's own message as a chat bubble: a compact rounded rectangle
+      // that hugs its text and sits flush right, not a full-width bar. The box
+      // is only as wide as the widest wrapped line (plus a column of breathing
+      // room each side), then left-padded so its right border meets the frame.
+      const wrapW = Math.max(20, cols - 4);
+      const lines = wrapText(entry.text, wrapW).split("\n");
+      const widest = Math.max(0, ...lines.map((l) => l.length));
+      const inner = Math.max(4, widest + 2);
+      const boxed = box(lines.map((l) => plain(` ${l}`, color.text)), inner + 2, { border: color.crimson, bg: color.selectionBg });
+      const pad = Math.max(0, cols - (inner + 2));
+      const aligned = boxed.map((r) => (pad > 0 ? [{ text: " ".repeat(pad) }, ...r] : r));
+      return [blank(), ...aligned];
     }
 
     case "assistant": {
@@ -746,9 +746,8 @@ export function frameLine(text: string, columns: number): string {
 export function composerRows(opts: { cols: number; draft: string; caret: number; busy: boolean; maxHeight?: number; topRight?: string; topRightColor?: string }): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const width = Math.max(20, opts.cols);
   const inner = width - 2;
-  const glyph = opts.busy ? "· " : "❯ ";
-  // The first visual row is narrower — the glyph sits in front of it.
-  const firstWidth = Math.max(8, inner - glyph.length);
+  // No leading glyph: the composer is just a bordered text box.
+  const firstWidth = inner;
   const caret = Math.max(0, Math.min(opts.caret, opts.draft.length));
 
   // Hard-wrap the draft into visual rows of fixed width, so a long line wraps
@@ -815,8 +814,7 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   if (above > 0) rows.push([{ text: "│", color: color.crimson }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.crimson }]);
   visible.forEach((row) => {
     const content: Seg[] = [];
-    if (row.first) content.push({ text: glyph, color: opts.busy ? color.dim : color.crimson, bold: true });
-    // No block caret: the draft renders as plain text, no reverse-filled cell.
+    // No leading glyph, no block caret: the draft renders as plain text.
     content.push({ text: row.text, color: color.text, bg: color.selectionBg });
     rows.push([{ text: "│", color: color.crimson }, ...fitWidth(content, inner), { text: "│", color: color.crimson }]);
   });
@@ -825,8 +823,7 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   // inputRow is the caret's row within `rows` (rows[0] is the top border);
   // inputCol is the composer-box column just after its character.
   const inputRow = 1 + (above > 0 ? 1 : 0) + (caretRow - startIdx);
-  const prefix = all[caretRow]!.first ? glyph.length : 0;
-  return { rows, inputRow, inputCol: 2 + prefix + caretCol };
+  return { rows, inputRow, inputCol: 2 + caretCol };
 }
 
 export interface PickerItem {

@@ -133,7 +133,7 @@ test("the frame draws: titled top border, header, composer, disclaimer, bottom b
     assert.equal(grid.length, 24, "the frame fills the terminal exactly (alt screen, no scroll)");
     const joined = grid.join("\n");
     assert.ok(joined.includes("claude-opus-4-6"), "header shows the active model");
-    assert.ok(joined.includes("Tell me to do anything") || joined.includes("❯"), "the composer prompt is present");
+    assert.ok(joined.includes("Tell me to do anything") || joined.includes("╭"), "the composer prompt is present");
     assert.ok(joined.includes("Actor0 is an experimental agent"), "the disclaimer is present");
     for (const line of grid) {
       // eslint-disable-next-line no-control-regex -- strip ANSI to measure visible width
@@ -159,7 +159,7 @@ test("typing updates the composer", async () => {
     // The draft shows in the composer, in order — the reordering-under-batch bug
     // is what this guards. (The block cursor itself is pinned in render.test.ts,
     // where the background fill survives; tests run with colour off.)
-    assert.ok(screen.last.join("\n").includes("❯ hello"), "the draft shows in the composer, in order");
+    assert.ok(screen.last.join("\n").includes("hello"), "the draft shows in the composer, in order");
   } finally {
     unmount();
   }
@@ -210,7 +210,7 @@ test("the wheel scrolls the transcript but leaves the composer's prompt in place
       for (let i = 0; i < 40; i += 1) {
         await tick(200);
         const composer = screen.last.join("\n").split("\n").slice(-4).join("\n");
-        if (composer.includes("❯")) break;
+        if (composer.includes("╭")) break;
       }
     }
     stdin.write("draft text");
@@ -236,7 +236,7 @@ test("typing in the slash menu filters it through its search bar, in place", asy
     stdin.write("/");
     await until(screen, (j) => j.includes("search"), 4000);
     let joined = screen.last.join("\n");
-    assert.ok(joined.includes("❯ /"), "the composer holds just the /");
+    assert.ok(joined.includes("/"), "the composer holds just the /");
     assert.ok(joined.includes("⌕") && joined.includes("search"), "the menu opened with its search bar");
     assert.ok(joined.includes("/provider"), "the first command is listed");
     assert.ok(joined.includes("more") || joined.includes("↓"), "a long command list windows like every other menu");
@@ -245,7 +245,7 @@ test("typing in the slash menu filters it through its search bar, in place", asy
     stdin.write("qu");
     await until(screen, (j) => j.includes("/quit"), 4000);
     joined = screen.last.join("\n");
-    assert.ok(joined.includes("❯ /"), "the composer still holds just the /");
+    assert.ok(joined.includes("/"), "the composer still holds just the /");
     assert.ok(joined.includes("qu"), "the query shows in the search input");
     assert.ok(joined.includes("/quit"), "the matching command is listed");
     assert.ok(!joined.includes("/clear"), "non-matching commands are filtered out");
@@ -270,7 +270,7 @@ test("the draft keeps its order under fast batched input", async () => {
     // The batched keystrokes must not reorder — the stale-closure-caret bug that
     // turned "great" into "rgeat". The block cursor is drawn in the grid now,
     // so we assert the composed text rather than a terminal caret position.
-    assert.ok(screen.last.join("\n").includes("❯ abc"), "the draft reads abc, in order");
+    assert.ok(screen.last.join("\n").includes("abc"), "the draft reads abc, in order");
   } finally {
     unmount();
   }
@@ -309,7 +309,7 @@ test("the provider menu is a panel with human-readable labels and an add entry",
     assert.ok(!menu.includes("↵ Select") && !menu.includes("→ Manage"), "the bottom shortcut/help footer is removed");
     assert.ok(menu.includes("●"), "the active provider carries a status dot");
     assert.ok(menu.includes("⌕  "), "the panel has a magnifier search bar");
-    assert.ok(menu.includes("❯"), "the composer stays visible under the menu");
+    assert.ok(menu.includes("╭"), "the composer stays visible under the menu");
   } finally {
     unmount();
   }
@@ -530,7 +530,7 @@ test("a long prompt wraps into the composer, in order", async () => {
     const j = screen.last.join("\n");
     assert.ok(j.includes("hash map works"), "the wrapped prompt is fully visible");
     assert.ok(j.includes("resizing behavior"), "the tail of the prompt is on screen");
-    assert.ok(j.includes("❯ explain in great detail"), "the prompt reads in order");
+    assert.ok(j.includes("explain in great detail"), "the prompt reads in order");
   } finally {
     unmount();
   }
