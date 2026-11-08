@@ -185,11 +185,45 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
   const [onboarding, setOnboarding] = useState(false);
   const [contextTokens, setContextTokens] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
-  // Wheel scrolling is one-to-one with ticks: each wheel notch moves a fixed
-  // number of rows, clamped to the transcript. Momentum/coasting made the
-  // feel fiddly (slow ticks dropped below the threshold, fast ticks jumped),
-  // so each tick scrolls the same amount, predictably.
+  // Wheel scrolling animates 3 rows per notch, one row per frame, so a notch
+  // feels smooth instead of a 3-row jump. The target is clamped to the
+  // transcript; ticks that arrive mid-animation extend the target.
   const SCROLL_ROWS_PER_TICK = 3;
+  const scrollTargetRef = useRef(0);
+  const scrollAnimRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollAnimatingRef = useRef(false);
+  const clampScroll = (v: number): number => {
+    const maxOffset = Math.max(0, transcriptCountRef.current - transcriptVisibleBudgetRef.current);
+    return Math.min(maxOffset, Math.max(0, v));
+  };
+  const cancelScrollAnim = (): void => {
+    if (scrollAnimRef.current) { clearTimeout(scrollAnimRef.current); scrollAnimRef.current = null; }
+    scrollAnimatingRef.current = false;
+  };
+  const resetScroll = (): void => {
+    cancelScrollAnim();
+    scrollTargetRef.current = 0;
+    setScrollOffset(0);
+  };
+  const runScrollAnim = (): void => {
+    scrollAnimRef.current = null;
+    setScrollOffset((o) => {
+      const target = scrollTargetRef.current;
+      if (o === target) { scrollAnimatingRef.current = false; return o; }
+      const clampedTarget = clampScroll(target);
+      if (clampedTarget !== target) scrollTargetRef.current = clampedTarget;
+      const step = clampedTarget > o ? 1 : -1;
+      let next = o + step;
+      next = clampScroll(next);
+      if (next === o) { scrollTargetRef.current = o; scrollAnimatingRef.current = false; return o; }
+      if (next !== clampedTarget) {
+        scrollAnimRef.current = setTimeout(runScrollAnim, 16);
+      } else {
+        scrollAnimatingRef.current = false;
+      }
+      return next;
+    });
+  };
   // Selection anchors are transcript-content coordinates. Mouse cells are
   // translated through the current scroll window before they reach this state.
   const [selection, setSelectionState] = useState<SelectionState>(emptySelection);
@@ -428,7 +462,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     messagesRef.current = target.messages;
     setConversation(target.messages?.length ? { entries: entriesFromMessages(target.messages), live: emptyLive() } : initialConversation());
     setContextTokens(0);
-    setScrollOffset(0);
+    resetScroll();
     setMode("chat");
     notice("info", `switched to session ${target.id}`);
   };
@@ -461,7 +495,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         messagesRef.current = [];
         setConversation(initialConversation());
         setContextTokens(0);
-        setScrollOffset(0);
+        resetScroll();
         notice("info", "started a new conversation");
         return;
       case "model":
@@ -546,7 +580,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     if (command) {
       setDraft("");
       setCaret(0);
-      setScrollOffset(0);
+      resetScroll();
       if (finishedTimer.current) clearTimeout(finishedTimer.current);
       finishedTimer.current = null;
       setJustFinished(false);
@@ -555,7 +589,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     }
     setDraft("");
     setCaret(0);
-    setScrollOffset(0);
+    resetScroll();
     if (finishedTimer.current) clearTimeout(finishedTimer.current);
     finishedTimer.current = null;
     setJustFinished(false);
@@ -612,7 +646,7 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
                 reasoningStartedAtMs: reasoningStartedAtRef.current,
               });
               if (event.type === "done") {
-                setScrollOffset(0);
+                resetScroll();
                 const answer = next.entries[next.entries.length - 1];
                 if (answer?.kind === "assistant") updateLive([...messagesRef.current, { role: "assistant", content: answer.text }]);
               }
@@ -1265,10 +1299,11 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
       if (slashEngaged) return setSlashIndex((i) => wrapSlash(i, slashMatches.length, dir));
       // dir < 0 is wheel-up = scroll up = higher scrollOffset.
       const delta = -dir * SCROLL_ROWS_PER_TICK;
-      setScrollOffset((o) => {
-        const maxOffset = Math.max(0, transcriptCountRef.current - transcriptVisibleBudgetRef.current);
-        return Math.min(maxOffset, Math.max(0, o + delta));
-      });
+      scrollTargetRef.current = clampScroll(scrollTargetRef.current + delta);
+      if (!scrollAnimatingRef.current) {
+        scrollAnimatingRef.current = true;
+        runScrollAnim();
+      }
     }
     if (mode === "menu") return setMenuIndex((i) => wrap(i, filteredProviders.length + 2, dir));
     if (mode === "model") return setModelCursor((c) => wrap(c, Math.max(1, filteredModels.length), dir));
@@ -1402,8 +1437,16 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     // Up/down move the caret between lines of a multi-line draft — never load
     // past prompts, which made editing impossible (the draft was replaced).
     if (key === "up" || key === "down") return moveCaretVertical(key === "up" ? -1 : 1);
-    if (key === "pageup") return setScrollOffset((o) => o + 5);
-    if (key === "pagedown") return setScrollOffset((o) => Math.max(0, o - 5));
+    if (key === "pageup") {
+      scrollTargetRef.current = clampScroll(scrollTargetRef.current + 5);
+      if (!scrollAnimatingRef.current) { scrollAnimatingRef.current = true; runScrollAnim(); }
+      return;
+    }
+    if (key === "pagedown") {
+      scrollTargetRef.current = clampScroll(scrollTargetRef.current - 5);
+      if (!scrollAnimatingRef.current) { scrollAnimatingRef.current = true; runScrollAnim(); }
+      return;
+    }
     editDraft({ type: "key", key: key as never });
   };
 
