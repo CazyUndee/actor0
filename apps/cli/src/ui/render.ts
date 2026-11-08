@@ -623,7 +623,9 @@ msPerFrame = 150, layoutCache: LiveLayoutCache | undefined = undefined, ...rest:
     // budget, even if it runs past the bottom of the screen.
     if (expandReasoning) {
       const hit = layoutCache?.reasoning && layoutCache.reasoning.text === live.reasoning && layoutCache.reasoning.cols === cols ? layoutCache.reasoning.rows : null;
-      const boxed = hit ?? box(flattenText(live.reasoning.trimEnd(), proseWidth(cols - 6)).map((l) => plain(l, color.muted)), cols, { border: color.dim });
+      const reasoningLines = flattenText(live.reasoning.trimEnd(), proseWidth(cols - 6)).map((l) => plain(l, color.muted));
+      if (reasoningLines.length === 0) return out;
+      const boxed = hit ?? box(reasoningLines, cols, { border: color.dim });
       if (layoutCache && !hit) layoutCache.reasoning = { text: live.reasoning, cols, rows: boxed };
       out.push(blank());
       out.push(...boxed);
@@ -657,9 +659,11 @@ msPerFrame = 150, layoutCache: LiveLayoutCache | undefined = undefined, ...rest:
   // committed entry, so the border is there while it generates and there is no
   // snap when it lands. When it outgrows the viewport the older lines are
   // counted at the top of the box, not silently dropped.
-  if (live.text) {
+  if (live.text.trim()) {
     const hit = layoutCache?.answer && layoutCache.answer.text === live.text && layoutCache.answer.cols === cols ? layoutCache.answer.rows : null;
-    const all = hit ?? box(renderMarkdown(live.text, cols - 4), cols, { border: color.dim });
+    const rendered = renderMarkdown(live.text, cols - 4);
+    if (rendered.length === 0) return out;
+    const all = hit ?? box(rendered, cols, { border: color.dim });
     if (layoutCache && !hit) layoutCache.answer = { text: live.text, cols, rows: all };
     out.push(...all);
   }
