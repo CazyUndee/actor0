@@ -1176,9 +1176,9 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
               const next = withActiveReasoningEffort(config, effort);
               setConfig(next);
               saveConfig(next);
-              flashComposerHint(`reasoning effort: ${effort}`, 2000, color.info);
+              flashComposerHint(`reasoning effort: ${effort}`, 2000, color.muted);
             } else {
-              flashComposerHint("reasoning effort left to the provider", 2000, color.info);
+              flashComposerHint("reasoning effort left to the provider", 2000, color.muted);
             }
             setMode("chat");
           } else if (mode === "add" && add.kind === "kind") {
@@ -1891,12 +1891,14 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         : conversation.notice
           ? {
             text: conversation.notice.text,
+            // The border is a log: info chatter recedes to grey, while errors
+            // and warnings keep the colors that say "pay attention".
             color:
               conversation.notice.tone === "error"
                 ? color.error
                 : conversation.notice.tone === "warn"
                   ? color.warning
-                  : color.info,
+                  : color.muted,
           }
           : undefined;
     const composerBuilt = composerRows({ cols: innerW, draft, caret, busy, maxHeight: composerMaxH, topRight: status?.text, topRightColor: status?.color });
