@@ -537,7 +537,13 @@ for a release. The rest of this section describes the mechanic of that
 release when it is ordered; it is not a standing instruction to perform
 it. Commits bump the build counter only; the version fields move exactly
 once, at the release the user ordered, and the tag/release/publish steps
-run in that same sitting. 2026-11-09: an unrequested 0.5.8 was bumped,
+run in that same sitting. Crucially, **one user order authorizes the whole
+ceremony**: when the user says to release, the agent writes the release
+notes, pushes the tag, cuts the GitHub release, and triggers the npm
+publish end-to-end, without stopping to re-confirm each step. The gate is
+on *starting* a release, not on its individual steps — an agent never
+starts one on its own judgment, but it does not drip-feed approvals once
+one is ordered. 2026-11-09: an unrequested 0.5.8 was bumped,
 tagged, released, and published, then withdrawn on the user's say-so
 (release and tag deleted, the three npm versions unpublished, the version
 fields reverted to 0.5.7). That is the failure this gate exists to
@@ -643,9 +649,12 @@ gh workflow run release.yml -f tag=vX.Y.Z
 ```
 
 Then verify with `npm view @actor0/cli version` (and harness/providers) that
-all three packages show the new version. A release that has a tag and GitHub
-release but no npm package is a gap the user closes — the agent reports it,
-it does not backfill it on its own.
+all three packages show the new version. Within a release the user ordered,
+an agent that stops short of the npm package completes it — it triggers the
+missing publish rather than pausing to re-approve. The one thing the gate
+forbids is *starting* a release to close such a gap on its own judgment;
+that is the un-ordered release behind the 2026-11-09 incident, not a step
+in one already ordered.
 
 OIDC trusted publishing only, no token. `publish-libraries` in `release.yml`
 is bound to an npm trusted publisher (GitHub App `GitHub Actions`, workflow
