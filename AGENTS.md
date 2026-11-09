@@ -603,11 +603,14 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
   build counter in the commit body is the evidence a build bump was
   considered. A review that sees a behaviour change with no version or build
   change should flag it.
-- **Tag and release every version bump.** A version bump is not done when
-  the `package.json` changes; it is done when there is a git tag `vX.Y.Z`
-  on that commit *and* a GitHub release at that tag carrying detailed
-  release notes. A version that landed without its tag/release is a gap to
-  backfill before doing anything else. Release notes are written **for the
+- **Tag and release a version bump — only when the user has ordered the
+  release.** A version bump is not done when the `package.json` changes; it
+  is done when there is a git tag `vX.Y.Z` on that commit *and* a GitHub
+  release at that tag carrying detailed release notes, all in the sitting the
+  user ordered. A version that landed without its tag/release is a gap, but
+  closing it is the user's call, not the agent's default (see "Releases are
+  gated on the user" above) — the agent flags the gap, it does not paper
+  over it. Release notes are written **for the
   GitHub release** (the rendered release body), not committed into the repo
   as a `vX.Y.Z.md` file — the release is the source of truth, and the
   in-repo `v0.2.0.md` is a historical artefact, not the pattern to copy.
@@ -630,19 +633,19 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
 the gated Versioning flow above: if nobody asked for a release, there is
 nothing to publish.
 
-**A release is not done until the npm packages are published.** Creating a
-GitHub release does NOT publish to npm — `publish-libraries` in `release.yml`
-only runs on `workflow_dispatch`. After pushing the tag and creating the
-release, you MUST trigger the publish:
+**Within a release the user ordered, the npm publish is what makes it done.**
+Creating a GitHub release does NOT publish to npm — `publish-libraries` in
+`release.yml` only runs on `workflow_dispatch`. Once the user has ordered the
+release and the tag and GitHub release are in place, trigger the publish:
 
 ```
 gh workflow run release.yml -f tag=vX.Y.Z
 ```
 
 Then verify with `npm view @actor0/cli version` (and harness/providers) that
-all three packages show the new version. A release that has a tag and
-GitHub release but no npm package is a gap to backfill before doing anything
-else.
+all three packages show the new version. A release that has a tag and GitHub
+release but no npm package is a gap the user closes — the agent reports it,
+it does not backfill it on its own.
 
 OIDC trusted publishing only, no token. `publish-libraries` in `release.yml`
 is bound to an npm trusted publisher (GitHub App `GitHub Actions`, workflow
