@@ -61,6 +61,13 @@ export function parseInput(buffer: string): { events: InputEvent[]; rest: string
       if (ch === "\x15") { if (run) { events.push({ type: "text", text: run }); run = ""; } events.push({ type: "key", key: "ctrl-u" }); continue; }
       if (ch === "\x0c") { if (run) { events.push({ type: "text", text: run }); run = ""; } events.push({ type: "key", key: "ctrl-l" }); continue; }
       if (ch === "\t") { if (run) { events.push({ type: "text", text: run }); run = ""; } events.push({ type: "key", key: "tab" }); continue; }
+      // The remaining C0 bytes are unbound Ctrl+letter presses, and the C1
+      // range is unprintable: the terminal shows neither, but the renderer
+      // measures every character of the draft at one visible column, so one
+      // of these in the draft pushes that line's right border one cell in.
+      // Drop them here, the one place every keystroke passes through.
+      const code = ch.charCodeAt(0);
+      if (code < 0x20 || (code >= 0x80 && code <= 0x9f)) continue;
       run += ch;
     }
     if (run) events.push({ type: "text", text: run });
@@ -72,7 +79,13 @@ export function parseInput(buffer: string): { events: InputEvent[]; rest: string
     if (buffer.startsWith(PASTE_START, i)) {
       const end = buffer.indexOf(PASTE_END, i + PASTE_START.length);
       if (end === -1) break; // incomplete paste: hold the whole tail
-      const body = buffer.slice(i + PASTE_START.length, end);
+      // A paste is the same wall as a keystroke: it is written verbatim into
+      // the draft and measured at one column per character. Keep printables
+      // and newlines, strip the rest (the \r of \r\n, tabs, stray C0/C1).
+      const body = buffer
+        .slice(i + PASTE_START.length, end)
+        // eslint-disable-next-line no-control-regex -- stripping the control bytes is the point
+        .replace(/[\u0000-\u0009\u000b-\u001f\u007f\u0080-\u009f]/g, "");
       if (body) events.push({ type: "text", text: body });
       i = end + PASTE_END.length;
       continue;

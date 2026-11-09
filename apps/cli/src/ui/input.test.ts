@@ -42,3 +42,22 @@ test("a press, a drag and a release are three different events", () => {
   assert.deepEqual(drag, [{ type: "mouse", x: 6, y: 4, button: "left", release: false, drag: true }]);
   assert.deepEqual(release, [{ type: "mouse", x: 6, y: 4, button: "left", release: true, drag: false }]);
 });
+
+test("an unbound Ctrl+letter is dropped, not inserted as invisible text", () => {
+  // Ctrl+A arrives as \x01. The terminal renders C0 and C1 bytes as
+  // nothing, but the renderer measures the draft at one column per
+  // character, so a stray byte pushes the composer's right border one
+  // cell in. Every keystroke passes through the parser, so that is where
+  // the bytes are dropped.
+  assert.deepEqual(parseInput("\x01").events, []);
+  assert.deepEqual(parseInput("\x02ab\x07cd\x14").events, [{ type: "text", text: "abcd" }]);
+});
+
+test("pasted text keeps printables and newlines, strips control bytes", () => {
+  // A paste lands in the draft the same way a keystroke does, and a
+  // copied terminal capture carries CR LF, tabs, and stray control
+  // bytes, so it would push that line's right border too.
+  const { events } = parseInput("\x1b[200~a\x0d\x0ab\x01c\x09\x0ad\x80e\x1b[201~");
+  // \x0d and \x09 are stripped, so the two \x0a are what remains.
+  assert.deepEqual(events, [{ type: "text", text: "a\x0abc\x0ade" }]);
+});
