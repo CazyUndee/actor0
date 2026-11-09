@@ -531,6 +531,18 @@ directional") instead of presenting one draw as settled.
 
 ## Versioning
 
+**Releases are gated on the user — no exceptions.** A version bump, a git
+tag, a GitHub release, and an npm publish happen only when the user asks
+for a release. The rest of this section describes the mechanic of that
+release when it is ordered; it is not a standing instruction to perform
+it. Commits bump the build counter only; the version fields move exactly
+once, at the release the user ordered, and the tag/release/publish steps
+run in that same sitting. 2026-11-09: an unrequested 0.5.8 was bumped,
+tagged, released, and published, then withdrawn on the user's say-so
+(release and tag deleted, the three npm versions unpublished, the version
+fields reverted to 0.5.7). That is the failure this gate exists to
+prevent, not an argument for keeping the old flow.
+
 Versions live in three places and all three must move together: `apps/cli/package.json`,
 `packages/harness/package.json`, and `packages/providers/package.json`, plus the
 hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.test.ts`.
@@ -613,6 +625,10 @@ hardcoded fallback strings in `apps/cli/src/mcp.ts` and `apps/cli/src/ui/parts.t
   gap to backfill.
 
 ## Publishing to npm
+
+**Only at a release the user ordered.** Publishing is the final step of
+the gated Versioning flow above: if nobody asked for a release, there is
+nothing to publish.
 
 **A release is not done until the npm packages are published.** Creating a
 GitHub release does NOT publish to npm — `publish-libraries` in `release.yml`
