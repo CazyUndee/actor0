@@ -69,7 +69,6 @@ import {
   addErrorRows,
   addModelsRows,
   addManualRows,
-  SEARCH_INPUT_COL,
   stateFace,
   topArea,
   windowRows,
@@ -2002,22 +2001,53 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
     for (const line of painted) grid.push(`│ ${line} │`);
     grid.push(bottomFrameBorder(cols));
 
-    // Native terminal cursor: position it over the active text input so the
-    // real (blinking) cursor shows instead of a drawn-in block caret.
+    // Native terminal cursor: park it over the active text input so the real
+    // (blinking) caret follows where the user is typing. Text lands in three
+    // places: the composer draft, a menu's search bar (a live filter, or the
+    // add-flow's URL / key / manual-model field), and the slash popup's search
+    // bar (while the draft holds the lone / and keys go into slashQuery).
+    // Menus and the slash popup share one static slot: the box's titled top
+    // border is the slot's row 0 and its search bar is row 1, and the box is
+    // centred (or panel-inset) in the frame. So the input's column is read off
+    // the drawn search row — find the ⌕ icon, skip the fixed "⌕  search │ "
+    // prefix, count the typed query — instead of re-deriving the centre.
+    const searchBarRow = 2 + top.length + blockedRow.length + 2; // screen row of the slot's search bar (rows[1])
+    const slotSearchCaret = (rows: Seg[][], query: string): { row: number; col: number } | undefined => {
+      const bar = rows[1]; // rows[0] is the box's titled top border
+      if (!bar) return undefined;
+      let cum = 0;
+      for (const seg of bar) {
+        const icon = seg.text.indexOf("⌕");
+        if (icon >= 0) {
+          // Inner col of the ⌕, past the 12-char prefix and the typed query; a
+          // screen col is the frame's border + pad (2) plus the inner col, +1
+          // because CUP columns are 1-based.
+          return { row: searchBarRow, col: 3 + cum + icon + 12 + query.length };
+        }
+        cum += seg.text.length;
+      }
+      return undefined; // no search bar (a non-input add screen) — hide the caret
+    };
+    const menuQuery = mode === "menu" ? providerQuery
+      : mode === "model" ? modelQuery
+      : mode === "thinking" ? thinkingQuery
+      : mode === "session" ? sessionQuery
+      : mode === "add" ? (add.kind === "models" ? (add.models.length === 0 ? addManual : add.query)
+        : add.kind === "kind" ? addKindQuery
+        : add.kind === "url" ? addUrl
+        : add.kind === "key" ? addKey
+        : "")
+      : "";
     let cursorPos: { row: number; col: number } | undefined;
-    if (!menuOpen) {
+    if (menuOpen) {
+      cursorPos = slotSearchCaret(menuContent, menuQuery);
+    } else if (slashEngaged) {
+      // The slash popup owns the keys, not the composer: park the caret on its
+      // search bar so the typed slashQuery lands there.
+      cursorPos = slotSearchCaret(slashPopup, slashQuery);
+    } else {
       const composerTop = top.length + blockedRow.length + transcript.length;
       cursorPos = { row: 2 + composerTop + composerInputRow, col: 1 + composerInputCol };
-    } else {
-      // Menu search bar: first row of the menu slot.
-      const searchRow = top.length + blockedRow.length + 1; // inner index of menuContent[0]
-      const menuQuery = mode === "menu" ? providerQuery
-        : mode === "model" ? modelQuery
-        : mode === "thinking" ? thinkingQuery
-        : mode === "session" ? sessionQuery
-        : mode === "add" ? (add.kind === "models" ? add.query : add.kind === "kind" ? addKindQuery : "")
-        : "";
-      cursorPos = { row: 2 + searchRow, col: 2 + SEARCH_INPUT_COL + (menuQuery?.length ?? 0) };
     }
     return { grid, caret: cursorPos };
   };

@@ -255,6 +255,83 @@ test("typing in the slash menu filters it through its search bar, in place", asy
   }
 });
 
+/**
+ * Locate the drawn "⌕  search" bar in a grid and report where the native caret
+ * should sit on it: the bar's row (1-based), and the column just past the fixed
+ * "⌕  search │ " prefix plus any typed query. Used to pin the caret to the
+ * search input rather than the box's top border a row above it.
+ */
+function searchBarCaret(screen: FakeScreen, queryLength: number): { row: number; col: number } {
+  const stripped = screen.last.map(stripSgr);
+  const row = stripped.findIndex((r) => r.includes("⌕"));
+  assert.ok(row >= 0, "the menu drew its ⌕ search bar");
+  const iconCol = stripped[row]!.indexOf("⌕");
+  // "⌕  search │ " is 12 cells before the query field; cols are 1-based.
+  return { row: row + 1, col: iconCol + 1 + 12 + queryLength };
+}
+
+test("the native caret parks on the slash popup's search bar, not the border above it", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
+  try {
+    stdin.write("/");
+    await until(screen, (j) => j.includes("search"), 4000);
+    // The keys go into the slash popup's search input, so the caret lives there
+    // (not in the composer that still holds the lone /).
+    assert.deepEqual(screen.carets.at(-1), searchBarCaret(screen, 0), "the caret is on the empty search field");
+    // Typing advances the caret one column per character, on the same row.
+    stdin.write("qu");
+    await until(screen, (j) => j.includes("/quit"), 4000);
+    assert.deepEqual(screen.carets.at(-1), searchBarCaret(screen, 2), "the caret tracks the typed slashQuery");
+  } finally {
+    unmount();
+  }
+});
+
+test("the native caret parks on the provider menu's search bar, not the panel's border", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
+  try {
+    stdin.write("/provider");
+    await tick(60);
+    stdin.write("\r");
+    await until(screen, (j) => j.includes("Providers"), 4000);
+    assert.ok(screen.carets.at(-1), "the caret is parked on the menu's search bar, not hidden");
+    assert.deepEqual(screen.carets.at(-1), searchBarCaret(screen, 0), "the caret is at the start of the provider search field");
+  } finally {
+    unmount();
+  }
+});
+
+test("the native caret still parks in the composer in plain chat", async () => {
+  const dummy: ModelClient = {
+    async *stream() { yield { type: "done", text: "", complete: true } as never; },
+  };
+  const { screen, stdin, unmount } = await mount({ transport: dummy });
+  try {
+    stdin.write("abc");
+    await until(screen, (j) => j.includes("abc"), 4000);
+    const caret = screen.carets.at(-1);
+    assert.ok(caret, "the caret is parked in the composer, not hidden");
+    // The composer input row is the one that draws the draft; the caret sits on
+    // that row, just past the typed text.
+    const stripped = screen.last.map(stripSgr);
+    const row = stripped.findIndex((r) => r.includes("abc"));
+    assert.ok(row >= 0, "the draft is drawn in the composer");
+    assert.equal(caret!.row, row + 1, "the caret is on the composer input row");
+    assert.ok(
+      caret!.col > stripped[row]!.indexOf("abc"),
+      "the caret is past the typed draft, not before it",
+    );
+  } finally {
+    unmount();
+  }
+});
+
 test("the draft keeps its order under fast batched input", async () => {
   const dummy: ModelClient = {
     async *stream() { yield { type: "done", text: "", complete: true } as never; },
