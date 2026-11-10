@@ -316,8 +316,12 @@ export function App() {
   return (
     <div className="app">
       <div className="shell">
-        <div className="top-bar" ref={topBarRef}>
+        <div className="chrome-row">
           <div className="brand-mark">actor0</div>
+          <span className="brand-version">v{VERSION}</span>
+        </div>
+
+        <div className="top-bar" ref={topBarRef}>
           <div className="selector-group">
             <div className="dropdown">
                 <button
@@ -413,11 +417,6 @@ export function App() {
             <BranchIcon />
             {BRANCH}
           </span>
-          <span className="brand-version">v{VERSION}</span>
-          <div className="window-controls" aria-hidden="true">
-            <button type="button" className="window-btn" title="Minimize">−</button>
-            <button type="button" className="window-btn close" title="Close">×</button>
-          </div>
         </div>
 
         {notice && (

@@ -69,12 +69,21 @@ button, input, textarea { font: inherit; color: inherit; }
   position: relative;
 }
 
+/* the top line of a borderless window: where the min/max/close buttons
+   will sit in the real app — here just the wordmark and version */
+.chrome-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  padding: 14px 18px 0;
+}
 .top-bar {
   display: flex;
   gap: 10px;
   align-items: center;
   flex: none;
-  margin: 14px 16px 8px;
+  margin: 8px 16px 0;
   padding: 9px 12px;
   border: 2px solid var(--border-strong);
   border-radius: 16px;
@@ -239,27 +248,6 @@ button, input, textarea { font: inherit; color: inherit; }
   letter-spacing: -1px;
   color: var(--accent-text);
 }
-.window-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-}
-.window-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 14px;
-  cursor: pointer;
-}
-.window-btn:hover { background: var(--surface2); color: var(--text); }
-.window-btn.close:hover { background: rgba(196, 107, 107, 0.2); color: var(--error); }
 
 .notices { padding: 0 16px 6px; display: flex; flex-direction: column; gap: 6px; }
 .notice {
