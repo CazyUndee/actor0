@@ -124,23 +124,22 @@ button, input, textarea { font: inherit; color: inherit; }
   align-items: center;
   gap: 8px;
   max-width: 100%;
-  padding: 6px 10px;
-  border: 2px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--surface2);
+  padding: 4px 2px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   color: var(--text);
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  transition: color 120ms ease, opacity 120ms ease;
 }
 .dropdown-trigger:hover {
-  border-color: var(--border-strong);
-  background: #202020;
+  color: var(--text);
+  opacity: 0.9;
 }
 .dropdown-trigger.open,
 .dropdown-trigger:focus-visible {
   outline: none;
-  border-color: rgba(201, 122, 122, 0.5);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  color: var(--accent-text);
 }
 .dropdown-label {
   font-size: 11px;
@@ -277,7 +276,7 @@ button, input, textarea { font: inherit; color: inherit; }
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 6px 16px 14px;
+  padding: 28px 16px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -292,6 +291,7 @@ button, input, textarea { font: inherit; color: inherit; }
 .transcript::-webkit-scrollbar-track, .panel-body::-webkit-scrollbar-track { background: transparent; }
 
 .entry { white-space: pre-wrap; word-break: break-word; }
+.entry:first-child { margin-top: 12px; }
 .entry.user { display: flex; justify-content: flex-end; }
 .user-bubble {
   max-width: min(78%, 760px);
@@ -302,11 +302,12 @@ button, input, textarea { font: inherit; color: inherit; }
   color: var(--text);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
-.entry.assistant { display: flex; }
+.entry.assistant { display: flex; justify-content: center; }
 .assistant-box {
   width: 100%;
-  padding: 12px 20px;
-  border-radius: 999px;
+  max-width: 720px;
+  padding: 12px 18px;
+  border-radius: 14px;
   border: 2px solid var(--border-subtle);
   background: var(--surface);
   color: var(--text);
@@ -355,6 +356,9 @@ pre.code-block {
 .composer-area {
   position: relative;
   flex: none;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
   padding: 14px 16px 14px;
 }
 .composer {
@@ -367,13 +371,12 @@ pre.code-block {
   border-radius: 14px;
   background: #2a2a2a;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
-  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+  transition: border-color 120ms ease, background 120ms ease;
 }
 .composer:hover { border-color: var(--accent); }
 .composer:active,
 .composer:focus-within {
   border-color: var(--crimson);
-  box-shadow: 0 0 0 4px var(--crimson-soft), 0 6px 18px rgba(0, 0, 0, 0.3);
 }
 .composer.busy { border-color: rgba(125, 124, 121, 0.45); }
 .composer-input {
