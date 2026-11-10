@@ -321,102 +321,104 @@ export function App() {
           <span className="brand-version">v{VERSION}</span>
         </div>
 
-        <div className="top-bar" ref={topBarRef}>
-          <div className="selector-group">
-            <div className="dropdown">
-                <button
-                  type="button"
-                  className={`dropdown-trigger ${openDropdown === "provider" ? "open" : ""}`}
-                  onClick={() => setOpenDropdown(openDropdown === "provider" ? null : "provider")}
-                  aria-haspopup="listbox"
-                  aria-expanded={openDropdown === "provider"}
-                >
-                  <span className="dropdown-label">Provider</span>
-                  <span className="dropdown-value">{currentProvider.name}</span>
-                  <span className="dropdown-caret"><Caret /></span>
-                </button>
-                {openDropdown === "provider" && (
-                  <div className="dropdown-menu" role="listbox" aria-label="Provider">
-                    {PROVIDERS.map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className={`dropdown-item ${p.id === selectedProvider ? "selected" : ""}`}
-                        onClick={() => {
-                          setSelectedProvider(p.id);
-                          setOpenDropdown(null);
-                          setNotice({ tone: "info", text: `Provider set to ${p.name}` });
-                        }}
-                      >
-                        <span className="dropdown-item-main">{p.name}</span>
-                        <span className="dropdown-item-detail">{p.detail}</span>
-                      </button>
-                    ))}
-                    <div className="dropdown-divider" />
-                    <button
-                      type="button"
-                      className="dropdown-item action"
-                      onClick={() => {
-                        setOpenDropdown(null);
-                        setNotice({ tone: "info", text: "Add provider (mock)" });
-                      }}
-                    >
-                      <span className="dropdown-item-main">Add provider</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-
+        <div className="bar-row" ref={topBarRef}>
+          <div className="top-bar">
+            <div className="selector-group">
               <div className="dropdown">
-                <button
-                  type="button"
-                  className={`dropdown-trigger ${openDropdown === "model" ? "open" : ""}`}
-                  onClick={() => setOpenDropdown(openDropdown === "model" ? null : "model")}
-                  aria-haspopup="listbox"
-                  aria-expanded={openDropdown === "model"}
-                >
-                  <span className="dropdown-label">Model</span>
-                  <span className="dropdown-value">{selectedModel}</span>
-                  <span className="dropdown-caret"><Caret /></span>
-                </button>
-                {openDropdown === "model" && (
-                  <div className="dropdown-menu dropdown-menu-wide" role="listbox" aria-label="Model">
-                    {MODELS.slice(0, 10).map((m) => (
+                  <button
+                    type="button"
+                    className={`dropdown-trigger ${openDropdown === "provider" ? "open" : ""}`}
+                    onClick={() => setOpenDropdown(openDropdown === "provider" ? null : "provider")}
+                    aria-haspopup="listbox"
+                    aria-expanded={openDropdown === "provider"}
+                  >
+                    <span className="dropdown-label">Provider</span>
+                    <span className="dropdown-value">{currentProvider.name}</span>
+                    <span className="dropdown-caret"><Caret /></span>
+                  </button>
+                  {openDropdown === "provider" && (
+                    <div className="dropdown-menu" role="listbox" aria-label="Provider">
+                      {PROVIDERS.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className={`dropdown-item ${p.id === selectedProvider ? "selected" : ""}`}
+                          onClick={() => {
+                            setSelectedProvider(p.id);
+                            setOpenDropdown(null);
+                            setNotice({ tone: "info", text: `Provider set to ${p.name}` });
+                          }}
+                        >
+                          <span className="dropdown-item-main">{p.name}</span>
+                          <span className="dropdown-item-detail">{p.detail}</span>
+                        </button>
+                      ))}
+                      <div className="dropdown-divider" />
                       <button
-                        key={m}
                         type="button"
-                        className={`dropdown-item ${m === selectedModel ? "selected" : ""}`}
+                        className="dropdown-item action"
                         onClick={() => {
-                          setSelectedModel(m);
                           setOpenDropdown(null);
-                          setNotice({ tone: "info", text: `Model set to ${m}` });
+                          setNotice({ tone: "info", text: "Add provider (mock)" });
                         }}
                       >
-                        <span className="dropdown-item-main mono">{m}</span>
+                        <span className="dropdown-item-main">Add provider</span>
                       </button>
-                    ))}
-                    <div className="dropdown-divider" />
-                    <button
-                      type="button"
-                      className="dropdown-item action"
-                      onClick={() => {
-                        setOpenDropdown(null);
-                        setNotice({ tone: "info", text: "Add model (mock)" });
-                      }}
-                    >
-                      <span className="dropdown-item-main">Add model</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="dropdown">
+                  <button
+                    type="button"
+                    className={`dropdown-trigger ${openDropdown === "model" ? "open" : ""}`}
+                    onClick={() => setOpenDropdown(openDropdown === "model" ? null : "model")}
+                    aria-haspopup="listbox"
+                    aria-expanded={openDropdown === "model"}
+                  >
+                    <span className="dropdown-label">Model</span>
+                    <span className="dropdown-value">{selectedModel}</span>
+                    <span className="dropdown-caret"><Caret /></span>
+                  </button>
+                  {openDropdown === "model" && (
+                    <div className="dropdown-menu dropdown-menu-wide" role="listbox" aria-label="Model">
+                      {MODELS.slice(0, 10).map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          className={`dropdown-item ${m === selectedModel ? "selected" : ""}`}
+                          onClick={() => {
+                            setSelectedModel(m);
+                            setOpenDropdown(null);
+                            setNotice({ tone: "info", text: `Model set to ${m}` });
+                          }}
+                        >
+                          <span className="dropdown-item-main mono">{m}</span>
+                        </button>
+                      ))}
+                      <div className="dropdown-divider" />
+                      <button
+                        type="button"
+                        className="dropdown-item action"
+                        onClick={() => {
+                          setOpenDropdown(null);
+                          setNotice({ tone: "info", text: "Add model (mock)" });
+                        }}
+                      >
+                        <span className="dropdown-item-main">Add model</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+            </div>
+            <span className="status-meta">
+              <BranchIcon />
+              {BRANCH}
+            </span>
           </div>
           <div className="mascot" title={faceLabel} aria-label={`Mascot: ${faceLabel}`}>
             {faceChar}
           </div>
-          <span className="status-meta">
-            <BranchIcon />
-            {BRANCH}
-          </span>
         </div>
 
         {notice && (
