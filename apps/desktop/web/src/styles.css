@@ -47,7 +47,7 @@ button, input, textarea { font: inherit; color: inherit; }
 
 .app {
   height: 100%;
-  padding: 18px;
+  padding: 0;
   display: flex;
   align-items: stretch;
   justify-content: center;
@@ -56,16 +56,16 @@ button, input, textarea { font: inherit; color: inherit; }
 .shell {
   flex: 1;
   min-height: 0;
-  max-width: 1180px;
+  width: 100%;
+  max-width: none;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, rgba(26, 26, 26, 0.72), rgba(17, 17, 17, 0.92));
-  border: 1px solid var(--border-subtle);
-  border-radius: 18px;
-  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(240, 237, 232, 0.03);
+  background: linear-gradient(180deg, rgba(26, 26, 26, 0.88), rgba(17, 17, 17, 0.96));
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
   position: relative;
-  backdrop-filter: blur(10px);
 }
 
 .app-header {
