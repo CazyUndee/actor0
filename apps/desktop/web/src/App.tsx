@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { SPINNER_FRAMES } from "./theme";
 
 type Mode = "chat" | "slash" | "provider" | "manage" | "model" | "usage";
+type TopDropdown = "provider" | "model" | null;
 
 type Entry =
   | { id: number; kind: "user"; text: string }
@@ -11,9 +12,10 @@ type Entry =
 type Face = "idle" | "draft" | "thinking" | "happy";
 
 const VERSION = "0.1.1";
-const MODEL_LABEL = "Anthropic API - Direct · example-provider/claude-opus-4-6";
 const BRANCH = "main";
 const FOOTER = "Actor0 is an experimental agent and may make mistakes.";
+
+const PROVIDERS = [{ id: "claude", name: "claude", detail: "Anthropic API - Direct" }];
 
 const SLASH_COMMANDS = [
   { name: "/provider", alias: "/p", desc: "switch, sign in, add or remove" },
@@ -83,8 +85,12 @@ export function App() {
   const [face, setFace] = useState<Face>(demo.face);
   const [spinner, setSpinner] = useState(0);
   const [notice, setNotice] = useState<{ tone: "info" | "warn" | "error"; text: string } | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState(PROVIDERS[0].id);
+  const [selectedModel, setSelectedModel] = useState(MODELS[0]);
+  const [openDropdown, setOpenDropdown] = useState<TopDropdown>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const topBarRef = useRef<HTMLDivElement>(null);
   const nextId = useRef(Math.max(0, ...demo.entries.map((e) => e.id)) + 1);
 
   useEffect(() => {
@@ -100,6 +106,17 @@ export function App() {
   useEffect(() => {
     if (!busy) setFace(draft.trim() ? "draft" : face === "happy" && entries.length > 0 ? "happy" : "idle");
   }, [draft, busy, entries.length, face]);
+
+  useEffect(() => {
+    if (!openDropdown) return;
+    function onDown(e: MouseEvent) {
+      if (topBarRef.current && !topBarRef.current.contains(e.target as Node)) setOpenDropdown(null);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [openDropdown]);
+
+  const currentProvider = PROVIDERS.find((p) => p.id === selectedProvider) ?? PROVIDERS[0];
 
   const filteredSlash = useMemo(() => {
     const q = draft.startsWith("/") ? draft.slice(1).toLowerCase() : "";
@@ -226,6 +243,11 @@ export function App() {
       }
     }
     if (e.key === "Escape") {
+      if (openDropdown) {
+        e.preventDefault();
+        setOpenDropdown(null);
+        return;
+      }
       if (mode !== "chat") {
         e.preventDefault();
         closeOverlay();
@@ -266,10 +288,96 @@ export function App() {
           <div className="header-hint">Desktop preview · cronixui</div>
         </header>
 
-        <div className="top-bar">
-          <div className="status-pill" title={MODEL_LABEL}>
-            <span className="status-label">Model</span>
-            <span className="status-model">{MODEL_LABEL}</span>
+        <div className="top-bar" ref={topBarRef}>
+          <div className="status-area">
+            <div className="selector-group">
+              <div className="dropdown">
+                <button
+                  type="button"
+                  className={`dropdown-trigger ${openDropdown === "provider" ? "open" : ""}`}
+                  onClick={() => setOpenDropdown(openDropdown === "provider" ? null : "provider")}
+                  aria-haspopup="listbox"
+                  aria-expanded={openDropdown === "provider"}
+                >
+                  <span className="dropdown-label">Provider</span>
+                  <span className="dropdown-value">{currentProvider.name}</span>
+                  <span className="dropdown-caret">▾</span>
+                </button>
+                {openDropdown === "provider" && (
+                  <div className="dropdown-menu" role="listbox" aria-label="Provider">
+                    {PROVIDERS.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={`dropdown-item ${p.id === selectedProvider ? "selected" : ""}`}
+                        onClick={() => {
+                          setSelectedProvider(p.id);
+                          setOpenDropdown(null);
+                          setNotice({ tone: "info", text: `Provider set to ${p.name}` });
+                        }}
+                      >
+                        <span className="dropdown-item-main">{p.name}</span>
+                        <span className="dropdown-item-detail">{p.detail}</span>
+                      </button>
+                    ))}
+                    <div className="dropdown-divider" />
+                    <button
+                      type="button"
+                      className="dropdown-item action"
+                      onClick={() => {
+                        setOpenDropdown(null);
+                        setNotice({ tone: "info", text: "Add provider (mock)" });
+                      }}
+                    >
+                      <span className="dropdown-item-main">Add provider</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="dropdown">
+                <button
+                  type="button"
+                  className={`dropdown-trigger ${openDropdown === "model" ? "open" : ""}`}
+                  onClick={() => setOpenDropdown(openDropdown === "model" ? null : "model")}
+                  aria-haspopup="listbox"
+                  aria-expanded={openDropdown === "model"}
+                >
+                  <span className="dropdown-label">Model</span>
+                  <span className="dropdown-value">{selectedModel}</span>
+                  <span className="dropdown-caret">▾</span>
+                </button>
+                {openDropdown === "model" && (
+                  <div className="dropdown-menu dropdown-menu-wide" role="listbox" aria-label="Model">
+                    {MODELS.slice(0, 10).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        className={`dropdown-item ${m === selectedModel ? "selected" : ""}`}
+                        onClick={() => {
+                          setSelectedModel(m);
+                          setOpenDropdown(null);
+                          setNotice({ tone: "info", text: `Model set to ${m}` });
+                        }}
+                      >
+                        <span className="dropdown-item-main mono">{m}</span>
+                      </button>
+                    ))}
+                    <div className="dropdown-divider" />
+                    <button
+                      type="button"
+                      className="dropdown-item action"
+                      onClick={() => {
+                        setOpenDropdown(null);
+                        setNotice({ tone: "info", text: "Add model (mock)" });
+                      }}
+                    >
+                      <span className="dropdown-item-main">Add model</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
             <span className="status-meta">⎇ {BRANCH}</span>
           </div>
           <div className="mascot" title={faceLabel} aria-label={`Mascot: ${faceLabel}`}>
@@ -361,7 +469,7 @@ export function App() {
           <Panel title="Providers" onClose={closeOverlay} footer="Enter to select · Esc to close">
             <PanelItem
               selected={providerIndex === 0}
-              marker="●"
+              marker=" "
               label="claude"
               detail="Anthropic API - Direct"
               onClick={() => setMode("manage")}
@@ -387,7 +495,7 @@ export function App() {
             </div>
             <Divider />
             {["Change model", "Edit provider", "Test connection", "Remove provider"].map((label, i) => (
-              <PanelItem key={label} selected={i === 0} marker={i === 0 ? "●" : "○"} label={label} detail="" />
+              <PanelItem key={label} selected={i === 0} marker={i === 0 ? " " : " "} label={label} detail="" />
             ))}
           </Panel>
         )}
@@ -404,12 +512,13 @@ export function App() {
               <PanelItem
                 key={m}
                 selected={i === modelIndex}
-                marker={m === MODELS[0] ? "✓" : " "}
+                marker={m === selectedModel ? "✓" : " "}
                 label={m}
                 labelMono
                 detail={m === MODELS[0] ? "claude" : ""}
                 onMouseEnter={() => setModelIndex(i)}
                 onClick={() => {
+                  setSelectedModel(m);
                   setNotice({ tone: "info", text: `Model set to ${m}` });
                   closeOverlay();
                 }}
