@@ -34,6 +34,41 @@ const MODELS = [
   ...Array.from({ length: 20 }, (_, i) => `example-provider/model-${String(i + 1).padStart(2, "0")}-preview`),
 ];
 
+/* V-shaped caret, not a filled triangle */
+function Caret() {
+  return (
+    <svg viewBox="0 0 14 14" aria-hidden="true">
+      <path d="M3.5 5.2 L7 8.8 L10.5 5.2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function BranchIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeWidth="1.6">
+        <circle cx="4" cy="4" r="2" />
+        <circle cx="4" cy="12" r="2" />
+        <circle cx="12" cy="4" r="2" />
+        <path d="M12 6 v2 a3 3 0 0 1 -3 3 H6" />
+      </g>
+    </svg>
+  );
+}
+
+/* a return/enter key */
+function ReturnIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M16 6 h-7 a3 3 0 0 0 -3 3 v1" />
+        <path d="M10 2 L6 6 L10 10" />
+        <path d="M4 14 h12 v-2" opacity="0.55" />
+      </g>
+    </svg>
+  );
+}
+
 function initialDemo() {
   const p = new URLSearchParams(window.location.search).get("demo");
   if (p === "draft")
@@ -91,6 +126,7 @@ export function App() {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
+  const uploadRef = useRef<HTMLInputElement>(null);
   const nextId = useRef(Math.max(0, ...demo.entries.map((e) => e.id)) + 1);
 
   useEffect(() => {
@@ -280,18 +316,10 @@ export function App() {
   return (
     <div className="app">
       <div className="shell">
-        <header className="app-header">
-          <div className="brand">
-            <span className="brand-mark">actor0</span>
-            <span className="brand-version">v{VERSION}</span>
-          </div>
-          <div className="header-hint">Desktop preview · cronixui</div>
-        </header>
-
         <div className="top-bar" ref={topBarRef}>
-          <div className="status-area">
-            <div className="selector-group">
-              <div className="dropdown">
+          <div className="brand-mark">actor0</div>
+          <div className="selector-group">
+            <div className="dropdown">
                 <button
                   type="button"
                   className={`dropdown-trigger ${openDropdown === "provider" ? "open" : ""}`}
@@ -301,7 +329,7 @@ export function App() {
                 >
                   <span className="dropdown-label">Provider</span>
                   <span className="dropdown-value">{currentProvider.name}</span>
-                  <span className="dropdown-caret">▾</span>
+                  <span className="dropdown-caret"><Caret /></span>
                 </button>
                 {openDropdown === "provider" && (
                   <div className="dropdown-menu" role="listbox" aria-label="Provider">
@@ -345,7 +373,7 @@ export function App() {
                 >
                   <span className="dropdown-label">Model</span>
                   <span className="dropdown-value">{selectedModel}</span>
-                  <span className="dropdown-caret">▾</span>
+                  <span className="dropdown-caret"><Caret /></span>
                 </button>
                 {openDropdown === "model" && (
                   <div className="dropdown-menu dropdown-menu-wide" role="listbox" aria-label="Model">
@@ -377,11 +405,18 @@ export function App() {
                   </div>
                 )}
               </div>
-            </div>
-            <span className="status-meta">⎇ {BRANCH}</span>
           </div>
           <div className="mascot" title={faceLabel} aria-label={`Mascot: ${faceLabel}`}>
             {faceChar}
+          </div>
+          <span className="status-meta">
+            <BranchIcon />
+            {BRANCH}
+          </span>
+          <span className="brand-version">v{VERSION}</span>
+          <div className="window-controls" aria-hidden="true">
+            <button type="button" className="window-btn" title="Minimize">−</button>
+            <button type="button" className="window-btn close" title="Close">×</button>
           </div>
         </div>
 
@@ -454,12 +489,28 @@ export function App() {
             />
             <button
               type="button"
+              className="plus-btn"
+              onClick={() => uploadRef.current?.click()}
+              title="Attach screenshot"
+            >
+              +
+            </button>
+            <input
+              ref={uploadRef}
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display: "none" }}
+              onChange={() => setNotice({ tone: "info", text: "Screenshot attached (mock)" })}
+            />
+            <button
+              type="button"
               className="send-btn"
               onClick={() => submitText(draft)}
               disabled={busy || !draft.trim()}
               title="Send"
             >
-              Send
+              <ReturnIcon />
             </button>
           </div>
           <div className="footer">{FOOTER}</div>
