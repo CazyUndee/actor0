@@ -1,13 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SPINNER_FRAMES } from "./theme";
 
-type Mode =
-  | "chat"
-  | "slash"
-  | "provider"
-  | "manage"
-  | "model"
-  | "usage";
+type Mode = "chat" | "slash" | "provider" | "manage" | "model" | "usage";
 
 type Entry =
   | { id: number; kind: "user"; text: string }
@@ -17,19 +11,20 @@ type Entry =
 type Face = "idle" | "draft" | "thinking" | "happy";
 
 const VERSION = "0.1.1";
-const MODEL_LABEL = "Anthropic API - Direct   example-provider/claude-opus-4-6   ⎇ main";
+const MODEL_LABEL = "Anthropic API - Direct · example-provider/claude-opus-4-6";
+const BRANCH = "main";
 const FOOTER = "Actor0 is an experimental agent and may make mistakes.";
 
 const SLASH_COMMANDS = [
-  { name: "/provider  /p", desc: "switch, sign in, add or remove" },
-  { name: "/setup  /s", desc: "re-run the setup wizard" },
-  { name: "/model  /m", desc: "switch to a model" },
-  { name: "/mcp  /mc", desc: "manage MCP servers" },
-  { name: "/thinking  /t", desc: "reasoning effort" },
-  { name: "/clear  /c", desc: "start a new conversation" },
-  { name: "/session  /r", desc: "switch to a saved session" },
-  { name: "/usage  /u", desc: "tokens and quota" },
-  { name: "/quit  /q", desc: "exit" },
+  { name: "/provider", alias: "/p", desc: "switch, sign in, add or remove" },
+  { name: "/setup", alias: "/s", desc: "re-run the setup wizard" },
+  { name: "/model", alias: "/m", desc: "switch to a model" },
+  { name: "/mcp", alias: "/mc", desc: "manage MCP servers" },
+  { name: "/thinking", alias: "/t", desc: "reasoning effort" },
+  { name: "/clear", alias: "/c", desc: "start a new conversation" },
+  { name: "/session", alias: "/r", desc: "switch to a saved session" },
+  { name: "/usage", alias: "/u", desc: "tokens and quota" },
+  { name: "/quit", alias: "/q", desc: "exit" },
 ];
 
 const MODELS = [
@@ -39,9 +34,35 @@ const MODELS = [
 
 function initialDemo() {
   const p = new URLSearchParams(window.location.search).get("demo");
-  if (p === "draft") return { entries: [] as Entry[], draft: "what is in the README?", mode: "chat" as Mode, busy: false, face: "idle" as Face };
-  if (p === "streaming") return { entries: [{ id: 1, kind: "user", text: "what is in the README?" }, { id: 2, kind: "assistant", text: "Here is a short answer about the repository and what the", streaming: true }] as Entry[], draft: "", mode: "chat" as Mode, busy: true, face: "thinking" as Face };
-  if (p === "committed") return { entries: [{ id: 1, kind: "user", text: "what is in the README?" }, { id: 2, kind: "assistant", text: "Here is a short answer about the repository and what the CLI does." }] as Entry[], draft: "", mode: "chat" as Mode, busy: false, face: "happy" as Face };
+  if (p === "draft")
+    return { entries: [] as Entry[], draft: "what is in the README?", mode: "chat" as Mode, busy: false, face: "draft" as Face };
+  if (p === "streaming")
+    return {
+      entries: [
+        { id: 1, kind: "user", text: "what is in the README?" },
+        {
+          id: 2,
+          kind: "assistant",
+          text: "Here is a short answer about the repository and what the",
+          streaming: true,
+        },
+      ] as Entry[],
+      draft: "",
+      mode: "chat" as Mode,
+      busy: true,
+      face: "thinking" as Face,
+    };
+  if (p === "committed")
+    return {
+      entries: [
+        { id: 1, kind: "user", text: "what is in the README?" },
+        { id: 2, kind: "assistant", text: "Here is a short answer about the repository and what the CLI does." },
+      ] as Entry[],
+      draft: "",
+      mode: "chat" as Mode,
+      busy: false,
+      face: "happy" as Face,
+    };
   if (p === "provider") return { entries: [] as Entry[], draft: "", mode: "provider" as Mode, busy: false, face: "idle" as Face };
   if (p === "manage") return { entries: [] as Entry[], draft: "", mode: "manage" as Mode, busy: false, face: "idle" as Face };
   if (p === "model") return { entries: [] as Entry[], draft: "", mode: "model" as Mode, busy: false, face: "idle" as Face };
@@ -63,7 +84,7 @@ export function App() {
   const [spinner, setSpinner] = useState(0);
   const [notice, setNotice] = useState<{ tone: "info" | "warn" | "error"; text: string } | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const nextId = useRef(Math.max(0, ...demo.entries.map((e) => e.id)) + 1);
 
   useEffect(() => {
@@ -77,12 +98,14 @@ export function App() {
   }, [entries, busy]);
 
   useEffect(() => {
-    if (!busy) setFace(draft.trim() ? "draft" : "idle");
-  }, [draft, busy]);
+    if (!busy) setFace(draft.trim() ? "draft" : face === "happy" && entries.length > 0 ? "happy" : "idle");
+  }, [draft, busy, entries.length, face]);
 
   const filteredSlash = useMemo(() => {
     const q = draft.startsWith("/") ? draft.slice(1).toLowerCase() : "";
-    return SLASH_COMMANDS.filter((c) => c.name.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q));
+    return SLASH_COMMANDS.filter(
+      (c) => c.name.toLowerCase().includes(q) || c.alias.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q),
+    );
   }, [draft]);
 
   const filteredModels = useMemo(() => {
@@ -125,21 +148,20 @@ export function App() {
     if (t === "/clear" || t === "/c") {
       setEntries([]);
       setDraft("");
-      setNotice({ tone: "info", text: "started a new conversation" });
+      setNotice({ tone: "info", text: "Started a new conversation." });
       closeOverlay();
       return;
     }
     if (t === "/quit" || t === "/q") {
-      setNotice({ tone: "info", text: "exit requested (desktop MVP mock)" });
+      setNotice({ tone: "info", text: "Exit requested (desktop MVP mock)." });
       setDraft("");
       closeOverlay();
       return;
     }
     if (t.startsWith("/") && mode === "chat") {
-      // if typed directly and not handled above, try opening matching panel or show unknown
       const known = ["/provider", "/p", "/model", "/m", "/usage", "/u", "/clear", "/c", "/quit", "/q", "/setup", "/s", "/mcp", "/mc", "/thinking", "/t", "/session", "/r"];
       if (!known.some((k) => t === k)) {
-        setNotice({ tone: "warn", text: `unknown command: ${t}` });
+        setNotice({ tone: "warn", text: `Unknown command: ${t}` });
       }
       setDraft("");
       return;
@@ -151,7 +173,6 @@ export function App() {
     setFace("thinking");
     closeOverlay();
 
-    // Mock streaming answer to demonstrate parity
     const answer = "Here is a short answer about the repository and what the CLI does.";
     const words = answer.split(" ");
     let i = 0;
@@ -173,25 +194,54 @@ export function App() {
     }, 45);
   }
 
-  function onComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+  function onComposerKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (mode === "slash") {
-      if (e.key === "ArrowDown") { e.preventDefault(); setSlashIndex((i) => Math.min(filteredSlash.length - 1, i + 1)); return; }
-      if (e.key === "ArrowUp") { e.preventDefault(); setSlashIndex((i) => Math.max(0, i - 1)); return; }
-      if (e.key === "Escape") { e.preventDefault(); setDraft(""); closeOverlay(); return; }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashIndex((i) => Math.min(filteredSlash.length - 1, i + 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setDraft("");
+        closeOverlay();
+        return;
+      }
       if (e.key === "Enter") {
         e.preventDefault();
-        const cmd = filteredSlash[slashIndex]?.name.split(/\s+/)[0];
+        const cmd = filteredSlash[slashIndex]?.name;
         if (cmd) submitText(cmd);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const cmd = filteredSlash[slashIndex]?.name;
+        if (cmd) setDraft(cmd + " ");
         return;
       }
     }
     if (e.key === "Escape") {
-      if (mode !== "chat") { e.preventDefault(); closeOverlay(); return; }
-      if (busy) { e.preventDefault(); setBusy(false); setFace("idle"); setNotice({ tone: "warn", text: "interrupted" }); return; }
+      if (mode !== "chat") {
+        e.preventDefault();
+        closeOverlay();
+        return;
+      }
+      if (busy) {
+        e.preventDefault();
+        setBusy(false);
+        setFace("idle");
+        setNotice({ tone: "warn", text: "Interrupted." });
+        return;
+      }
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && mode === "chat") {
       e.preventDefault();
-      if (mode === "chat") submitText(draft);
+      submitText(draft);
     }
   }
 
@@ -202,82 +252,139 @@ export function App() {
   }
 
   const faceChar = face === "happy" ? "ᵔᴥᵔ" : face === "thinking" ? "o_o" : "-_-";
+  const faceLabel =
+    face === "happy" ? "Ready" : face === "thinking" ? "Thinking" : draft.trim() ? "Typing" : "Idle";
 
   return (
     <div className="app">
-      <div className="frame">
-        <div className="frame-title">
-          <div className="frame-title-left">╭── <span>actor0</span> ──────────────────────────────────────────────────────────</div>
-          <div className="frame-title-right"> v{VERSION} ──╮</div>
-        </div>
-        <div className="frame-inner">
-          <div className="top-row">
-            <div className="status-box">{MODEL_LABEL}</div>
-            <div className="face-box">{faceChar}</div>
+      <div className="shell">
+        <header className="app-header">
+          <div className="brand">
+            <span className="brand-mark">actor0</span>
+            <span className="brand-version">v{VERSION}</span>
           </div>
+          <div className="header-hint">Desktop preview · cronixui</div>
+        </header>
 
-          {notice && <div className={`notice ${notice.tone}`}>{notice.text}</div>}
-
-          <div className="transcript" ref={transcriptRef}>
-            {entries.map((e) => (
-              <div key={e.id} className={`entry ${e.kind}`}>
-                {e.kind === "user" && <div className="user-bubble">{e.text}</div>}
-                {e.kind === "assistant" && (
-                  <div className="assistant-box">{e.text || (e.streaming ? " " : "")}</div>
-                )}
-                {e.kind === "tool" && (
-                  <div className="tool-line">
-                    <span className={e.status === "ok" ? "ok" : "err"}>{e.status === "ok" ? "✓" : "✗"}</span> {e.name} <span className="muted">{e.target}</span>
-                  </div>
-                )}
-              </div>
-            ))}
-            {busy && entries[entries.length - 1]?.kind !== "assistant" && (
-              <div className="live"><span className="spinner">{SPINNER_FRAMES[spinner]}</span> <span className="status">thinking…</span></div>
-            )}
+        <div className="top-bar">
+          <div className="status-pill" title={MODEL_LABEL}>
+            <span className="status-label">Model</span>
+            <span className="status-model">{MODEL_LABEL}</span>
+            <span className="status-meta">⎇ {BRANCH}</span>
           </div>
-
-          <div className="composer-wrap">
-            <div className={`composer ${busy ? "busy" : ""}`}>
-              <textarea
-                ref={inputRef}
-                className="composer-draft"
-                value={draft}
-                placeholder=""
-                onChange={(e) => onDraftChange(e.target.value)}
-                onKeyDown={onComposerKeyDown}
-                rows={1}
-                spellCheck={false}
-                style={{ background: "transparent", color: "var(--text)", border: "none", resize: "none", font: "inherit", width: "100%", padding: 0 }}
-              />
-            </div>
-            <div className="footer">{FOOTER}</div>
+          <div className="mascot" title={faceLabel} aria-label={`Mascot: ${faceLabel}`}>
+            {faceChar}
           </div>
         </div>
 
-        {mode === "slash" && (
-          <div className="slash-popup">
-            {filteredSlash.map((c, i) => (
-              <div key={c.name} className={`slash-item ${i === slashIndex ? "selected" : ""}`} onMouseEnter={() => setSlashIndex(i)} onClick={() => submitText(c.name.split(/\s+/)[0])}>
-                <span className="name">{c.name}</span>
-                <span className="desc">{c.desc}</span>
-              </div>
-            ))}
-            {filteredSlash.length === 0 && <div className="slash-item"><span className="desc">no matches</span></div>}
+        {notice && (
+          <div className="notices">
+            <div className={`notice ${notice.tone}`}>{notice.text}</div>
           </div>
         )}
 
+        <div className="transcript" ref={transcriptRef}>
+          {entries.map((e) => (
+            <div key={e.id} className={`entry ${e.kind}`}>
+              {e.kind === "user" && <div className="user-bubble">{e.text}</div>}
+              {e.kind === "assistant" && <div className="assistant-box">{e.text || (e.streaming ? " " : "")}</div>}
+              {e.kind === "tool" && (
+                <div className="tool-line">
+                  <span className={e.status === "ok" ? "ok" : "err"}>{e.status === "ok" ? "✓" : "✗"}</span>{" "}
+                  {e.name} <span className="muted">{e.target}</span>
+                </div>
+              )}
+            </div>
+          ))}
+          {busy && entries[entries.length - 1]?.kind !== "assistant" && (
+            <div className="live">
+              <span className="spinner">{SPINNER_FRAMES[spinner]}</span>
+              <span>thinking…</span>
+            </div>
+          )}
+        </div>
+
+        <div className="composer-area">
+          {mode === "slash" && (
+            <div className="slash-popup" role="listbox" aria-label="Commands">
+              {filteredSlash.map((c, i) => (
+                <div
+                  key={c.name}
+                  role="option"
+                  aria-selected={i === slashIndex}
+                  className={`slash-item ${i === slashIndex ? "selected" : ""}`}
+                  onMouseEnter={() => setSlashIndex(i)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    submitText(c.name);
+                  }}
+                >
+                  <span className="name">
+                    {c.name} <span className="muted">{c.alias}</span>
+                  </span>
+                  <span className="desc">{c.desc}</span>
+                </div>
+              ))}
+              {filteredSlash.length === 0 && (
+                <div className="slash-item">
+                  <span className="desc">No matching commands</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className={`composer ${busy ? "busy" : ""}`}>
+            <input
+              ref={inputRef}
+              className="composer-input"
+              value={draft}
+              placeholder="Ask anything, or type / for commands…"
+              onChange={(e) => onDraftChange(e.target.value)}
+              onKeyDown={onComposerKeyDown}
+              spellCheck={false}
+              aria-label="Message"
+            />
+            <button
+              type="button"
+              className="send-btn"
+              onClick={() => submitText(draft)}
+              disabled={busy || !draft.trim()}
+              title="Send"
+            >
+              Send
+            </button>
+          </div>
+          <div className="footer">{FOOTER}</div>
+        </div>
+
         {mode === "provider" && (
-          <Panel title="Providers" onClose={closeOverlay} search="" footer="enter select · esc close">
-            <PanelItem selected={providerIndex === 0} marker="●" label="claude" detail="Anthropic API - Direct" onClick={() => setMode("manage")} onMouseEnter={() => setProviderIndex(0)} />
+          <Panel title="Providers" onClose={closeOverlay} footer="Enter to select · Esc to close">
+            <PanelItem
+              selected={providerIndex === 0}
+              marker="●"
+              label="claude"
+              detail="Anthropic API - Direct"
+              onClick={() => setMode("manage")}
+              onMouseEnter={() => setProviderIndex(0)}
+            />
             <Divider />
-            <PanelItem selected={providerIndex === 1} marker="+" label="Add provider" detail="" onClick={() => setNotice({ tone: "info", text: "add provider (mock)" })} onMouseEnter={() => setProviderIndex(1)} />
+            <PanelItem
+              selected={providerIndex === 1}
+              marker="+"
+              label="Add provider"
+              detail=""
+              onClick={() => setNotice({ tone: "info", text: "Add provider (mock)" })}
+              onMouseEnter={() => setProviderIndex(1)}
+            />
           </Panel>
         )}
 
         {mode === "manage" && (
-          <Panel title="Manage provider" onClose={() => setMode("provider")} search="claude" footer="enter select · esc back">
-            <div className="panel-item" style={{ color: "var(--dim)" }}>  ↑ 1 above</div>
+          <Panel title="Manage provider" onClose={() => setMode("provider")} searchValue="claude" footer="Enter to select · Esc to go back">
+            <div className="panel-item static">
+              <span className="marker muted">↑</span>
+              <span className="label muted">1 above</span>
+            </div>
             <Divider />
             {["Change model", "Edit provider", "Test connection", "Remove provider"].map((label, i) => (
               <PanelItem key={label} selected={i === 0} marker={i === 0 ? "●" : "○"} label={label} detail="" />
@@ -286,25 +393,69 @@ export function App() {
         )}
 
         {mode === "model" && (
-          <Panel title="models" onClose={closeOverlay} search={modelQuery} onSearch={setModelQuery} footer="enter select · esc close">
+          <Panel
+            title="Models"
+            onClose={closeOverlay}
+            searchValue={modelQuery}
+            onSearch={setModelQuery}
+            footer="Enter to select · Esc to close"
+          >
             {filteredModels.slice(0, 12).map((m, i) => (
-              <PanelItem key={m} selected={i === modelIndex} marker={m === MODELS[0] ? "✓" : " "} label={m.length > 28 ? m.slice(0, 27) + "…" : m} detail={m === MODELS[0] ? "claude" : ""} onMouseEnter={() => setModelIndex(i)} onClick={() => { setNotice({ tone: "info", text: `model set to ${m}` }); closeOverlay(); }} />
+              <PanelItem
+                key={m}
+                selected={i === modelIndex}
+                marker={m === MODELS[0] ? "✓" : " "}
+                label={m}
+                labelMono
+                detail={m === MODELS[0] ? "claude" : ""}
+                onMouseEnter={() => setModelIndex(i)}
+                onClick={() => {
+                  setNotice({ tone: "info", text: `Model set to ${m}` });
+                  closeOverlay();
+                }}
+              />
             ))}
-            {filteredModels.length === 0 && <div className="panel-item"><span className="desc">no matches</span></div>}
+            {filteredModels.length === 0 && (
+              <div className="panel-item static">
+                <span className="label muted">No matches</span>
+              </div>
+            )}
           </Panel>
         )}
 
         {mode === "usage" && (
-          <Panel title="usage" onClose={closeOverlay} search="" footer="esc close">
-            <div className="panel-item selected"><span className="key">[ today ]</span><span className="desc">   week      month      all</span></div>
+          <Panel title="Usage" onClose={closeOverlay} footer="Esc to close">
+            <div className="panel-item static selected">
+              <div className="usage-tabs">
+                <span className="usage-tab active">Today</span>
+                <span className="usage-tab">Week</span>
+                <span className="usage-tab">Month</span>
+                <span className="usage-tab">All</span>
+              </div>
+            </div>
             <Divider />
-            <div className="panel-item">5.0k tokens · 2 turns</div>
+            <div className="panel-item static">
+              <div className="usage-row">
+                <span className="label">5.0k tokens · 2 turns</span>
+              </div>
+            </div>
             <Divider />
-            <div className="panel-item" style={{ color: "var(--muted)" }}>by model</div>
+            <div className="panel-item static">
+              <span className="label muted">By model</span>
+            </div>
             <Divider />
-            <div className="panel-item">· agnes-3.0-flash<span style={{ flex: 1 }} /><span className="muted">5.0k</span></div>
-            <Divider />
-            <div className="panel-item">· example-provider/claude-o…<span style={{ flex: 1 }} /><span className="muted">0</span></div>
+            <div className="panel-item static">
+              <div className="usage-row">
+                <span className="label mono">agnes-3.0-flash</span>
+                <span className="usage-note">5.0k</span>
+              </div>
+            </div>
+            <div className="panel-item static">
+              <div className="usage-row">
+                <span className="label mono">example-provider/claude-opus-4-6</span>
+                <span className="usage-note">0</span>
+              </div>
+            </div>
           </Panel>
         )}
       </div>
@@ -312,18 +463,46 @@ export function App() {
   );
 }
 
-function Panel(props: { title: string; onClose: () => void; search: string; onSearch?: (v: string) => void; footer?: string; children: React.ReactNode }) {
+function Panel(props: {
+  title: string;
+  onClose: () => void;
+  searchValue?: string;
+  onSearch?: (v: string) => void;
+  footer?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
-      <div className="panel">
-        <div className="panel-header"><span>{props.title}</span></div>
-        <div className="panel-search"><span className="prompt">⌕  search │ </span>
-          {props.onSearch ? (
-            <input value={props.search} onChange={(e) => props.onSearch?.(e.target.value)} autoFocus style={{ background: "transparent", color: "var(--text)", border: "none", outline: "none", font: "inherit", width: "70%" }} />
-          ) : (
-            <span>{props.search}</span>
-          )}
+    <div
+      className="overlay"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) props.onClose();
+      }}
+    >
+      <div className="panel" role="dialog" aria-modal="true" aria-label={props.title}>
+        <div className="panel-header">
+          <span className="panel-title">{props.title}</span>
+          <button type="button" className="panel-close" onClick={props.onClose}>
+            Close
+          </button>
         </div>
+        {(props.onSearch !== undefined || props.searchValue !== undefined) && (
+          <div className="panel-search">
+            <div className="search-field">
+              <span className="search-icon">⌕</span>
+              {props.onSearch ? (
+                <input
+                  className="search-input"
+                  value={props.searchValue ?? ""}
+                  onChange={(e) => props.onSearch?.(e.target.value)}
+                  placeholder="Search"
+                  autoFocus
+                />
+              ) : (
+                <span className="search-input">{props.searchValue ?? ""}</span>
+              )}
+            </div>
+          </div>
+        )}
         <div className="panel-body">{props.children}</div>
         {props.footer && <div className="panel-footer">{props.footer}</div>}
       </div>
@@ -331,15 +510,29 @@ function Panel(props: { title: string; onClose: () => void; search: string; onSe
   );
 }
 
-function PanelItem(props: { selected?: boolean; marker: string; label: string; detail?: string; onClick?: () => void; onMouseEnter?: () => void }) {
+function PanelItem(props: {
+  selected?: boolean;
+  marker: string;
+  label: string;
+  labelMono?: boolean;
+  detail?: string;
+  onClick?: () => void;
+  onMouseEnter?: () => void;
+}) {
   return (
-    <div className={`panel-item ${props.selected ? "selected" : ""}`} onClick={props.onClick} onMouseEnter={props.onMouseEnter}>
-      <span className="key">{props.marker}</span>
-      <span>{props.label}</span>
-      <span style={{ flex: 1 }} />
-      {props.detail ? <span className="desc" style={{ textAlign: "right" }}>{props.detail}</span> : null}
-    </div>
+    <button
+      type="button"
+      className={`panel-item ${props.selected ? "selected" : ""}`}
+      onClick={props.onClick}
+      onMouseEnter={props.onMouseEnter}
+    >
+      <span className="marker">{props.marker}</span>
+      <span className={`label ${props.labelMono ? "mono" : ""}`}>{props.label}</span>
+      {props.detail ? <span className="detail">{props.detail}</span> : null}
+    </button>
   );
 }
 
-function Divider() { return <div className="panel-divider" />; }
+function Divider() {
+  return <div className="panel-divider" />;
+}
