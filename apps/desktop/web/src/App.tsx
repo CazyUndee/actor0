@@ -332,7 +332,6 @@ export function App() {
                     aria-haspopup="listbox"
                     aria-expanded={openDropdown === "provider"}
                   >
-                    <span className="dropdown-label">Provider</span>
                     <span className="dropdown-value">{currentProvider.name}</span>
                     <span className="dropdown-caret"><Caret /></span>
                   </button>
@@ -376,7 +375,6 @@ export function App() {
                     aria-haspopup="listbox"
                     aria-expanded={openDropdown === "model"}
                   >
-                    <span className="dropdown-label">Model</span>
                     <span className="dropdown-value">{selectedModel}</span>
                     <span className="dropdown-caret"><Caret /></span>
                   </button>

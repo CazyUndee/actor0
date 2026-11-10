@@ -363,16 +363,17 @@ pre.code-block {
   gap: 10px;
   min-height: 52px;
   padding: 8px 12px 8px 16px;
-  border: 2px solid var(--crimson);
+  border: 2px solid var(--border-strong);
   border-radius: 14px;
   background: #2a2a2a;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
   transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
 }
-.composer:hover { border-color: rgba(125, 124, 121, 0.65); }
+.composer:hover { border-color: var(--accent); }
+.composer:active,
 .composer:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft), 0 6px 18px rgba(0, 0, 0, 0.3);
+  border-color: var(--crimson);
+  box-shadow: 0 0 0 4px var(--crimson-soft), 0 6px 18px rgba(0, 0, 0, 0.3);
 }
 .composer.busy { border-color: rgba(125, 124, 121, 0.45); }
 .composer-input {
