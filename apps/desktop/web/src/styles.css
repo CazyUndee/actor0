@@ -371,8 +371,8 @@ pre.code-block {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 52px;
-  padding: 8px 12px 8px 16px;
+  min-height: 30px;
+  padding: 2px 10px 2px 14px;
   border: 2px solid var(--border-strong);
   border-radius: 14px;
   background: #2a2a2a;
@@ -395,9 +395,9 @@ pre.code-block {
   outline: none;
   resize: none;
   font: 12px/1.4 var(--font-mono);
-  padding: 4px 0;
-  height: 24px;
-  max-height: 24px;
+  padding: 0;
+  height: 18px;
+  max-height: 18px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -407,8 +407,8 @@ pre.code-block {
   display: inline-flex;
   align-items: stretch;
   flex: none;
-  height: 34px;
-  border-radius: 9px;
+  height: 22px;
+  border-radius: 7px;
   background: var(--crimson);
   overflow: hidden;
 }
@@ -426,12 +426,12 @@ pre.code-block {
 .action-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); }
 .action-btn:active:not(:disabled) { background: rgba(0, 0, 0, 0.12); }
 .action-plus {
-  width: 34px;
-  font-size: 18px;
+  width: 22px;
+  font-size: 14px;
   line-height: 1;
 }
 .action-send {
-  width: 38px;
+  width: 24px;
 }
 .action-send:disabled {
   opacity: 0.45;
@@ -611,11 +611,11 @@ table.md-table { border-collapse: collapse; margin: 8px 0; width: 100%; }
 table.md-table th, table.md-table td { padding: 6px 10px; text-align: left; border-bottom: 2px solid var(--border-subtle); }
 table.md-table th { color: var(--accent-text); font-weight: 600; }
 
-/* when the composer column cannot be 800px (80vw < 800px), keep 10px padding
-   and let the left side match the top visual gap (composer top padding + input top padding) */
+/* when the composer column cannot be 800px (80vw < 800px), keep 10px area padding
+   and let the left side match the top visual gap (composer top padding) */
 @media (max-width: 1000px) {
   .composer-area { padding-left: 10px; padding-right: 10px; }
-  .composer { padding: 10px 10px 10px 14px; }
+  .composer { padding: 2px 10px 2px 14px; }
 }
 
 @media (max-width: 720px) {
