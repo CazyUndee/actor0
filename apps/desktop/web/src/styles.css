@@ -305,6 +305,7 @@ button, input, textarea { font: inherit; color: inherit; }
   border: 2px solid rgba(107, 35, 35, 0.75);
   background: linear-gradient(180deg, rgba(107, 35, 35, 0.26), rgba(107, 35, 35, 0.14));
   color: var(--text);
+  font-size: 12px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 .entry.assistant { display: flex; width: 100%; }
@@ -315,6 +316,7 @@ button, input, textarea { font: inherit; color: inherit; }
   border: 2px solid var(--border-subtle);
   background: var(--surface);
   color: var(--text);
+  font-size: 12px;
 }
 .entry.tool { color: var(--muted); }
 .tool-line {
@@ -375,6 +377,7 @@ pre.code-block {
   border-radius: 14px;
   background: #2a2a2a;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  cursor: text;
   transition: border-color 120ms ease, background 120ms ease;
 }
 .composer:hover { border-color: var(--accent); }
@@ -391,7 +394,7 @@ pre.code-block {
   border: none;
   outline: none;
   resize: none;
-  font: 14px/1.4 var(--font-mono);
+  font: 12px/1.4 var(--font-mono);
   padding: 4px 0;
   height: 24px;
   max-height: 24px;
@@ -607,6 +610,12 @@ pre.code-block {
 table.md-table { border-collapse: collapse; margin: 8px 0; width: 100%; }
 table.md-table th, table.md-table td { padding: 6px 10px; text-align: left; border-bottom: 2px solid var(--border-subtle); }
 table.md-table th { color: var(--accent-text); font-weight: 600; }
+
+/* when the composer column cannot be 800px (80vw < 800px), keep 10px padding */
+@media (max-width: 1000px) {
+  .composer-area { padding-left: 10px; padding-right: 10px; }
+  .composer { padding: 10px; }
+}
 
 @media (max-width: 720px) {
   .app { padding: 8px; }

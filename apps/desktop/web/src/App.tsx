@@ -478,7 +478,13 @@ export function App() {
             </div>
           )}
 
-          <div className={`composer ${busy ? "busy" : ""}`}>
+          <div
+            className={`composer ${busy ? "busy" : ""}`}
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest(".composer-actions")) return;
+              inputRef.current?.focus();
+            }}
+          >
             <input
               ref={inputRef}
               className="composer-input"
