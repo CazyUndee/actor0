@@ -305,7 +305,7 @@ button, input, textarea { font: inherit; color: inherit; }
   border: 2px solid rgba(107, 35, 35, 0.75);
   background: linear-gradient(180deg, rgba(107, 35, 35, 0.26), rgba(107, 35, 35, 0.14));
   color: var(--text);
-  font-size: 12px;
+  font-size: 15px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 .entry.assistant { display: flex; }
@@ -316,7 +316,7 @@ button, input, textarea { font: inherit; color: inherit; }
   border: 2px solid var(--border-subtle);
   background: var(--surface);
   color: var(--text);
-  font-size: 12px;
+  font-size: 15px;
 }
 .entry.tool { color: var(--muted); }
 .tool-line {
@@ -371,7 +371,7 @@ pre.code-block {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 40px;
+  min-height: 45px;
   padding: 4px 10px 4px 14px;
   border: 2px solid var(--border-strong);
   border-radius: 14px;
@@ -394,10 +394,10 @@ pre.code-block {
   border: none;
   outline: none;
   resize: none;
-  font: 12px/1.4 var(--font-mono);
+  font: 15px/1.4 var(--font-mono);
   padding: 0;
-  height: 20px;
-  max-height: 20px;
+  height: 24px;
+  max-height: 24px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -407,8 +407,8 @@ pre.code-block {
   display: inline-flex;
   align-items: stretch;
   flex: none;
-  height: 28px;
-  border-radius: 8px;
+  height: 33px;
+  border-radius: 9px;
   background: var(--crimson);
   overflow: hidden;
 }
@@ -426,12 +426,12 @@ pre.code-block {
 .action-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); }
 .action-btn:active:not(:disabled) { background: rgba(0, 0, 0, 0.12); }
 .action-plus {
-  width: 28px;
-  font-size: 16px;
+  width: 33px;
+  font-size: 18px;
   line-height: 1;
 }
 .action-send {
-  width: 30px;
+  width: 36px;
 }
 .action-send:disabled {
   opacity: 0.45;
