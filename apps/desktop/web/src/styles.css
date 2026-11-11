@@ -400,40 +400,46 @@ pre.code-block {
   text-overflow: ellipsis;
 }
 .composer-input::placeholder { color: var(--dim); }
-.send-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 34px;
+.composer-actions {
+  display: inline-flex;
+  align-items: stretch;
   flex: none;
-  border: none;
+  height: 34px;
   border-radius: 9px;
   background: var(--crimson);
-  color: var(--text);
-  cursor: pointer;
-  transition: background 120ms ease, transform 80ms ease;
+  overflow: hidden;
 }
-.send-btn:hover:not(:disabled) { background: #8a2f2f; }
-.send-btn:active:not(:disabled) { transform: translateY(1px); }
-.send-btn:disabled { opacity: 0.4; cursor: default; }
-.plus-btn {
+.action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  flex: none;
-  border: 2px solid var(--border-subtle);
-  border-radius: 9px;
-  background: var(--surface2);
-  color: var(--muted);
-  font-size: 17px;
-  line-height: 1;
+  border: none;
+  background: transparent;
+  color: var(--text);
   cursor: pointer;
-  transition: border-color 120ms ease, color 120ms ease;
+  padding: 0;
+  transition: background 120ms ease;
 }
-.plus-btn:hover { border-color: var(--border-strong); color: var(--text); }
+.action-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); }
+.action-btn:active:not(:disabled) { background: rgba(0, 0, 0, 0.12); }
+.action-plus {
+  width: 34px;
+  font-size: 18px;
+  line-height: 1;
+}
+.action-send {
+  width: 38px;
+}
+.action-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.action-send:disabled:hover { background: transparent; }
+.action-divider {
+  width: 1px;
+  align-self: stretch;
+  background: rgba(240, 237, 232, 0.28);
+}
 .footer {
   margin-top: 10px;
   text-align: center;

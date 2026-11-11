@@ -60,11 +60,14 @@ function BranchIcon() {
 function ReturnIcon() {
   return (
     <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-      <g fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M16 6 h-7 a3 3 0 0 0 -3 3 v1" />
-        <path d="M10 2 L6 6 L10 10" />
-        <path d="M4 14 h12 v-2" opacity="0.55" />
-      </g>
+      <path
+        d="M15 4v7a2 2 0 0 1-2 2H6m3-3-3 3 3 3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -486,14 +489,28 @@ export function App() {
               spellCheck={false}
               aria-label="Message"
             />
-            <button
-              type="button"
-              className="plus-btn"
-              onClick={() => uploadRef.current?.click()}
-              title="Attach screenshot"
-            >
-              +
-            </button>
+            <div className="composer-actions" role="group" aria-label="Message actions">
+              <button
+                type="button"
+                className="action-btn action-plus"
+                onClick={() => uploadRef.current?.click()}
+                title="Attach screenshot"
+                aria-label="Attach screenshot"
+              >
+                +
+              </button>
+              <span className="action-divider" aria-hidden="true" />
+              <button
+                type="button"
+                className="action-btn action-send"
+                onClick={() => submitText(draft)}
+                disabled={busy || !draft.trim()}
+                title="Send"
+                aria-label="Send"
+              >
+                <ReturnIcon />
+              </button>
+            </div>
             <input
               ref={uploadRef}
               type="file"
@@ -502,15 +519,6 @@ export function App() {
               style={{ display: "none" }}
               onChange={() => setNotice({ tone: "info", text: "Screenshot attached (mock)" })}
             />
-            <button
-              type="button"
-              className="send-btn"
-              onClick={() => submitText(draft)}
-              disabled={busy || !draft.trim()}
-              title="Send"
-            >
-              <ReturnIcon />
-            </button>
           </div>
           <div className="footer">{FOOTER}</div>
         </div>
