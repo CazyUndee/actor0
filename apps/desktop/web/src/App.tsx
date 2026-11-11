@@ -56,6 +56,19 @@ function BranchIcon() {
   );
 }
 
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+      <path
+        d="M10 4.5v11M4.5 10h11"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 /* a return/enter key */
 function ReturnIcon() {
   return (
@@ -503,7 +516,7 @@ export function App() {
                 title="Attach screenshot"
                 aria-label="Attach screenshot"
               >
-                +
+                <PlusIcon />
               </button>
               <span className="action-divider" aria-hidden="true" />
               <button
