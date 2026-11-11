@@ -431,7 +431,7 @@ pre.code-block {
   line-height: 1;
 }
 .action-send {
-  width: 36px;
+  width: 33px;
 }
 .action-send:disabled {
   opacity: 0.45;
