@@ -1,0 +1,63 @@
+{
+  "application": {
+    "id": "com.actor0.desktop",
+    "name": "actor0",
+    "version": "0.5.7",
+    "appDataFolderName": ".actor0-desktop",
+    "globalEvents": {
+      "prefix": "nl_event_"
+    },
+    "url": "http://127.0.0.1:5174",
+    "enableServer": true,
+    "enableNativeAPI": true,
+    "nativeAllowList": [
+      "os.*",
+      "app.*",
+      "window.*",
+      "clipboard.*",
+      "events.*"
+    ],
+    "tokenSecurity": "one-time",
+    "exportAuthInfo": ".tmp/auth_info.json",
+    "modes": {
+      "chrome": {
+        "browserBinary": "/usr/bin/google-chrome",
+        "userDataDir": "${APP_HOME}/.chrome-profile",
+        "arguments": [
+          "--no-sandbox",
+          "--user-data-dir=${USER_DATA_DIR}",
+          "--remote-debugging-port=0",
+          "--window-size=1280,800"
+        ]
+      }
+    }
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 5174,
+    "documentRoot": ".",
+    "resourcePath": "resources/neu",
+    "resourceAllowList": [
+      "*"
+    ],
+    "enableCORS": false,
+    "enableWSS": true,
+    "https": false
+  },
+  "cli": {
+    "version": "11.8.0",
+    "binaryVersion": "11.8.0",
+    "clientVersion": "6.10.0"
+  },
+  "logging": {
+    "enableLog": true,
+    "storeLogs": true,
+    "webSocketPort": 0,
+    "maxLogSize": 10000000,
+    "maxLogHistory": 20
+  },
+  "os": {
+    "allowRunAllFilesFromAppDataFolder": true,
+    "customSchemas": []
+  }
+}

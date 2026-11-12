@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SPINNER_FRAMES } from "./theme";
 
-type Mode = "chat" | "slash" | "provider" | "manage" | "model" | "usage";
+type Mode = "chat" | "slash" | "provider" | "manage" | "model" | "usage" | "session" | "thinking" | "mcp" | "add";
 type TopDropdown = "provider" | "model" | null;
 
 type Entry =
@@ -9,24 +9,24 @@ type Entry =
   | { id: number; kind: "assistant"; text: string; streaming?: boolean }
   | { id: number; kind: "tool"; name: string; target: string; status: "ok" | "error"; output?: string };
 
-type Face = "idle" | "draft" | "thinking" | "happy";
+type Face = "idle" | "draft" | "thinking" | "happy" | "error";
 
-const VERSION = "0.1.1";
+const VERSION = "0.5.7";
 const BRANCH = "main";
 const FOOTER = "Actor0 is an experimental agent and may make mistakes.";
 
 const PROVIDERS = [{ id: "claude", name: "claude", detail: "Anthropic API - Direct" }];
 
 const SLASH_COMMANDS = [
-  { name: "/provider", alias: "/p", desc: "switch, sign in, add or remove" },
-  { name: "/setup", alias: "/s", desc: "re-run the setup wizard" },
-  { name: "/model", alias: "/m", desc: "switch to a model" },
-  { name: "/mcp", alias: "/mc", desc: "manage MCP servers" },
-  { name: "/thinking", alias: "/t", desc: "reasoning effort" },
-  { name: "/clear", alias: "/c", desc: "start a new conversation" },
-  { name: "/session", alias: "/r", desc: "switch to a saved session" },
-  { name: "/usage", alias: "/u", desc: "tokens and quota" },
-  { name: "/quit", alias: "/q", desc: "exit" },
+  { name: "provider", alias: "/p", alias2: "/endpoint", desc: "switch, sign in, add or remove" },
+  { name: "setup", alias: "/s", desc: "re-run the setup wizard" },
+  { name: "model", alias: "/m", desc: "switch to a model" },
+  { name: "mcp", alias: "/mc", desc: "manage MCP servers" },
+  { name: "thinking", alias: "/t", desc: "reasoning effort" },
+  { name: "clear", alias: "/c", desc: "start a new conversation" },
+  { name: "session", alias: "/r", alias2: "/resume", desc: "switch to a saved session" },
+  { name: "usage", alias: "/u", desc: "tokens and quota" },
+  { name: "quit", alias: "/q", alias2: "/exit", desc: "exit" },
 ];
 
 const MODELS = [
@@ -138,6 +138,7 @@ export function App() {
   const [notice, setNotice] = useState<{ tone: "info" | "warn" | "error"; text: string } | null>(null);
   const [selectedProvider, setSelectedProvider] = useState(PROVIDERS[0].id);
   const [selectedModel, setSelectedModel] = useState(MODELS[0]);
+  const [effortIndex, setEffortIndex] = useState(0);
   const [openDropdown, setOpenDropdown] = useState<TopDropdown>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -169,6 +170,16 @@ export function App() {
   }, [openDropdown]);
 
   const currentProvider = PROVIDERS.find((p) => p.id === selectedProvider) ?? PROVIDERS[0];
+  const THINKING = [
+    { label: "default (provider)", effort: undefined },
+    { label: "low", effort: "low" },
+    { label: "medium", effort: "medium" },
+    { label: "high", effort: "high" },
+  ] as const;
+
+  void THINKING;
+  void effortIndex;
+  void setEffortIndex;
 
   const filteredSlash = useMemo(() => {
     const q = draft.startsWith("/") ? draft.slice(1).toLowerCase() : "";
@@ -188,6 +199,12 @@ export function App() {
   }
 
   function closeOverlay() {
+    setMode("chat");
+    setModelQuery("");
+    inputRef.current?.focus();
+  }
+
+  function closePicker() {
     setMode("chat");
     setModelQuery("");
     inputRef.current?.focus();
@@ -325,9 +342,9 @@ export function App() {
     if (!v.startsWith("/") && mode === "slash") setMode("chat");
   }
 
-  const faceChar = face === "happy" ? "ᵔᴥᵔ" : face === "thinking" ? "o_o" : "-_-";
+  const faceChar = face === "happy" ? "ᵔᴥᵔ" : face === "thinking" ? "o_o" : face === "error" ? "x_x" : "-_-";
   const faceLabel =
-    face === "happy" ? "Ready" : face === "thinking" ? "Thinking" : draft.trim() ? "Typing" : "Idle";
+    face === "happy" ? "Ready" : face === "thinking" ? "Thinking" : face === "error" ? "Error" : draft.trim() ? "Typing" : "Idle";
 
   return (
     <div className="app">
@@ -641,6 +658,64 @@ export function App() {
                 <span className="label mono">example-provider/claude-opus-4-6</span>
                 <span className="usage-note">0</span>
               </div>
+            </div>
+          </Panel>
+        )}
+
+        {mode === "session" && (
+          <Panel title="sessions" onClose={closePicker} footer="Esc to close">
+            <div className="panel-item static">
+              <span className="label muted">No saved sessions.</span>
+            </div>
+            <div className="panel-item static">
+              <span className="label muted">Use /session to browse saved conversations.</span>
+            </div>
+          </Panel>
+        )}
+
+        {mode === "thinking" && (
+          <Panel title="reasoning effort" onClose={closePicker} footer="Enter to select · Esc to close">
+            {THINKING.map((t, i) => (
+              <div
+                key={t.effort}
+                className={`panel-item ${i === effortIndex ? "selected" : ""}`}
+                onClick={() => {
+                  setEffortIndex(i);
+                  setNotice({ tone: "info", text: `Thinking effort set to ${t.label}` });
+                  closePicker();
+                }}
+                onMouseEnter={() => setEffortIndex(i)}
+              >
+                <span className="marker">{i === effortIndex ? "✓ " : "  "}</span>
+                <span className="label">{t.label}</span>
+              </div>
+            ))}
+          </Panel>
+        )}
+
+        {mode === "mcp" && (
+          <Panel title="MCP servers" onClose={closePicker} footer="Esc to close">
+            <div className="panel-item static">
+              <span className="label">No MCP servers configured.</span>
+            </div>
+            <div className="panel-item static">
+              <span className="label muted">Configure MCP servers in your config file.</span>
+            </div>
+          </Panel>
+        )}
+
+        {mode === "add" && (
+          <Panel title="Add provider" onClose={closePicker} footer="Esc to close">
+            <div className="panel-item static">
+              <span className="label">Provider kind wizard (mock)</span>
+            </div>
+            <Divider />
+            <div className="panel-item static">
+              <span className="label muted">Claude (Anthropic API - Direct)</span>
+            </div>
+            <Divider />
+            <div className="panel-item static">
+              <span className="label muted">Enter API key…</span>
             </div>
           </Panel>
         )}

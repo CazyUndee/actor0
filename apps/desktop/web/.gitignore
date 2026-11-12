@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.log
 .vite/
+# build output
+resources/neu/
+.tmp/

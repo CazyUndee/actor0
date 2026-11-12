@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "build": "npm --workspace @actor0/harness run build && npm --workspace @actor0/providers run build && npm --workspace @actor0/cli run build",
+    "build:desktop": "npm --workspace @actor0/desktop-web run build",
     "typecheck": "npm --workspace @actor0/harness run typecheck && npm --workspace @actor0/providers run typecheck && npm --workspace @actor0/cli run typecheck",
     "test": "npm --workspace @actor0/harness run test && npm --workspace @actor0/providers run test && npm --workspace @actor0/cli run test",
     "lint": "eslint .",
