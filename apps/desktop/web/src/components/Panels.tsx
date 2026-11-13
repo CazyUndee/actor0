@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ConfigSnapshot, McpStatus, NamedProvider, SessionSummary, UsageSnapshot } from "../protocol";
 import { formatTokens } from "../conversation";
 
@@ -18,6 +18,42 @@ export function Panel(props: {
   footer?: string;
   search?: { value: string; onChange: (value: string) => void; placeholder?: string };
 }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Keyboard navigation, everywhere a mouse also works.
+   *
+   * The CLI's menus are driven by arrows and Enter, and a desktop app that only
+   * answers the mouse is a different app. Rather than thread a cursor through
+   * every panel, this focuses the *rows* — which are real buttons — so arrow
+   * keys move the focus and Enter activates whatever holds it. Disabled rows are
+   * not focusable at all, which is exactly what a menu wants for its
+   * non-selectable lines.
+   */
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const rows = (): HTMLButtonElement[] =>
+      Array.from(body.querySelectorAll<HTMLButtonElement>("button.panel-item:not(:disabled)"));
+    // Focus the first row so the arrows work the moment the panel opens; the
+    // search field keeps its own focus when there is one, since typing is what
+    // a search panel is for.
+    if (!props.search) rows()[0]?.focus();
+
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const list = rows();
+      if (list.length === 0) return;
+      event.preventDefault();
+      const current = list.indexOf(document.activeElement as HTMLButtonElement);
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      const next = (current === -1 ? (step === 1 ? 0 : list.length - 1) : current + step + list.length) % list.length;
+      list[next]?.focus();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [props.title, props.search]);
+
   return (
     <div
       className="overlay"
@@ -47,7 +83,7 @@ export function Panel(props: {
             </div>
           </div>
         ) : null}
-        <div className="panel-body">{props.children}</div>
+        <div className="panel-body" ref={bodyRef}>{props.children}</div>
         {props.footer ? <div className="panel-footer">{props.footer}</div> : null}
       </div>
     </div>
