@@ -1,7 +1,9 @@
 node_modules/
-dist/
-*.log
-.vite/
-# build output
+# build output: the UI bundle and the agent bundle, both assembled by scripts
+resources/app/
+resources/agent/
 resources/neu/
+bin/
 .tmp/
+.vite/
+*.log

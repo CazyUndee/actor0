@@ -1,31 +1,32 @@
 {
   "name": "@actor0/desktop-web",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.5.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "typecheck": "tsc -b",
     "build": "tsc -b && vite build",
-    "build:agent": "node esbuild.config.mjs",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "preview": "vite preview",
-    "neu": "neu",
-    "desktop": "npm run build && npm run build:agent && npm run neu run",
-    "desktop:win": "npm run build && npm run build:agent && npm run neu build --platform win --arch x64 --resources"
+    "agent": "npm --workspace @actor0/desktop-agent run build",
+    "shell": "npm run build && npm run agent && npm run assemble && neu run",
+    "package:win": "npm run build && npm run agent && npm run assemble && neu build --platform win --arch x64",
+    "assemble": "node scripts/assemble.mjs"
   },
   "dependencies": {
+    "@actor0/harness": "*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@esbuild-plugins/node-resolve": "^0.2.2",
     "@neutralinojs/neu": "^11.8.0",
+    "@types/node": "^20",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@types/ws": "^8.5.4",
     "@vitejs/plugin-react": "^4.3.0",
-    "esbuild": "^0.25.0",
+    "tsx": "^4.20",
     "typescript": "^5.9.0",
-    "vite": "^6.0.0",
-    "ws": "^8.14.0"
+    "vite": "^6.0.0"
   }
 }

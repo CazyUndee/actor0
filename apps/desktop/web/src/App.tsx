@@ -1,799 +1,479 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+/* eslint-disable react/no-array-index-key -- The transcript is append-only: entries are added, never reordered or removed, so an entry's position is its identity. */
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { HarnessEvent } from "@actor0/harness";
+import { AgentClient, type ConnectionState } from "./client";
+import {
+  applyEvent,
+  entriesFromMessages,
+  initialConversation,
+  stateFace,
+  withNotice,
+  withUserInput,
+  FACE_CHAR,
+  formatTokens,
+  type ConversationState,
+} from "./conversation";
 import { SPINNER_FRAMES } from "./theme";
+import { parseSlash } from "./slash";
+import type { AgentInfo, ConfigSnapshot, McpStatus, SessionSummary, UsageSnapshot } from "./protocol";
+import { Composer } from "./components/Composer";
+import { EntryView } from "./components/Entry";
+import { McpPanel, ModelPanel, NoticeBar, Panel, ProviderPanel, SessionPanel, ThinkingPanel, UsagePanel } from "./components/Panels";
 
-type Mode = "chat" | "slash" | "provider" | "manage" | "model" | "usage" | "session" | "thinking" | "mcp" | "add";
-type TopDropdown = "provider" | "model" | null;
+/**
+ * The app.
+ *
+ * All of the interesting behaviour lives elsewhere — the reducer in
+ * `conversation.ts`, the parser in `markdown.ts`, the commands in `slash.ts` —
+ * and this file is the wiring: connect, route notifications into the reducer,
+ * dispatch commands, and draw. Keeping it that way is what makes the streaming
+ * contract testable without a browser, which matters because the things that go
+ * wrong in a streaming UI (a retry that leaves the old text on screen, a tool
+ * result that lands twice) are invisible in a screenshot and obvious in a test.
+ */
 
-type Entry =
-  | { id: number; kind: "user"; text: string }
-  | { id: number; kind: "assistant"; text: string; streaming?: boolean }
-  | { id: number; kind: "tool"; name: string; target: string; status: "ok" | "error"; output?: string };
-
-type Face = "idle" | "draft" | "thinking" | "happy" | "error";
-
-const VERSION = "0.5.7";
-const BRANCH = "main";
-const FOOTER = "Actor0 is an experimental agent and may make mistakes.";
-
-const PROVIDERS = [{ id: "claude", name: "claude", detail: "Anthropic API - Direct" }];
-
-const SLASH_COMMANDS = [
-  { name: "provider", alias: "/p", alias2: "/endpoint", desc: "switch, sign in, add or remove" },
-  { name: "setup", alias: "/s", desc: "re-run the setup wizard" },
-  { name: "model", alias: "/m", desc: "switch to a model" },
-  { name: "mcp", alias: "/mc", desc: "manage MCP servers" },
-  { name: "thinking", alias: "/t", desc: "reasoning effort" },
-  { name: "clear", alias: "/c", desc: "start a new conversation" },
-  { name: "session", alias: "/r", alias2: "/resume", desc: "switch to a saved session" },
-  { name: "usage", alias: "/u", desc: "tokens and quota" },
-  { name: "quit", alias: "/q", alias2: "/exit", desc: "exit" },
-];
-
-const MODELS = [
-  "example-provider/claude-opus-4-6",
-  ...Array.from({ length: 20 }, (_, i) => `example-provider/model-${String(i + 1).padStart(2, "0")}-preview`),
-];
-
-/* V-shaped caret, not a filled triangle */
-function Caret() {
-  return (
-    <svg viewBox="0 0 14 14" aria-hidden="true">
-      <path d="M3.5 5.2 L7 8.8 L10.5 5.2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function BranchIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-      <g fill="none" stroke="currentColor" strokeWidth="1.6">
-        <circle cx="4" cy="4" r="2" />
-        <circle cx="4" cy="12" r="2" />
-        <circle cx="12" cy="4" r="2" />
-        <path d="M12 6 v2 a3 3 0 0 1 -3 3 H6" />
-      </g>
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-      <path
-        d="M10 4.5v11M4.5 10h11"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-/* a return/enter key */
-function ReturnIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-      <path
-        d="M15 4v7a2 2 0 0 1-2 2H6m3-3-3 3 3 3"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function initialDemo() {
-  const p = new URLSearchParams(window.location.search).get("demo");
-  if (p === "draft")
-    return { entries: [] as Entry[], draft: "what is in the README?", mode: "chat" as Mode, busy: false, face: "draft" as Face };
-  if (p === "streaming")
-    return {
-      entries: [
-        { id: 1, kind: "user", text: "what is in the README?" },
-        {
-          id: 2,
-          kind: "assistant",
-          text: "Here is a short answer about the repository and what the",
-          streaming: true,
-        },
-      ] as Entry[],
-      draft: "",
-      mode: "chat" as Mode,
-      busy: true,
-      face: "thinking" as Face,
-    };
-  if (p === "committed")
-    return {
-      entries: [
-        { id: 1, kind: "user", text: "what is in the README?" },
-        { id: 2, kind: "assistant", text: "Here is a short answer about the repository and what the CLI does." },
-      ] as Entry[],
-      draft: "",
-      mode: "chat" as Mode,
-      busy: false,
-      face: "happy" as Face,
-    };
-  if (p === "provider") return { entries: [] as Entry[], draft: "", mode: "provider" as Mode, busy: false, face: "idle" as Face };
-  if (p === "manage") return { entries: [] as Entry[], draft: "", mode: "manage" as Mode, busy: false, face: "idle" as Face };
-  if (p === "model") return { entries: [] as Entry[], draft: "", mode: "model" as Mode, busy: false, face: "idle" as Face };
-  if (p === "usage") return { entries: [] as Entry[], draft: "", mode: "usage" as Mode, busy: false, face: "idle" as Face };
-  return { entries: [] as Entry[], draft: "", mode: "chat" as Mode, busy: false, face: "idle" as Face };
-}
+type Mode = "chat" | "provider" | "model" | "thinking" | "session" | "usage" | "mcp";
 
 export function App() {
-  const demo = useMemo(initialDemo, []);
-  const [entries, setEntries] = useState<Entry[]>(demo.entries);
-  const [draft, setDraft] = useState(demo.draft);
-  const [mode, setMode] = useState<Mode>(demo.mode);
-  const [slashIndex, setSlashIndex] = useState(0);
-  const [providerIndex, setProviderIndex] = useState(0);
-  const [modelIndex, setModelIndex] = useState(0);
-  const [modelQuery, setModelQuery] = useState("");
-  const [busy, setBusy] = useState(demo.busy);
-  const [face, setFace] = useState<Face>(demo.face);
-  const [spinner, setSpinner] = useState(0);
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
+  const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
+  const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
+  const [conversation, setConversation] = useState<ConversationState>(initialConversation);
+  const [draft, setDraft] = useState("");
+  const [mode, setMode] = useState<Mode>("chat");
   const [notice, setNotice] = useState<{ tone: "info" | "warn" | "error"; text: string } | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState(PROVIDERS[0].id);
-  const [selectedModel, setSelectedModel] = useState(MODELS[0]);
-  const [effortIndex, setEffortIndex] = useState(0);
-  const [openDropdown, setOpenDropdown] = useState<TopDropdown>(null);
+  const [busy, setBusy] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const [usage, setUsage] = useState<UsageSnapshot | null>(null);
+  const [mcp, setMcp] = useState<McpStatus | null>(null);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [frame, setFrame] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+
+  const clientRef = useRef<AgentClient | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const topBarRef = useRef<HTMLDivElement>(null);
-  const uploadRef = useRef<HTMLInputElement>(null);
-  const nextId = useRef(Math.max(0, ...demo.entries.map((e) => e.id)) + 1);
+  const reasoningStartedAtRef = useRef<number | null>(null);
+  const turnStartedAtRef = useRef<number | null>(null);
+
+  // --- the client ----------------------------------------------------------
+
+  const refreshConfig = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client) return;
+    try {
+      setSnapshot(await client.call("config.get"));
+    } catch (error) {
+      setNotice({ tone: "error", text: String((error as Error).message) });
+    }
+  }, []);
+
+  const refreshSessions = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client) return;
+    try {
+      setSessions(await client.call("session.list"));
+    } catch {
+      /* a session list that cannot be read is not worth a banner */
+    }
+  }, []);
+
+  useEffect(() => {
+    const client = new AgentClient({
+      onState: setConnection,
+      onNotification: (notification) => {
+        switch (notification.type) {
+          case "turn.started": {
+            setBusy(true);
+            setBlocked(false);
+            turnStartedAtRef.current = Date.now();
+            setElapsed(0);
+            return;
+          }
+          case "turn.event": {
+            setConversation((state) => applyEvent(state, notification.event as HarnessEvent, {
+              nowMs: Date.now(),
+              reasoningStartedAtMs: reasoningStartedAtRef.current,
+            }));
+            return;
+          }
+          case "turn.finished": {
+            setBusy(false);
+            setBlocked(notification.result.blocked);
+            turnStartedAtRef.current = null;
+            reasoningStartedAtRef.current = null;
+            void refreshSessions();
+            return;
+          }
+          case "notice": {
+            setNotice({ tone: notification.tone, text: notification.text });
+            return;
+          }
+          case "state.changed": {
+            void refreshConfig();
+            return;
+          }
+          default:
+            return;
+        }
+      },
+    });
+    clientRef.current = client;
+    void (async () => {
+      try {
+        await client.connect();
+        setAgentInfo(await client.call("agent.hello"));
+        setSnapshot(await client.call("config.get"));
+        const { messages } = await client.call("conversation.get");
+        if (Array.isArray(messages) && messages.length > 0) {
+          setConversation({ entries: entriesFromMessages(messages as never), live: initialConversation().live });
+        }
+      } catch (error) {
+        setNotice({ tone: "error", text: `Could not reach the agent: ${(error as Error).message}` });
+      }
+    })();
+    return () => client.close();
+  }, [refreshConfig, refreshSessions]);
+
+  // The reasoning timer: started when reasoning begins streaming into the live
+  // region, cleared when the reducer promotes it to a committed entry. Without
+  // it the collapsed block's duration is guesswork.
+  useEffect(() => {
+    if (conversation.live.reasoning.trim() && reasoningStartedAtRef.current === null) {
+      reasoningStartedAtRef.current = Date.now();
+    }
+    if (!conversation.live.reasoning.trim()) reasoningStartedAtRef.current = null;
+  }, [conversation.live.reasoning]);
 
   useEffect(() => {
     if (!busy) return;
-    const t = setInterval(() => setSpinner((s) => (s + 1) % SPINNER_FRAMES.length), 150);
-    return () => clearInterval(t);
+    const spinner = setInterval(() => setFrame((value) => (value + 1) % SPINNER_FRAMES.length), 120);
+    const clock = setInterval(() => {
+      if (turnStartedAtRef.current) setElapsed(Math.floor((Date.now() - turnStartedAtRef.current) / 1000));
+    }, 250);
+    return () => {
+      clearInterval(spinner);
+      clearInterval(clock);
+    };
   }, [busy]);
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight });
-  }, [entries, busy]);
+  }, [conversation]);
 
-  useEffect(() => {
-    if (!busy) setFace(draft.trim() ? "draft" : face === "happy" && entries.length > 0 ? "happy" : "idle");
-  }, [draft, busy, entries.length, face]);
+  // --- commands ------------------------------------------------------------
 
-  useEffect(() => {
-    if (!openDropdown) return;
-    function onDown(e: MouseEvent) {
-      if (topBarRef.current && !topBarRef.current.contains(e.target as Node)) setOpenDropdown(null);
-    }
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [openDropdown]);
-
-  const currentProvider = PROVIDERS.find((p) => p.id === selectedProvider) ?? PROVIDERS[0];
-  const THINKING = [
-    { label: "default (provider)", effort: undefined },
-    { label: "low", effort: "low" },
-    { label: "medium", effort: "medium" },
-    { label: "high", effort: "high" },
-  ] as const;
-
-  void THINKING;
-  void effortIndex;
-  void setEffortIndex;
-
-  const filteredSlash = useMemo(() => {
-    const q = draft.startsWith("/") ? draft.slice(1).toLowerCase() : "";
-    return SLASH_COMMANDS.filter(
-      (c) => c.name.toLowerCase().includes(q) || c.alias.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q),
-    );
-  }, [draft]);
-
-  const filteredModels = useMemo(() => {
-    const q = modelQuery.toLowerCase();
-    return MODELS.filter((m) => m.toLowerCase().includes(q));
-  }, [modelQuery]);
-
-  function openSlash() {
-    setMode("slash");
-    setSlashIndex(0);
-  }
-
-  function closeOverlay() {
-    setMode("chat");
-    setModelQuery("");
-    inputRef.current?.focus();
-  }
-
-  function closePicker() {
-    setMode("chat");
-    setModelQuery("");
-    inputRef.current?.focus();
-  }
-
-  function submitText(text: string) {
-    const t = text.trim();
-    if (!t) return;
-    if (t === "/provider" || t === "/p") {
+  const runCommand = useCallback(
+    async (name: string, argument?: string) => {
+      const client = clientRef.current;
       setDraft("");
-      setMode("provider");
-      setProviderIndex(0);
-      return;
-    }
-    if (t === "/model" || t === "/m") {
-      setDraft("");
-      setMode("model");
-      setModelIndex(0);
-      setModelQuery("");
-      return;
-    }
-    if (t === "/usage" || t === "/u") {
-      setDraft("");
-      setMode("usage");
-      return;
-    }
-    if (t === "/clear" || t === "/c") {
-      setEntries([]);
-      setDraft("");
-      setNotice({ tone: "info", text: "Started a new conversation." });
-      closeOverlay();
-      return;
-    }
-    if (t === "/quit" || t === "/q") {
-      setNotice({ tone: "info", text: "Exit requested (desktop MVP mock)." });
-      setDraft("");
-      closeOverlay();
-      return;
-    }
-    if (t.startsWith("/") && mode === "chat") {
-      const known = ["/provider", "/p", "/model", "/m", "/usage", "/u", "/clear", "/c", "/quit", "/q", "/setup", "/s", "/mcp", "/mc", "/thinking", "/t", "/session", "/r"];
-      if (!known.some((k) => t === k)) {
-        setNotice({ tone: "warn", text: `Unknown command: ${t}` });
+      if (!client) return;
+      try {
+        switch (name) {
+          case "provider":
+          case "setup":
+            setMode("provider");
+            return;
+          case "model":
+            if (argument) {
+              setSnapshot(await client.call("model.set", { model: argument }));
+              return;
+            }
+            setMode("model");
+            return;
+          case "thinking":
+            if (argument && ["low", "medium", "high"].includes(argument)) {
+              setSnapshot(await client.call("thinking.set", { effort: argument as "low" | "medium" | "high" }));
+              return;
+            }
+            setMode("thinking");
+            return;
+          case "session":
+            if (argument) {
+              const loaded = await client.call("session.load", { id: argument });
+              setConversation((state) => ({ ...state, entries: entriesFromMessages(loaded.messages as never), live: initialConversation().live }));
+              setNotice({ tone: "info", text: `resumed ${argument}` });
+              return;
+            }
+            await refreshSessions();
+            setMode("session");
+            return;
+          case "usage":
+            setUsage(await client.call("usage.get", { period: "day" }));
+            setMode("usage");
+            return;
+          case "mcp":
+            setMcp(await client.call("mcp.status"));
+            setMode("mcp");
+            return;
+          case "clear":
+            await client.call("session.new");
+            setConversation(initialConversation());
+            setNotice({ tone: "info", text: "Started a new conversation." });
+            return;
+          case "quit":
+            setNotice({ tone: "info", text: "Close the window to exit." });
+            return;
+          default:
+            setNotice({ tone: "warn", text: `Unknown command: /${name}` });
+        }
+      } catch (error) {
+        setNotice({ tone: "error", text: (error as Error).message });
       }
-      setDraft("");
+    },
+    [refreshSessions],
+  );
+
+  const submit = useCallback(async () => {
+    const client = clientRef.current;
+    const text = draft.trim();
+    if (!client || !text || busy) return;
+    const parsed = parseSlash(text);
+    if (parsed) {
+      await runCommand(parsed.name, parsed.argument);
       return;
     }
-
-    setEntries((e) => [...e, { id: nextId.current++, kind: "user", text: t }]);
+    // The user's own line goes into the transcript immediately: waiting for the
+    // first token to echo it makes the app feel like it dropped the message.
+    setConversation((state) => withUserInput(state, text));
     setDraft("");
-    setBusy(true);
-    setFace("thinking");
-    closeOverlay();
-
-    const answer = "Here is a short answer about the repository and what the CLI does.";
-    const words = answer.split(" ");
-    let i = 0;
-    setEntries((e) => [...e, { id: nextId.current++, kind: "assistant", text: "", streaming: true }]);
-    const iv = setInterval(() => {
-      i++;
-      const partial = words.slice(0, i).join(" ") + (i < words.length ? " " : "");
-      setEntries((e) => {
-        const copy = [...e];
-        const last = copy[copy.length - 1];
-        if (last && last.kind === "assistant") copy[copy.length - 1] = { ...last, text: partial, streaming: i < words.length };
-        return copy;
-      });
-      if (i >= words.length) {
-        clearInterval(iv);
-        setBusy(false);
-        setFace("happy");
-      }
-    }, 45);
-  }
-
-  function onComposerKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (mode === "slash") {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setSlashIndex((i) => Math.min(filteredSlash.length - 1, i + 1));
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSlashIndex((i) => Math.max(0, i - 1));
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setDraft("");
-        closeOverlay();
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        const cmd = filteredSlash[slashIndex]?.name;
-        if (cmd) submitText(cmd);
-        return;
-      }
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const cmd = filteredSlash[slashIndex]?.name;
-        if (cmd) setDraft(cmd + " ");
-        return;
-      }
+    setNotice(null);
+    try {
+      await client.call(blocked ? "turn.reply" : "turn.send", { input: text });
+    } catch (error) {
+      setNotice({ tone: "error", text: (error as Error).message });
+      setConversation((state) => withNotice(state, "error", (error as Error).message));
     }
-    if (e.key === "Escape") {
-      if (openDropdown) {
-        e.preventDefault();
-        setOpenDropdown(null);
-        return;
-      }
-      if (mode !== "chat") {
-        e.preventDefault();
-        closeOverlay();
-        return;
-      }
-      if (busy) {
-        e.preventDefault();
-        setBusy(false);
-        setFace("idle");
-        setNotice({ tone: "warn", text: "Interrupted." });
-        return;
-      }
-    }
-    if (e.key === "Enter" && mode === "chat") {
-      e.preventDefault();
-      submitText(draft);
-    }
-  }
+  }, [blocked, busy, draft, runCommand]);
 
-  function onDraftChange(v: string) {
-    setDraft(v);
-    if (v.startsWith("/") && mode === "chat") openSlash();
-    if (!v.startsWith("/") && mode === "slash") setMode("chat");
-  }
+  const cancel = useCallback(async () => {
+    await clientRef.current?.call("turn.cancel");
+  }, []);
 
-  const faceChar = face === "happy" ? "ᵔᴥᵔ" : face === "thinking" ? "o_o" : face === "error" ? "x_x" : "-_-";
-  const faceLabel =
-    face === "happy" ? "Ready" : face === "thinking" ? "Thinking" : face === "error" ? "Error" : draft.trim() ? "Typing" : "Idle";
+  // Escape stops a turn, anywhere that is not a text field.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && mode !== "chat") {
+        setMode("chat");
+        return;
+      }
+      if (event.key === "Escape" && busy) void cancel();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, cancel, mode]);
+
+  // --- derived -------------------------------------------------------------
+
+  const face = stateFace({
+    live: conversation.live,
+    lastEntry: conversation.entries[conversation.entries.length - 1],
+    ...(conversation.notice ? { notice: conversation.notice } : {}),
+    blocked,
+    busy,
+  });
+
+  const providerLabel = snapshot?.provider?.model ?? snapshot?.config.model ?? "no provider";
+  const providerName = snapshot?.activeProvider ?? "built-in";
+  const bridgeLabel = agentInfo ? `${agentInfo.bridge} · ${agentInfo.shell}` : "";
+
+  const statusLine = useMemo(() => {
+    if (conversation.live.tool) return `${conversation.live.tool.name} ${conversation.live.tool.target}`;
+    if (conversation.live.status) return conversation.live.status;
+    if (conversation.live.readingToolOutput) return "reading tool output…";
+    if (conversation.live.reasoning) return "thinking…";
+    return "working…";
+  }, [conversation.live]);
 
   return (
     <div className="app">
       <div className="shell">
         <div className="chrome-row">
           <div className="brand-mark">actor0</div>
-          <span className="brand-version">v{VERSION}</span>
+          <span className="brand-version">v{agentInfo?.version ?? "—"}</span>
         </div>
 
-        <div className="bar-row" ref={topBarRef}>
+        <div className="bar-row">
           <div className="top-bar">
             <div className="selector-group">
-              <div className="dropdown">
-                  <button
-                    type="button"
-                    className={`dropdown-trigger ${openDropdown === "provider" ? "open" : ""}`}
-                    onClick={() => setOpenDropdown(openDropdown === "provider" ? null : "provider")}
-                    aria-haspopup="listbox"
-                    aria-expanded={openDropdown === "provider"}
-                  >
-                    <span className="dropdown-value">{currentProvider.name}</span>
-                    <span className="dropdown-caret"><Caret /></span>
-                  </button>
-                  {openDropdown === "provider" && (
-                    <div className="dropdown-menu" role="listbox" aria-label="Provider">
-                      {PROVIDERS.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          className={`dropdown-item ${p.id === selectedProvider ? "selected" : ""}`}
-                          onClick={() => {
-                            setSelectedProvider(p.id);
-                            setOpenDropdown(null);
-                            setNotice({ tone: "info", text: `Provider set to ${p.name}` });
-                          }}
-                        >
-                          <span className="dropdown-item-main">{p.name}</span>
-                          <span className="dropdown-item-detail">{p.detail}</span>
-                        </button>
-                      ))}
-                      <div className="dropdown-divider" />
-                      <button
-                        type="button"
-                        className="dropdown-item action"
-                        onClick={() => {
-                          setOpenDropdown(null);
-                          setNotice({ tone: "info", text: "Add provider (mock)" });
-                        }}
-                      >
-                        <span className="dropdown-item-main">Add provider</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="dropdown">
-                  <button
-                    type="button"
-                    className={`dropdown-trigger ${openDropdown === "model" ? "open" : ""}`}
-                    onClick={() => setOpenDropdown(openDropdown === "model" ? null : "model")}
-                    aria-haspopup="listbox"
-                    aria-expanded={openDropdown === "model"}
-                  >
-                    <span className="dropdown-value">{selectedModel}</span>
-                    <span className="dropdown-caret"><Caret /></span>
-                  </button>
-                  {openDropdown === "model" && (
-                    <div className="dropdown-menu dropdown-menu-wide" role="listbox" aria-label="Model">
-                      {MODELS.slice(0, 10).map((m) => (
-                        <button
-                          key={m}
-                          type="button"
-                          className={`dropdown-item ${m === selectedModel ? "selected" : ""}`}
-                          onClick={() => {
-                            setSelectedModel(m);
-                            setOpenDropdown(null);
-                            setNotice({ tone: "info", text: `Model set to ${m}` });
-                          }}
-                        >
-                          <span className="dropdown-item-main mono">{m}</span>
-                        </button>
-                      ))}
-                      <div className="dropdown-divider" />
-                      <button
-                        type="button"
-                        className="dropdown-item action"
-                        onClick={() => {
-                          setOpenDropdown(null);
-                          setNotice({ tone: "info", text: "Add model (mock)" });
-                        }}
-                      >
-                        <span className="dropdown-item-main">Add model</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+              <button
+                type="button"
+                className="dropdown-trigger"
+                onClick={() => setMode("provider")}
+                title={snapshot?.provider?.endpoint ?? "no endpoint configured"}
+              >
+                <span className="dropdown-value">{providerName}</span>
+                <span className="dropdown-caret">▾</span>
+              </button>
+              <button type="button" className="dropdown-trigger" onClick={() => setMode("model")}>
+                <span className="dropdown-value">{providerLabel}</span>
+                <span className="dropdown-caret">▾</span>
+              </button>
             </div>
-            <span className="status-meta">
-              <BranchIcon />
-              {BRANCH}
+            <span className="status-meta" title={bridgeLabel}>
+              {agentInfo?.cwd ?? ""}
             </span>
           </div>
-          <div className="mascot" title={faceLabel} aria-label={`Mascot: ${faceLabel}`}>
-            {faceChar}
+          <div className={`mascot face-${face}`} title={face}>
+            {FACE_CHAR[face]}
           </div>
         </div>
 
-        {notice && (
+        {connection !== "open" ? (
           <div className="notices">
-            <div className={`notice ${notice.tone}`}>{notice.text}</div>
+            <div className={`notice ${connection === "closed" ? "error" : "info"}`}>
+              {connection === "closed" ? "Disconnected from the agent — retrying…" : "Connecting to the agent…"}
+            </div>
           </div>
-        )}
+        ) : null}
+
+        {(notice ?? conversation.notice) ? (
+          <div className="notices">
+            <NoticeBar notice={(notice ?? conversation.notice)!} onDismiss={() => setNotice(null)} />
+          </div>
+        ) : null}
+
+        {snapshot?.providerError ? (
+          <div className="notices">
+            <NoticeBar notice={{ tone: "error", text: snapshot.providerError }} onDismiss={() => setMode("provider")} />
+          </div>
+        ) : null}
 
         <div className="transcript" ref={transcriptRef}>
-          {entries.map((e) => (
-            <div key={e.id} className={`entry ${e.kind}`}>
-              {e.kind === "user" && <div className="user-bubble">{e.text}</div>}
-              {e.kind === "assistant" && <div className="assistant-box">{e.text || (e.streaming ? " " : "")}</div>}
-              {e.kind === "tool" && (
-                <div className="tool-line">
-                  <span className={e.status === "ok" ? "ok" : "err"}>{e.status === "ok" ? "✓" : "✗"}</span>{" "}
-                  {e.name} <span className="muted">{e.target}</span>
-                </div>
-              )}
+          {conversation.entries.length === 0 && !busy ? (
+            <div className="empty-state">
+              <div className="empty-title">actor0</div>
+              <div className="empty-hint">Ask a question, or type / for commands.</div>
             </div>
+          ) : null}
+          {conversation.entries.map((entry, index) => (
+            <EntryView entry={entry} key={`${entry.kind}-${index}`} />
           ))}
-          {busy && entries[entries.length - 1]?.kind !== "assistant" && (
+          {busy ? (
             <div className="live">
-              <span className="spinner">{SPINNER_FRAMES[spinner]}</span>
-              <span>thinking…</span>
+              <span className="spinner">{SPINNER_FRAMES[frame]}</span>
+              <span className="live-status">{statusLine}</span>
+              {elapsed > 0 ? <span className="live-time">{elapsed}s</span> : null}
+              {conversation.live.retrying ? <span className="live-note">retry {conversation.live.retrying.attempt}</span> : null}
             </div>
-          )}
+          ) : null}
+          {conversation.live.reasoning ? (
+            <div className="live-reasoning">
+              <pre>{conversation.live.reasoning}</pre>
+            </div>
+          ) : null}
+          {conversation.live.text ? (
+            <div className="entry assistant">
+              <div className="assistant-box streaming">
+                <pre className="stream-text">{conversation.live.text}</pre>
+              </div>
+            </div>
+          ) : null}
         </div>
 
-        <div className="composer-area">
-          {mode === "slash" && (
-            <div className="slash-popup" role="listbox" aria-label="Commands">
-              {filteredSlash.map((c, i) => (
-                <div
-                  key={c.name}
-                  role="option"
-                  aria-selected={i === slashIndex}
-                  className={`slash-item ${i === slashIndex ? "selected" : ""}`}
-                  onMouseEnter={() => setSlashIndex(i)}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    submitText(c.name);
-                  }}
-                >
-                  <span className="name">
-                    {c.name} <span className="muted">{c.alias}</span>
-                  </span>
-                  <span className="desc">{c.desc}</span>
-                </div>
-              ))}
-              {filteredSlash.length === 0 && (
-                <div className="slash-item">
-                  <span className="desc">No matching commands</span>
-                </div>
-              )}
-            </div>
-          )}
+        <Composer
+          value={draft}
+          onChange={setDraft}
+          onSubmit={() => void submit()}
+          onCancel={() => void cancel()}
+          busy={busy}
+          blocked={blocked}
+        />
 
-          <div
-            className={`composer ${busy ? "busy" : ""}`}
-            onClick={(e) => {
-              if ((e.target as HTMLElement).closest(".composer-actions")) return;
-              inputRef.current?.focus();
+        {mode === "provider" && snapshot ? (
+          <ProviderPanel
+            snapshot={snapshot}
+            onClose={() => setMode("chat")}
+            onActivate={async (name) => {
+              setSnapshot(await clientRef.current!.call("provider.activate", { name }));
             }}
-          >
-            <input
-              ref={inputRef}
-              className="composer-input"
-              value={draft}
-              placeholder="Ask anything, or type / for commands…"
-              onChange={(e) => onDraftChange(e.target.value)}
-              onKeyDown={onComposerKeyDown}
-              spellCheck={false}
-              aria-label="Message"
-            />
-            <div className="composer-actions" role="group" aria-label="Message actions">
-              <button
-                type="button"
-                className="action-btn action-plus"
-                onClick={() => uploadRef.current?.click()}
-                title="Attach screenshot"
-                aria-label="Attach screenshot"
-              >
-                <PlusIcon />
-              </button>
-              <span className="action-divider" aria-hidden="true" />
-              <button
-                type="button"
-                className="action-btn action-send"
-                onClick={() => submitText(draft)}
-                disabled={busy || !draft.trim()}
-                title="Send"
-                aria-label="Send"
-              >
-                <ReturnIcon />
-              </button>
-            </div>
-            <input
-              ref={uploadRef}
-              type="file"
-              accept="image/*"
-              multiple
-              style={{ display: "none" }}
-              onChange={() => setNotice({ tone: "info", text: "Screenshot attached (mock)" })}
-            />
-          </div>
-          <div className="footer">{FOOTER}</div>
-        </div>
+            onRemove={async (name) => {
+              setSnapshot(await clientRef.current!.call("provider.remove", { name }));
+            }}
+            onTest={async (name) => {
+              const result = await clientRef.current!.call("provider.test", name ? { name } : {});
+              setNotice({ tone: result.ok ? "info" : "error", text: result.message });
+            }}
+            onAdd={async (entry) => {
+              setSnapshot(await clientRef.current!.call("provider.add", { entry }));
+              setNotice({ tone: "info", text: `Added ${entry.name ?? entry.baseUrl}` });
+            }}
+          />
+        ) : null}
 
-        {mode === "provider" && (
-          <Panel title="Providers" onClose={closeOverlay} footer="Enter to select · Esc to close">
-            <PanelItem
-              selected={providerIndex === 0}
-              marker=" "
-              label="claude"
-              detail="Anthropic API - Direct"
-              onClick={() => setMode("manage")}
-              onMouseEnter={() => setProviderIndex(0)}
-            />
-            <Divider />
-            <PanelItem
-              selected={providerIndex === 1}
-              marker="+"
-              label="Add provider"
-              detail=""
-              onClick={() => setNotice({ tone: "info", text: "Add provider (mock)" })}
-              onMouseEnter={() => setProviderIndex(1)}
-            />
-          </Panel>
-        )}
+        {mode === "model" && snapshot ? (
+          <ModelPanel
+            models={snapshot.models}
+            current={snapshot.provider?.model ?? snapshot.config.model}
+            onClose={() => setMode("chat")}
+            onSet={async (model) => {
+              setSnapshot(await clientRef.current!.call("model.set", { model }));
+              setMode("chat");
+            }}
+            onDiscover={async () => {
+              const found = await clientRef.current!.call("model.discover");
+              await refreshConfig();
+              setNotice({
+                tone: found.length > 0 ? "info" : "warn",
+                text: found.length > 0 ? `Found ${found.length} model${found.length === 1 ? "" : "s"}.` : "The endpoint listed no models.",
+              });
+            }}
+          />
+        ) : null}
 
-        {mode === "manage" && (
-          <Panel title="Manage provider" onClose={() => setMode("provider")} searchValue="claude" footer="Enter to select · Esc to go back">
-            <div className="panel-item static">
-              <span className="marker muted">↑</span>
-              <span className="label muted">1 above</span>
-            </div>
-            <Divider />
-            {["Change model", "Edit provider", "Test connection", "Remove provider"].map((label, i) => (
-              <PanelItem key={label} selected={i === 0} marker={i === 0 ? " " : " "} label={label} detail="" />
-            ))}
-          </Panel>
-        )}
+        {mode === "thinking" ? (
+          <ThinkingPanel
+            current={snapshot?.provider?.reasoningEffort}
+            onClose={() => setMode("chat")}
+            onSet={async (effort) => {
+              setSnapshot(await clientRef.current!.call("thinking.set", { effort }));
+              setMode("chat");
+            }}
+          />
+        ) : null}
 
-        {mode === "model" && (
-          <Panel
-            title="Models"
-            onClose={closeOverlay}
-            searchValue={modelQuery}
-            onSearch={setModelQuery}
-            footer="Enter to select · Esc to close"
-          >
-            {filteredModels.slice(0, 12).map((m, i) => (
-              <PanelItem
-                key={m}
-                selected={i === modelIndex}
-                marker={m === selectedModel ? "✓" : " "}
-                label={m}
-                labelMono
-                detail={m === MODELS[0] ? "claude" : ""}
-                onMouseEnter={() => setModelIndex(i)}
-                onClick={() => {
-                  setSelectedModel(m);
-                  setNotice({ tone: "info", text: `Model set to ${m}` });
-                  closeOverlay();
-                }}
-              />
-            ))}
-            {filteredModels.length === 0 && (
-              <div className="panel-item static">
-                <span className="label muted">No matches</span>
-              </div>
-            )}
-          </Panel>
-        )}
+        {mode === "session" ? (
+          <SessionPanel
+            sessions={sessions}
+            onClose={() => setMode("chat")}
+            onNew={async () => {
+              await clientRef.current!.call("session.new");
+              setConversation(initialConversation());
+              setMode("chat");
+            }}
+            onLoad={async (id) => {
+              const loaded = await clientRef.current!.call("session.load", { id });
+              setConversation((state) => ({ ...state, entries: entriesFromMessages(loaded.messages as never), live: initialConversation().live }));
+              setMode("chat");
+              setNotice({ tone: "info", text: `resumed ${id}` });
+            }}
+          />
+        ) : null}
 
-        {mode === "usage" && (
-          <Panel title="Usage" onClose={closeOverlay} footer="Esc to close">
-            <div className="panel-item static selected">
-              <div className="usage-tabs">
-                <span className="usage-tab active">Today</span>
-                <span className="usage-tab">Week</span>
-                <span className="usage-tab">Month</span>
-                <span className="usage-tab">All</span>
-              </div>
-            </div>
-            <Divider />
+        {mode === "usage" && usage ? (
+          <UsagePanel
+            usage={usage}
+            onClose={() => setMode("chat")}
+            onPeriod={async (period) => {
+              setUsage(await clientRef.current!.call("usage.get", { period }));
+            }}
+          />
+        ) : null}
+
+        {mode === "mcp" && mcp ? <McpPanel status={mcp} onClose={() => setMode("chat")} /> : null}
+
+        {snapshot && !snapshot.provider && mode === "chat" ? (
+          <Panel title="No provider configured" onClose={() => setMode("provider")} footer="Esc to close">
             <div className="panel-item static">
-              <div className="usage-row">
-                <span className="label">5.0k tokens · 2 turns</span>
-              </div>
-            </div>
-            <Divider />
-            <div className="panel-item static">
-              <span className="label muted">By model</span>
-            </div>
-            <Divider />
-            <div className="panel-item static">
-              <div className="usage-row">
-                <span className="label mono">agnes-3.0-flash</span>
-                <span className="usage-note">5.0k</span>
-              </div>
+              <span className="label">{snapshot.providerError ?? "Add an endpoint to begin."}</span>
             </div>
             <div className="panel-item static">
-              <div className="usage-row">
-                <span className="label mono">example-provider/claude-opus-4-6</span>
-                <span className="usage-note">0</span>
-              </div>
+              <span className="label muted">Tokens: {snapshot.models.length > 0 ? snapshot.models.join(", ") : "none"}</span>
             </div>
           </Panel>
-        )}
-
-        {mode === "session" && (
-          <Panel title="sessions" onClose={closePicker} footer="Esc to close">
-            <div className="panel-item static">
-              <span className="label muted">No saved sessions.</span>
-            </div>
-            <div className="panel-item static">
-              <span className="label muted">Use /session to browse saved conversations.</span>
-            </div>
-          </Panel>
-        )}
-
-        {mode === "thinking" && (
-          <Panel title="reasoning effort" onClose={closePicker} footer="Enter to select · Esc to close">
-            {THINKING.map((t, i) => (
-              <div
-                key={t.effort}
-                className={`panel-item ${i === effortIndex ? "selected" : ""}`}
-                onClick={() => {
-                  setEffortIndex(i);
-                  setNotice({ tone: "info", text: `Thinking effort set to ${t.label}` });
-                  closePicker();
-                }}
-                onMouseEnter={() => setEffortIndex(i)}
-              >
-                <span className="marker">{i === effortIndex ? "✓ " : "  "}</span>
-                <span className="label">{t.label}</span>
-              </div>
-            ))}
-          </Panel>
-        )}
-
-        {mode === "mcp" && (
-          <Panel title="MCP servers" onClose={closePicker} footer="Esc to close">
-            <div className="panel-item static">
-              <span className="label">No MCP servers configured.</span>
-            </div>
-            <div className="panel-item static">
-              <span className="label muted">Configure MCP servers in your config file.</span>
-            </div>
-          </Panel>
-        )}
-
-        {mode === "add" && (
-          <Panel title="Add provider" onClose={closePicker} footer="Esc to close">
-            <div className="panel-item static">
-              <span className="label">Provider kind wizard (mock)</span>
-            </div>
-            <Divider />
-            <div className="panel-item static">
-              <span className="label muted">Claude (Anthropic API - Direct)</span>
-            </div>
-            <Divider />
-            <div className="panel-item static">
-              <span className="label muted">Enter API key…</span>
-            </div>
-          </Panel>
-        )}
+        ) : null}
       </div>
     </div>
   );
 }
 
-function Panel(props: {
-  title: string;
-  onClose: () => void;
-  searchValue?: string;
-  onSearch?: (v: string) => void;
-  footer?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) props.onClose();
-      }}
-    >
-      <div className="panel" role="dialog" aria-modal="true" aria-label={props.title}>
-        <div className="panel-header">
-          <span className="panel-title">{props.title}</span>
-          <button type="button" className="panel-close" onClick={props.onClose}>
-            Close
-          </button>
-        </div>
-        {(props.onSearch !== undefined || props.searchValue !== undefined) && (
-          <div className="panel-search">
-            <div className="search-field">
-              <span className="search-icon">⌕</span>
-              {props.onSearch ? (
-                <input
-                  className="search-input"
-                  value={props.searchValue ?? ""}
-                  onChange={(e) => props.onSearch?.(e.target.value)}
-                  placeholder="Search"
-                  autoFocus
-                />
-              ) : (
-                <span className="search-input">{props.searchValue ?? ""}</span>
-              )}
-            </div>
-          </div>
-        )}
-        <div className="panel-body">{props.children}</div>
-        {props.footer && <div className="panel-footer">{props.footer}</div>}
-      </div>
-    </div>
-  );
-}
-
-function PanelItem(props: {
-  selected?: boolean;
-  marker: string;
-  label: string;
-  labelMono?: boolean;
-  detail?: string;
-  onClick?: () => void;
-  onMouseEnter?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={`panel-item ${props.selected ? "selected" : ""}`}
-      onClick={props.onClick}
-      onMouseEnter={props.onMouseEnter}
-    >
-      <span className="marker">{props.marker}</span>
-      <span className={`label ${props.labelMono ? "mono" : ""}`}>{props.label}</span>
-      {props.detail ? <span className="detail">{props.detail}</span> : null}
-    </button>
-  );
-}
-
-function Divider() {
-  return <div className="panel-divider" />;
-}
+void formatTokens;

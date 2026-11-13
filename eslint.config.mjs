@@ -34,7 +34,19 @@ export default tseslint.config(
     // and it is 85,000 lines of minified vendored Python and JavaScript, so
     // the same rule applies with a great deal more force: leaving it out
     // turned `npm run lint` into 85,745 errors in about four minutes.
-    ignores: ['**/dist/**', '**/node_modules/**', '**/target/**', '.freebuff/**', '.tbench-venv/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/target/**',
+      '.freebuff/**',
+      '.tbench-venv/**',
+      // The desktop shell's assembled resources: the vite bundle and the esbuild
+      // agent bundle, copied into the layout Neutralino serves. They are
+      // minified build output, gitignored, and roughly 300KB of single-line
+      // JavaScript — linting them was 1,175 errors about `window` and array
+      // indices in code no one edits.
+      'apps/desktop/**/resources/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

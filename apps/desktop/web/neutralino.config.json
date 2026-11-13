@@ -1,47 +1,49 @@
 {
-  "application": {
-    "id": "com.actor0.desktop",
-    "name": "actor0",
-    "version": "0.5.7",
-    "appDataFolderName": ".actor0-desktop",
-    "globalEvents": {
-      "prefix": "nl_event_"
-    },
-    "url": "http://127.0.0.1:5174",
-    "enableServer": true,
-    "enableNativeAPI": true,
-    "nativeAllowList": [
-      "os.*",
-      "app.*",
-      "window.*",
-      "clipboard.*",
-      "events.*"
-    ],
-    "tokenSecurity": "one-time",
-    "exportAuthInfo": ".tmp/auth_info.json"
+  "applicationId": "com.actor0.desktop",
+  "version": "0.5.7",
+  "defaultMode": "window",
+  "url": "/",
+  "documentRoot": "/resources/app",
+  "enableServer": true,
+  "enableNativeAPI": true,
+  "tokenSecurity": "one-time",
+  "exportAuthInfo": true,
+  "singlePageServe": true,
+  "nativeAllowList": [
+    "filesystem.*",
+    "os.spawnProcess",
+    "os.updateSpawnedProcess",
+    "os.getEnv",
+    "os.showNotification",
+    "events.*",
+    "window.setTitle",
+    "app.exit"
+  ],
+  "commandAllowList": ["node"],
+  "logging": {
+    "enabled": true,
+    "writeToLogFile": true
   },
-  "server": {
-    "host": "127.0.0.1",
-    "port": 5174,
-    "documentRoot": ".",
-    "resourcePath": "resources/neu",
-    "resourceAllowList": [
-      "*"
-    ],
-    "enableCORS": false,
-    "enableWSS": true,
-    "https": false
+  "modes": {
+    "window": {
+      "title": "actor0",
+      "width": 1100,
+      "height": 780,
+      "minWidth": 520,
+      "minHeight": 420,
+      "center": true,
+      "resizable": true,
+      "exitProcessOnClose": true,
+      "useSavedState": true,
+      "enableInspector": false
+    },
+    "chrome": {
+      "browserBinary": "/usr/bin/google-chrome",
+      "arguments": "--user-data-dir=${APP_HOME}/.chrome-profile --window-size=1100,780"
+    }
   },
   "cli": {
-    "version": "11.8.0",
-    "binaryVersion": "11.8.0",
+    "binaryVersion": "6.10.0",
     "clientVersion": "6.10.0"
-  },
-  "logging": {
-    "enableLog": true,
-    "storeLogs": true,
-    "webSocketPort": 0,
-    "maxLogSize": 10000000,
-    "maxLogHistory": 20
   }
 }
