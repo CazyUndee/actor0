@@ -1,67 +1,31 @@
-import type { OAuthPreset } from "./oauth.js";
+import {
+  CHATGPT_OAUTH,
+  CLAUDE_OAUTH,
+  ENDPOINTS,
+  type OAuthPreset,
+  type ProviderAuth,
+  type ProviderTransport,
+} from "@actor0/providers";
 import type { NamedProvider } from "./config.js";
-import type { ProviderAuth, ProviderTransport } from "@actor0/providers";
 
 /**
  * Provider presets — the per-provider data the generic OAuth and transport
  * layers are parameterised by.
  *
- * Every value here was read off the installed CLIs on 2026-10-09, not recalled:
- *   - Claude Code, from `~/Downloads/claude-code-main/.../src/constants/oauth.ts`
- *     and `src/services/oauth/`;
- *   - ChatGPT/Codex, from strings in the shipped `codex.exe`.
- *
- * That matters because a wrong `client_id` or authorize URL fails silently or
- * insecurely, and a value that looks right but is invented is worse than one
- * that is obviously missing. When a provider changes its flow, this file is the
- * one place to update.
+ * The values themselves now live in `@actor0/providers`, because they are
+ * provider data rather than CLI policy and the desktop app is a second host
+ * that must not invent its own `client_id`. They are **evidence, not
+ * configuration** — read off the installed `claude` and `codex` CLIs on
+ * 2026-10-09 — and that package's `oauth-presets.ts` carries the provenance and
+ * is the one place to update them. What stays here is the part that is CLI
+ * policy: which kinds `/provider → add` offers, in what order, and how a
+ * provider is labelled.
  */
 
-export type { ProviderAuth, ProviderTransport };
+export { CHATGPT_OAUTH, CLAUDE_OAUTH, ENDPOINTS };
+export type { OAuthPreset, ProviderAuth, ProviderTransport };
 
-/**
- * Claude Code OAuth → the Anthropic Messages API.
- *
- * Authorize bounces through `claude.com/cai/*` for attribution and 307s to
- * `claude.ai/oauth/authorize`; the token lives on `platform.claude.com`. The
- * redirect is a loopback on an OS-assigned port (the source binds port 0).
- */
-export const CLAUDE_OAUTH: OAuthPreset = {
-  authorizeUrl: "https://claude.com/cai/oauth/authorize",
-  tokenUrl: "https://platform.claude.com/v1/oauth/token",
-  clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-  scopes: ["user:profile", "user:inference", "user:sessions:claude_code", "user:mcp_servers", "user:file_upload"],
-  redirectPath: "/callback",
-};
-
-/**
- * ChatGPT OAuth → the OpenAI Responses API behind `chatgpt.com/backend-api/codex`.
- *
- * A fixed loopback port (1455) and the Codex authorize flags. The extra params
- * are the ones the shipped CLI sends; `originator` is attribution and
- * `id_token_add_organizations` is what puts the account id in the id token the
- * account-id header is later read from.
- */
-export const CHATGPT_OAUTH: OAuthPreset = {
-  authorizeUrl: "https://auth.openai.com/oauth/authorize",
-  tokenUrl: "https://auth.openai.com/oauth/token",
-  clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
-  scopes: ["openid", "profile", "email", "offline_access", "api.connectors.read", "api.connectors.invoke"],
-  redirectPort: 1455,
-  redirectPath: "/auth/callback",
-  extraAuthorizeParams: {
-    id_token_add_organizations: "true",
-    codex_cli_simplified_flow: "true",
-    originator: "codex_cli_rs",
-  },
-};
-
-/** Base URLs the transports talk to, and where models are listed. */
-export const ENDPOINTS = {
-  anthropic: { baseUrl: "https://api.anthropic.com", messagesPath: "/v1/messages", modelsPath: "/v1/models" },
-  chatgpt: { baseUrl: "https://chatgpt.com/backend-api/codex", responsesPath: "/responses", modelsPath: "/models" },
-  openai: { baseUrl: "https://api.openai.com/v1", modelsPath: "/models" },
-} as const;
+/** `/provider` labels a kind by what it is, not by host. */
 
 /**
  * A sign-in / add option the `/provider` menu offers.

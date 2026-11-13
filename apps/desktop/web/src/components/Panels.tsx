@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { ConfigSnapshot, McpStatus, NamedProvider, SessionSummary, UsageSnapshot } from "../protocol";
+import type {
+  ConfigSnapshot,
+  McpStatus,
+  NamedProvider,
+  ProviderKind,
+  SessionSummary,
+  SignInResult,
+  UsageSnapshot,
+} from "../protocol";
 import { formatTokens } from "../conversation";
 
 /**
@@ -121,9 +129,15 @@ export function ProviderPanel(props: {
   onRemove: (name: string) => void;
   onTest: (name?: string) => void;
   onAdd: (entry: { name?: string; baseUrl: string; model?: string; apiKey?: string }) => void;
+  /** The sign-in kinds, fetched once by the app from the agent. */
+  kinds: ProviderKind[];
+  onSignIn: (kind: string) => Promise<SignInResult>;
   onClose: () => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const [signingIn, setSigningIn] = useState<string | null>(null);
+  const [signInError, setSignInError] = useState<string | null>(null);
+  const [manualUrl, setManualUrl] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", baseUrl: "", model: "", apiKey: "" });
   const providers = props.snapshot.providers;
 
@@ -195,6 +209,52 @@ export function ProviderPanel(props: {
 
   return (
     <Panel title="Providers" onClose={props.onClose} footer="Enter to switch · Esc to close">
+      {props.kinds.length > 0 ? (
+        <>
+          {props.kinds.map((kind) => (
+            <Row
+              key={kind.kind}
+              marker="●"
+              label={kind.label}
+              detail={signingIn === kind.kind ? "waiting for the browser…" : "opens a browser"}
+              onClick={() => {
+                setSignInError(null);
+                setManualUrl(null);
+                setSigningIn(kind.kind);
+                void props
+                  .onSignIn(kind.kind)
+                  .then((result) => {
+                    if (!result.ok) {
+                      setSignInError(result.message);
+                      return;
+                    }
+                    if (!result.opened) {
+                      // No shell to open a browser: the flow has not happened
+                      // yet, so the URL is shown rather than a sign-in being
+                      // reported that the user never completed.
+                      setManualUrl(result.authorizeUrl);
+                      setSignInError(
+                        "This build could not open a browser. Open the link below to finish signing in.",
+                      );
+                    }
+                  })
+                  .finally(() => setSigningIn(null));
+              }}
+            />
+          ))}
+          {signInError ? <Row label={signInError} /> : null}
+          {manualUrl ? (
+            <div className="panel-form">
+              <span className="form-label">authorize link</span>
+              <a className="form-link" href={manualUrl} target="_blank" rel="noreferrer">
+                {manualUrl}
+              </a>
+            </div>
+          ) : null}
+          <Divider />
+        </>
+      ) : null}
+
       <Row
         marker={props.snapshot.activeProvider ? " " : "●"}
         label="built-in endpoint"

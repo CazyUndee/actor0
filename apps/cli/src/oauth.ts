@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { AddressInfo } from "node:net";
 import { execFile } from "node:child_process";
-import type { OAuthTokens } from "@actor0/providers";
+import type { OAuthPreset, OAuthTokens } from "@actor0/providers";
 
 /**
  * Generic OAuth 2.0 + PKCE, for CLI sign-in.
@@ -23,20 +23,13 @@ import type { OAuthTokens } from "@actor0/providers";
  * CLIs, not invented; see `provider-presets.ts`.
  */
 
-/** Everything a preset must name. Deliberately data, so a new provider is a literal. */
-export type OAuthPreset = {
-  authorizeUrl: string;
-  tokenUrl: string;
-  clientId: string;
-  scopes: string[];
-  /** Fixed port the provider registered the redirect on, or omit for an OS-assigned one. */
-  redirectPort?: number;
-  /** Path of the registered redirect, e.g. `/callback` or `/auth/callback`. */
-  redirectPath: string;
-  /** Extra authorize/token params a provider wants (audience, resource, originator…). */
-  extraAuthorizeParams?: Record<string, string>;
-  extraTokenParams?: Record<string, string>;
-};
+/**
+ * The preset shape lives with the presets, in `@actor0/providers`, so the values
+ * and their type cannot drift apart and a second host can name one without
+ * importing this file. Re-exported here because this is where the machinery that
+ * consumes it lives.
+ */
+export type { OAuthPreset };
 
 export type { OAuthTokens };
 

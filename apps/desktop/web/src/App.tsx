@@ -14,7 +14,7 @@ import {
 } from "./conversation";
 import { SPINNER_FRAMES } from "./theme";
 import { parseSlash } from "./slash";
-import type { AgentInfo, ConfigSnapshot, McpStatus, SessionSummary, UsageSnapshot } from "./protocol";
+import type { AgentInfo, ConfigSnapshot, McpStatus, ProviderKind, SessionSummary, UsageSnapshot } from "./protocol";
 import { Composer } from "./components/Composer";
 import { EntryView } from "./components/Entry";
 import { McpPanel, ModelPanel, NoticeBar, ProviderPanel, SessionPanel, ThinkingPanel, UsagePanel } from "./components/Panels";
@@ -46,6 +46,7 @@ export function App() {
   const [usage, setUsage] = useState<UsageSnapshot | null>(null);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [kinds, setKinds] = useState<ProviderKind[]>([]);
   const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
 
@@ -122,6 +123,10 @@ export function App() {
         await client.connect();
         setAgentInfo(await client.call("agent.hello"));
         setSnapshot(await client.call("config.get"));
+        // The sign-in options are data from the agent, which builds them from
+        // the presets in @actor0/providers. A hard-coded list here is how a UI
+        // comes to offer a flow this build does not implement.
+        setKinds(await client.call("provider.kinds"));
         const { messages } = await client.call("conversation.get");
         if (Array.isArray(messages) && messages.length > 0) {
           setConversation({ entries: entriesFromMessages(messages as never), live: initialConversation().live });
@@ -400,6 +405,8 @@ export function App() {
               const result = await clientRef.current!.call("provider.test", name ? { name } : {});
               setNotice({ tone: result.ok ? "info" : "error", text: result.message });
             }}
+            kinds={kinds}
+            onSignIn={async (kind) => clientRef.current!.call("provider.signIn", { kind })}
             onAdd={async (entry) => {
               setSnapshot(await clientRef.current!.call("provider.add", { entry }));
               setNotice({ tone: "info", text: `Added ${entry.name ?? entry.baseUrl}` });

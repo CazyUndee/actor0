@@ -76,6 +76,22 @@ export type ModelInfo = { id: string; contextWindow?: number };
 /** The result of a `provider.test`. */
 export type ProviderTestResult = { ok: boolean; message: string };
 
+/** A sign-in option, projected from the presets in `@actor0/providers`. */
+export type ProviderKindWire = {
+  /** The preset's id, which is what `provider.signIn` takes. */
+  kind: string;
+  label: string;
+  transport: string;
+  baseUrl: string;
+  /** Which credentials this kind accepts: `oauth` is a browser sign-in. */
+  auth: string[];
+};
+
+/** The result of a sign-in, or the URL the UI has to open itself. */
+export type SignInResultWire =
+  | { ok: true; opened: boolean; authorizeUrl: string; provider: NamedProvider }
+  | { ok: false; message: string };
+
 /** What a turn produced, sent when it finishes. */
 export type TurnFinished = {
   turnId: string;
@@ -99,6 +115,15 @@ export type AgentMethods = {
   "model.set": (params: { model: string }) => Promise<ConfigSnapshot>;
   "model.discover": (params: undefined) => Promise<ModelInfo[]>;
   "thinking.set": (params: { effort: "low" | "medium" | "high" | null }) => Promise<ConfigSnapshot>;
+  /** The sign-in options this host offers, from the presets in @actor0/providers. */
+  "provider.kinds": (params: undefined) => Promise<ProviderKindWire[]>;
+  /** Register an OAuth provider by kind, by running the browser sign-in.
+   *
+   * Registers *and* stores in one step: the tokens are written to the config as
+   * part of the same operation, because a sign-in that is not persisted is a
+   * sign-in the user repeats on every launch.
+   */
+  "provider.signIn": (params: { kind: string }) => Promise<SignInResultWire>;
   "session.list": (params: undefined) => Promise<SessionSummaryWire[]>;
   "session.load": (params: { id: string }) => Promise<{ messages: unknown[]; model: string }>;
   "session.new": (params: undefined) => Promise<{ ok: true }>;

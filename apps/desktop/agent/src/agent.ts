@@ -1,5 +1,15 @@
 import type { ChatMessage, ModelClient } from "@actor0/harness";
-import { createModel, verifyProvider, type ResolvedProvider } from "@actor0/providers";
+import {
+  CHATGPT_OAUTH,
+  CLAUDE_OAUTH,
+  ENDPOINTS,
+  createModel,
+  verifyProvider,
+  type OAuthPreset,
+  type ProviderTransport,
+  type ResolvedProvider,
+} from "@actor0/providers";
+import { refreshProvider as refreshOAuthProvider, runSignIn } from "./oauth.js";
 import {
   activeNamedProvider,
   addProvider,
@@ -43,10 +53,32 @@ import type {
   AgentNotification,
   ConfigSnapshot,
   ModelInfo,
+  ProviderKindWire,
   ProviderTestResult,
   SessionSummaryWire,
+  SignInResultWire,
   UsageSnapshot,
 } from "./protocol.js";
+
+/** The sign-in kinds this host offers, and the preset each one runs. */
+const OAUTH_KINDS: { id: string; label: string; transport: ProviderTransport; baseUrl: string; preset: OAuthPreset }[] = [
+  {
+    id: "chatgpt",
+    label: "Sign in with ChatGPT",
+    transport: "chatgpt",
+    baseUrl: ENDPOINTS.chatgpt.baseUrl,
+    preset: CHATGPT_OAUTH,
+  },
+  {
+    id: "claude",
+    label: "Sign in with Claude",
+    transport: "anthropic",
+    baseUrl: ENDPOINTS.anthropic.baseUrl,
+    preset: CLAUDE_OAUTH,
+  },
+];
+
+const OAUTH_KIND_BY_ID = new Map(OAUTH_KINDS.map((kind) => [kind.id, kind]));
 
 /**
  * The agent: the app's state machine.
@@ -75,6 +107,8 @@ export type AgentOptions = {
   notify?: (notification: AgentNotification) => void;
   /** Injected model client factory, for tests. */
   createClient?: (provider: ResolvedProvider) => ModelClient;
+  /** Injected browser opener, so a sign-in can be exercised with no window. */
+  browserOpener?: (url: string) => boolean;
 };
 
 export class Agent implements AgentMethods {
@@ -89,6 +123,13 @@ export class Agent implements AgentMethods {
   private readonly version: string;
   private notify: (notification: AgentNotification) => void;
   private readonly createClient: (provider: ResolvedProvider) => ModelClient;
+  /**
+   * Opens a URL in the user's browser.
+   *
+   * Injected so a sign-in is testable with no window and no desktop session, and
+   * because the desktop equivalent is a shell call rather than `xdg-open`.
+   */
+  private readonly browserOpener: ((url: string) => boolean) | undefined;
 
   constructor(options: AgentOptions) {
     this.cwd = options.cwd;
@@ -97,6 +138,7 @@ export class Agent implements AgentMethods {
     this.config = loadConfig();
     this.notify = options.notify ?? (() => {});
     this.createClient = options.createClient ?? ((provider) => createModel(provider));
+    this.browserOpener = options.browserOpener;
   }
 
   /** Point notifications at a sink (the server does this per connection). */
@@ -196,6 +238,56 @@ export class Agent implements AgentMethods {
       // an endpoint works is an endpoint answering.
       await verifyProvider(resolved);
       return { ok: true, message: `${endpointUrl(resolved)} answered for model ${resolved.model}.` };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  // --- sign-in -------------------------------------------------------------
+
+  async "provider.kinds"(): Promise<ProviderKindWire[]> {
+    // Built from the presets in `@actor0/providers`, so a kind cannot offer a
+    // flow this build does not actually implement — and the constants it would
+    // need are the ones the provider package owns.
+    return OAUTH_KINDS.map((kind) => ({
+      kind: kind.id,
+      label: kind.label,
+      transport: kind.transport,
+      baseUrl: kind.baseUrl,
+      auth: ["oauth"],
+    }));
+  }
+
+  async "provider.signIn"(params: { kind: string }): Promise<SignInResultWire> {
+    const preset = OAUTH_KIND_BY_ID.get(params.kind);
+    if (!preset) {
+      return { ok: false, message: `no sign-in flow named "${params.kind}"` };
+    }
+    try {
+      const result = await runSignIn(preset.preset, {
+        ...(this.browserOpener ? { openBrowser: this.browserOpener } : {}),
+      });
+      // Register, then store the tokens: doing it in one operation is what keeps
+      // a sign-in from being repeated on every launch.
+      const registered = addProvider(this.config, {
+        name: preset.id,
+        baseUrl: preset.baseUrl,
+        transport: preset.transport,
+        auth: "oauth",
+        oauth: result.tokens,
+      });
+      this.config = registered;
+      saveConfig(this.config);
+      this.changed();
+      return {
+        ok: true,
+        opened: result.opened,
+        authorizeUrl: result.authorizeUrl,
+        provider: activeNamedProvider(this.config) ?? {
+          name: preset.id,
+          baseUrl: preset.baseUrl,
+        },
+      };
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
@@ -348,6 +440,20 @@ export class Agent implements AgentMethods {
     let provider: ResolvedProvider;
     try {
       provider = resolveProvider(this.config);
+      // A token that is about to expire is refreshed before the request rather
+      // than after the 401: the failure is not retriable by the harness (it is a
+      // clean refusal), so a turn that skipped this would end with "sign in
+      // again" instead of simply working.
+      const refreshed = await refreshOAuthProvider(
+        provider as ResolvedProvider & { auth?: string; oauth?: import("@actor0/providers").OAuthTokens },
+        this.config,
+      );
+      if (refreshed) {
+        provider = refreshed.provider as unknown as ResolvedProvider;
+        this.config = refreshed.config;
+        saveConfig(this.config);
+        this.notify({ type: "notice", tone: "info", text: "Refreshed the sign-in." });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.notify({ type: "notice", tone: "error", text: message });

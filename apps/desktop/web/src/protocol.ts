@@ -81,6 +81,18 @@ export type SessionSummary = {
 
 export type McpStatus = { configured: number; servers: string[] };
 export type ProviderTestResult = { ok: boolean; message: string };
+/** A sign-in option the agent offers, projected from @actor0/providers. */
+export type ProviderKind = {
+  kind: string;
+  label: string;
+  transport: string;
+  baseUrl: string;
+  auth: string[];
+};
+/** The outcome of a sign-in, or the URL the UI has to open itself. */
+export type SignInResult =
+  | { ok: true; opened: boolean; authorizeUrl: string; provider: NamedProvider }
+  | { ok: false; message: string };
 export type ModelInfo = { id: string; contextWindow?: number };
 
 /** What a turn produced, sent when it finishes. */
@@ -114,6 +126,8 @@ export type AgentCalls = {
   "model.set": (params: { model: string }) => Promise<ConfigSnapshot>;
   "model.discover": () => Promise<ModelInfo[]>;
   "thinking.set": (params: { effort: "low" | "medium" | "high" | null }) => Promise<ConfigSnapshot>;
+  "provider.kinds": () => Promise<ProviderKind[]>;
+  "provider.signIn": (params: { kind: string }) => Promise<SignInResult>;
   "session.list": () => Promise<SessionSummary[]>;
   "session.load": (params: { id: string }) => Promise<{ messages: unknown[]; model: string }>;
   "session.new": () => Promise<{ ok: true }>;

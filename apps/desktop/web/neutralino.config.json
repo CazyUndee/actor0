@@ -14,12 +14,15 @@
     "os.spawnProcess",
     "os.updateSpawnedProcess",
     "os.getEnv",
+    "os.open",
     "os.showNotification",
     "events.*",
     "window.setTitle",
     "app.exit"
   ],
-  "commandAllowList": ["node"],
+  "commandAllowList": [
+    "node"
+  ],
   "logging": {
     "enabled": true,
     "writeToLogFile": true

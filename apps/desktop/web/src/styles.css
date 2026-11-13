@@ -289,3 +289,4 @@ button, input, textarea { font: inherit; color: inherit; }
 .blocked-title { color: var(--warning); font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.06em; }
 .blocked-text { color: var(--text); font-size: 13px; }
 .face-confused { color: var(--warning); }
+.panel-link { color: var(--info); font-size: 12px; word-break: break-all; }
