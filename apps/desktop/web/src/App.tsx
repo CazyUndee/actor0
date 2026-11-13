@@ -10,7 +10,6 @@ import {
   withNotice,
   withUserInput,
   FACE_CHAR,
-  formatTokens,
   type ConversationState,
 } from "./conversation";
 import { SPINNER_FRAMES } from "./theme";
@@ -18,7 +17,7 @@ import { parseSlash } from "./slash";
 import type { AgentInfo, ConfigSnapshot, McpStatus, SessionSummary, UsageSnapshot } from "./protocol";
 import { Composer } from "./components/Composer";
 import { EntryView } from "./components/Entry";
-import { McpPanel, ModelPanel, NoticeBar, Panel, ProviderPanel, SessionPanel, ThinkingPanel, UsagePanel } from "./components/Panels";
+import { McpPanel, ModelPanel, NoticeBar, ProviderPanel, SessionPanel, ThinkingPanel, UsagePanel } from "./components/Panels";
 
 /**
  * The app.
@@ -356,6 +355,14 @@ export function App() {
               {conversation.live.retrying ? <span className="live-note">retry {conversation.live.retrying.attempt}</span> : null}
             </div>
           ) : null}
+          {blocked ? (
+            <div className="blocked-banner" role="status">
+              <span className="blocked-title">needs you</span>
+              <span className="blocked-text">
+                {conversation.blocked?.message ?? "The agent stopped and can continue if you reply."}
+              </span>
+            </div>
+          ) : null}
           {conversation.live.reasoning ? (
             <div className="live-reasoning">
               <pre>{conversation.live.reasoning}</pre>
@@ -461,19 +468,7 @@ export function App() {
 
         {mode === "mcp" && mcp ? <McpPanel status={mcp} onClose={() => setMode("chat")} /> : null}
 
-        {snapshot && !snapshot.provider && mode === "chat" ? (
-          <Panel title="No provider configured" onClose={() => setMode("provider")} footer="Esc to close">
-            <div className="panel-item static">
-              <span className="label">{snapshot.providerError ?? "Add an endpoint to begin."}</span>
-            </div>
-            <div className="panel-item static">
-              <span className="label muted">Tokens: {snapshot.models.length > 0 ? snapshot.models.join(", ") : "none"}</span>
-            </div>
-          </Panel>
-        ) : null}
       </div>
     </div>
   );
 }
-
-void formatTokens;

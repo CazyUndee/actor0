@@ -275,3 +275,17 @@ button, input, textarea { font: inherit; color: inherit; }
 @media (max-width: 900px) {
   .entry, .live, .live-reasoning, .composer-area { width: 94vw; }
 }
+
+/* The stopped-turn banner. The CLI raises one; this is its counterpart, and it
+   sits in the transcript because it is about the turn, not about the app. */
+.blocked-banner {
+  width: min(820px, 86vw);
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 8px 12px;
+  border: 2px solid rgba(196, 164, 58, 0.45);
+  border-radius: var(--radius-sm);
+  background: rgba(196, 164, 58, 0.08);
+}
+.blocked-title { color: var(--warning); font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+.blocked-text { color: var(--text); font-size: 13px; }
+.face-confused { color: var(--warning); }
