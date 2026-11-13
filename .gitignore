@@ -1,9 +1,9 @@
-/node_modules/
+node_modules/
 /target/
 /apps/web/.next/
-/packages/harness/dist/
-/packages/providers/dist/
-/apps/cli/dist/
+packages/harness/dist/
+packages/providers/dist/
+apps/cli/dist/
 /coverage/
 .env
 .env.*
@@ -42,3 +42,11 @@ halo-tui.md
 run-tools-test.ps1
 benchmark/
 scratch/
+
+# desktop agent bundle
+/apps/desktop/agent/dist/
+
+# desktop shell build output
+/apps/desktop/web/dist/
+/apps/desktop/web/resources/
+/apps/desktop/web/.tmp/

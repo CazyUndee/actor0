@@ -1,0 +1,539 @@
+import type { ChatMessage, ModelClient } from "@actor0/harness";
+import { createModel, verifyProvider, type ResolvedProvider } from "@actor0/providers";
+import {
+  activeNamedProvider,
+  addProvider,
+  ConfigError,
+  describeProviderInfo,
+  endpointUrl,
+  loadConfig,
+  namedProviders,
+  removeProvider,
+  resolveProvider,
+  saveConfig,
+  setActiveProvider,
+  addModels,
+  withActiveReasoningEffort,
+  withContextWindow,
+  withModel,
+  type DesktopConfig,
+  type NamedProvider,
+} from "./config.js";
+import { listSessionSummaries, loadSession, newSessionId, saveSession } from "./sessions.js";
+import {
+  formatTokens,
+  readUsage,
+  recordAudit,
+  recordUsage,
+  startOfDay,
+  startOfMonth,
+  startOfWeek,
+  usageByModel,
+  usageSince,
+} from "./usage.js";
+import { defaultSystemPrompt, withProjectContext } from "./prompt.js";
+import { forStorage, repairHistory } from "./history.js";
+import { createToolHost } from "./tools/host.js";
+import { resolveShell } from "./tools/shell.js";
+import { createTaskDelegate, runTurn } from "./turn.js";
+import type { FileBridge } from "./native/bridge.js";
+import type {
+  AgentInfo,
+  AgentMethods,
+  AgentNotification,
+  ConfigSnapshot,
+  ModelInfo,
+  ProviderTestResult,
+  SessionSummaryWire,
+  UsageSnapshot,
+} from "./protocol.js";
+
+/**
+ * The agent: the app's state machine.
+ *
+ * It owns the config, the current conversation, the session file and the turn
+ * loop — everything a host has to own — and knows nothing about sockets,
+ * windows or React. The server in `server.ts` translates frames into calls on
+ * this object and this object's notifications into frames, which is what makes
+ * the whole thing drivable from a test without opening a port.
+ *
+ * Two invariants are load-bearing and easy to lose:
+ *
+ *  - **One turn at a time.** A second `turn.send` while one is streaming is
+ *    refused rather than queued: two turns writing one transcript interleave
+ *    their tool results, which is a transcript no provider will accept.
+ *  - **The transcript only advances when a turn adopts it.** A cancelled or
+ *    failed turn leaves the *saved* transcript at what the turn really did (the
+ *    harness hands it back), never at a partial state the host invented.
+ */
+
+export type AgentOptions = {
+  cwd: string;
+  bridge: FileBridge;
+  version: string;
+  /** Where notifications go. Set by the server; a test passes a collector. */
+  notify?: (notification: AgentNotification) => void;
+  /** Injected model client factory, for tests. */
+  createClient?: (provider: ResolvedProvider) => ModelClient;
+};
+
+export class Agent implements AgentMethods {
+  private config: DesktopConfig;
+  private messages: ChatMessage[] = [];
+  private session: { id: string; createdAt: string } = { id: newSessionId(), createdAt: new Date().toISOString() };
+  private turnId = 0;
+  private controller: AbortController | undefined;
+  private running = false;
+  private bridge: FileBridge;
+  private readonly cwd: string;
+  private readonly version: string;
+  private notify: (notification: AgentNotification) => void;
+  private readonly createClient: (provider: ResolvedProvider) => ModelClient;
+
+  constructor(options: AgentOptions) {
+    this.cwd = options.cwd;
+    this.bridge = options.bridge;
+    this.version = options.version;
+    this.config = loadConfig();
+    this.notify = options.notify ?? (() => {});
+    this.createClient = options.createClient ?? ((provider) => createModel(provider));
+  }
+
+  /** Point notifications at a sink (the server does this per connection). */
+  setNotifier(notify: (notification: AgentNotification) => void): void {
+    this.notify = notify;
+  }
+
+  // --- introspection -------------------------------------------------------
+
+  async "agent.hello"(): Promise<AgentInfo> {
+    return {
+      version: this.version,
+      cwd: this.cwd,
+      bridge: this.bridge.kind,
+      shell: resolveShell().label,
+      platform: process.platform,
+    };
+  }
+
+  async "config.get"(): Promise<ConfigSnapshot> {
+    return this.snapshot();
+  }
+
+  private snapshot(): ConfigSnapshot {
+    const providers = namedProviders(this.config);
+    const base: ConfigSnapshot = {
+      config: this.config,
+      providers,
+      models: this.modelsForActive(),
+      ...(this.config.activeProvider ? { activeProvider: this.config.activeProvider } : {}),
+    };
+    try {
+      const resolved = resolveProvider(this.config);
+      return { ...base, provider: describeProviderInfo(resolved) };
+    } catch (error) {
+      return { ...base, providerError: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  private modelsForActive(): string[] {
+    const active = activeNamedProvider(this.config);
+    if (active) {
+      const list = active.models ?? (active.model ? [active.model] : []);
+      const current = active.model ?? this.config.model;
+      return [...new Set([current, ...list].filter(Boolean))];
+    }
+    const current = this.config.model || process.env.ACTOR0_MODEL?.trim() || "";
+    return [...new Set([current, ...this.config.models].filter(Boolean))];
+  }
+
+  // --- provider registry ---------------------------------------------------
+
+  async "provider.activate"(params: { name: string | null }): Promise<ConfigSnapshot> {
+    if (params.name === null) {
+      // Back to the built-in endpoint. Clearing the pointer is the whole
+      // mechanism: `activeProvider` absent *means* built-in.
+      this.config = { ...this.config, activeProvider: undefined };
+    } else {
+      const next = setActiveProvider(this.config, params.name);
+      if (next === this.config) throw new Error(`no provider named "${params.name}"`);
+      this.config = next;
+    }
+    saveConfig(this.config);
+    this.changed();
+    return this.snapshot();
+  }
+
+  async "provider.add"(params: { entry: Omit<NamedProvider, "name"> & { name?: string } }): Promise<ConfigSnapshot> {
+    if (!params.entry?.baseUrl?.trim()) throw new ConfigError("a provider needs a base URL");
+    this.config = addProvider(this.config, params.entry);
+    saveConfig(this.config);
+    this.changed();
+    return this.snapshot();
+  }
+
+  async "provider.remove"(params: { name: string }): Promise<ConfigSnapshot> {
+    this.config = removeProvider(this.config, params.name);
+    saveConfig(this.config);
+    this.changed();
+    return this.snapshot();
+  }
+
+  async "provider.test"(params: { name?: string }): Promise<ProviderTestResult> {
+    let config = this.config;
+    if (params.name && params.name !== this.config.activeProvider) {
+      config = setActiveProvider(this.config, params.name);
+      if (config === this.config) return { ok: false, message: `no provider named "${params.name}"` };
+    }
+    let resolved: ResolvedProvider;
+    try {
+      resolved = resolveProvider(config);
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+    try {
+      // A real request, not a configuration check: the only thing that proves
+      // an endpoint works is an endpoint answering.
+      await verifyProvider(resolved);
+      return { ok: true, message: `${endpointUrl(resolved)} answered for model ${resolved.model}.` };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  // --- models and effort ---------------------------------------------------
+
+  async "model.set"(params: { model: string }): Promise<ConfigSnapshot> {
+    const model = params.model.trim();
+    if (!model) throw new ConfigError("a model name is required");
+    this.config = withModel(this.config, model);
+    saveConfig(this.config);
+    this.changed();
+    return this.snapshot();
+  }
+
+  async "model.discover"(): Promise<ModelInfo[]> {
+    let resolved: ResolvedProvider;
+    try {
+      resolved = resolveProvider(this.config);
+    } catch {
+      return [];
+    }
+    // Only the OpenAI-compatible transport has a portable listing endpoint;
+    // the other two publish no equivalent and say so with an empty list rather
+    // than by inventing names.
+    if ((resolved.transport ?? "openai") !== "openai") return [];
+    const base = resolved.baseUrl.replace(/\/+$/, "");
+    const url = `${base}/models`;
+    try {
+      const response = await fetch(url, {
+        headers: {
+          ...(resolved.apiKey ? { Authorization: `Bearer ${resolved.apiKey}` } : {}),
+          ...(resolved.headers ?? {}),
+        },
+      });
+      if (!response.ok) return [];
+      const payload = (await response.json()) as { data?: { id?: unknown; context_window?: unknown }[] };
+      const models: ModelInfo[] = [];
+      for (const entry of payload.data ?? []) {
+        if (typeof entry.id !== "string" || !entry.id) continue;
+        models.push({
+          id: entry.id,
+          ...(typeof entry.context_window === "number" && entry.context_window > 0 ? { contextWindow: entry.context_window } : {}),
+        });
+      }
+      const windows: Record<string, number> = {};
+      for (const model of models) if (model.contextWindow) windows[model.id] = model.contextWindow;
+      if (Object.keys(windows).length > 0) {
+        this.config = addModels(this.config, models.map((m) => m.id), windows);
+        saveConfig(this.config);
+        this.changed();
+      }
+      return models;
+    } catch {
+      return [];
+    }
+  }
+
+  async "thinking.set"(params: { effort: "low" | "medium" | "high" | null }): Promise<ConfigSnapshot> {
+    this.config = withActiveReasoningEffort(this.config, params.effort ?? undefined);
+    saveConfig(this.config);
+    this.changed();
+    return this.snapshot();
+  }
+
+  // --- sessions ------------------------------------------------------------
+
+  async "session.list"(): Promise<SessionSummaryWire[]> {
+    return listSessionSummaries().map((summary) => ({
+      id: summary.id,
+      updatedAt: summary.updatedAt,
+      model: summary.model,
+      messageCount: summary.messageCount,
+    }));
+  }
+
+  async "session.load"(params: { id: string }): Promise<{ messages: unknown[]; model: string }> {
+    const stored = loadSession(params.id);
+    if (!stored) throw new Error(`no session named "${params.id}"`);
+    if (this.running) throw new Error("cannot switch sessions while a turn is running");
+    this.messages = stored.messages;
+    this.session = { id: stored.id, createdAt: stored.createdAt || new Date().toISOString() };
+    if (stored.model) {
+      this.config = withModel(this.config, stored.model);
+      saveConfig(this.config);
+    }
+    this.changed();
+    return { messages: stored.messages, model: stored.model };
+  }
+
+  async "session.new"(): Promise<{ ok: true }> {
+    if (this.running) throw new Error("cannot start a new conversation while a turn is running");
+    this.messages = [];
+    this.session = { id: newSessionId(), createdAt: new Date().toISOString() };
+    this.changed();
+    return { ok: true };
+  }
+
+  /** The current transcript, for a UI that is (re)connecting. */
+  async "conversation.get"(): Promise<{ sessionId: string; messages: unknown[] }> {
+    return { sessionId: this.session.id, messages: this.messages };
+  }
+
+  conversation(): ChatMessage[] {
+    return this.messages;
+  }
+
+  // --- usage and MCP -------------------------------------------------------
+
+  async "usage.get"(params: { period: "day" | "week" | "month" | "all" }): Promise<UsageSnapshot> {
+    const entries = readUsage();
+    const since =
+      params.period === "day" ? startOfDay() : params.period === "week" ? startOfWeek() : params.period === "month" ? startOfMonth() : 0;
+    const bucket = usageSince(entries, since);
+    return {
+      period: params.period,
+      tokens: bucket.tokens,
+      turns: bucket.turns,
+      byModel: usageByModel(entries, since),
+    };
+  }
+
+  async "mcp.status"(): Promise<{ configured: number; servers: string[] }> {
+    // The desktop app hosts no MCP servers yet; the panel says so rather than
+    // showing a list that is not real.
+    return { configured: 0, servers: [] };
+  }
+
+  // --- turns ---------------------------------------------------------------
+
+  async "turn.send"(params: { input: string }): Promise<{ turnId: string }> {
+    return this.startTurn(params.input, false);
+  }
+
+  async "turn.reply"(params: { input: string }): Promise<{ turnId: string }> {
+    return this.startTurn(params.input, true);
+  }
+
+  private async startTurn(input: string, isReply: boolean): Promise<{ turnId: string }> {
+    const text = input.trim();
+    if (!text) throw new Error("cannot send an empty message");
+    if (this.running) throw new Error("a turn is already running");
+
+    const turnId = `t${++this.turnId}`;
+    // A reply and an ordinary send are the same operation, and saying so in one
+    // place is what keeps the two paths from drifting.
+    void isReply;
+
+    let provider: ResolvedProvider;
+    try {
+      provider = resolveProvider(this.config);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.notify({ type: "notice", tone: "error", text: message });
+      this.notify({
+        type: "turn.finished",
+        turnId,
+        result: { turnId, ok: false, rounds: 0, usage: [], truncated: false, blocked: false, error: message },
+      });
+      throw error;
+    }
+
+    this.running = true;
+    this.controller = new AbortController();
+    this.notify({ type: "turn.started", turnId });
+
+    // Run detached: the caller gets its turnId immediately and the stream
+    // arrives as notifications, which is what lets the UI render tokens as they
+    // land rather than waiting for the turn to end.
+    void this.runTurnDetached(turnId, text, provider);
+
+    return { turnId };
+  }
+
+  private async runTurnDetached(turnId: string, input: string, provider: ResolvedProvider): Promise<void> {
+    const controller = this.controller!;
+    const toolHostFor = (delegate?: ReturnType<typeof createTaskDelegate>) =>
+      createToolHost({
+        cwd: this.cwd,
+        bridge: this.bridge,
+        ...(delegate ? { taskDelegate: delegate } : {}),
+      });
+
+    let systemPrompt = this.config.systemPrompt?.trim() || defaultSystemPrompt(resolveShell(), provider.model);
+    systemPrompt = withProjectContext(systemPrompt, this.cwd);
+    // The system message is re-seeded on every turn and never persisted, so a
+    // session opened later gets the *current* prompt rather than the one it was
+    // written with. The user's own message is *not* added here: the harness
+    // appends `input` itself, and adding it twice would put the question in the
+    // transcript twice and make the provider's turn count wrong.
+    const seeded: ChatMessage[] = [{ role: "system", content: systemPrompt }, ...this.messages];
+
+    const taskDelegate = createTaskDelegate({
+      model: provider,
+      cwd: this.cwd,
+      toolHostFor: (delegate) => toolHostFor(delegate as ReturnType<typeof createTaskDelegate> | undefined),
+      onEvent: (event) => this.notify({ type: "turn.event", turnId, event }),
+    });
+
+    const toolHost = toolHostFor(taskDelegate);
+    let ok = false;
+    let rounds = 0;
+    let usage: Awaited<ReturnType<typeof runTurn>>["result"]["usage"] = [];
+    let truncated = false;
+    let blocked = false;
+    let errorMessage: string | undefined;
+
+    try {
+      const outcome = await runTurn({
+        model: provider,
+        client: this.createClient(provider),
+        messages: seeded,
+        input,
+        toolHost,
+        signal: controller.signal,
+        cwd: this.cwd,
+        onEvent: (event) => this.notify({ type: "turn.event", turnId, event }),
+        ...(this.config.maxToolRounds ? { maxToolRounds: this.config.maxToolRounds } : {}),
+      });
+      const result = outcome.result;
+      rounds = result.rounds;
+      usage = result.usage;
+      truncated = Boolean(result.truncated);
+      blocked = Boolean(result.blocked);
+      ok = !blocked && !truncated;
+      this.adoptTranscript(forStorage(result.messages));
+      try {
+        recordAudit(provider.model, result.audit);
+      } catch {
+        /* the audit log is best-effort */
+      }
+      if (outcome.recovery) {
+        this.notify({
+          type: "notice",
+          tone: "info",
+          text: `Conversation did not fit — cleared stale tool output and retried (${formatTokens(outcome.recovery.before - outcome.recovery.after)} characters).`,
+        });
+      }
+      if (blocked) this.notify({ type: "notice", tone: "warn", text: "Stopped — reply to continue." });
+      if (truncated) this.notify({ type: "notice", tone: "warn", text: "The answer was cut off at the model's output limit." });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        // A cancel still leaves a transcript — the harness hands it back on the
+        // error — so the work that already happened stays in the session.
+        const recovered = (error as { messages?: ChatMessage[] }).messages;
+        if (recovered) this.adoptTranscript(forStorage(repairHistory(recovered)));
+        this.notify({ type: "notice", tone: "warn", text: "Interrupted." });
+        errorMessage = "interrupted";
+      } else {
+        const recovered = (error as { messages?: ChatMessage[] }).messages;
+        if (recovered) this.adoptTranscript(forStorage(repairHistory(recovered)));
+        errorMessage = error instanceof Error ? error.message : String(error);
+        this.notify({ type: "notice", tone: "error", text: errorMessage });
+      }
+    } finally {
+      this.running = false;
+      this.controller = undefined;
+      const total = usage.reduce(
+        (acc, item) => ({
+          prompt_tokens: acc.prompt_tokens + (item.prompt_tokens ?? 0),
+          completion_tokens: acc.completion_tokens + (item.completion_tokens ?? 0),
+          total_tokens: acc.total_tokens + (item.total_tokens ?? 0),
+        }),
+        { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      );
+      if (total.total_tokens > 0) {
+        try {
+          recordUsage(provider.model, total);
+        } catch {
+          /* the usage log is best-effort; a failure there must not fail a turn */
+        }
+      }
+      this.persist();
+      this.notify({
+        type: "turn.finished",
+        turnId,
+        result: {
+          turnId,
+          ok,
+          rounds,
+          usage,
+          truncated,
+          blocked,
+          ...(errorMessage ? { error: errorMessage } : {}),
+        },
+      });
+    }
+  }
+
+  /** Adopt a transcript a turn produced, and remember the model's window. */
+  private adoptTranscript(messages: ChatMessage[]): void {
+    this.messages = messages;
+    try {
+      const provider = resolveProvider(this.config);
+      const window = contextWindowOf(provider);
+      if (window) this.config = withContextWindow(this.config, provider.model, window);
+    } catch {
+      /* an unresolvable provider is reported by the next turn, not here */
+    }
+  }
+
+  async "turn.cancel"(): Promise<{ cancelled: boolean }> {
+    if (!this.controller) return { cancelled: false };
+    this.controller.abort(new Error("cancelled by the user"));
+    return { cancelled: true };
+  }
+
+  private persist(): void {
+    try {
+      saveSession({
+        id: this.session.id,
+        createdAt: this.session.createdAt,
+        updatedAt: new Date().toISOString(),
+        model: this.config.model,
+        messages: this.messages,
+      });
+    } catch (error) {
+      this.notify({
+        type: "notice",
+        tone: "warn",
+        text: `could not save the session: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  private changed(): void {
+    this.notify({ type: "state.changed" });
+  }
+
+  /** Stop everything; called on shutdown. */
+  dispose(): void {
+    this.controller?.abort(new Error("shutting down"));
+  }
+}
+
+/** The context window a provider reported, when it reported one. */
+function contextWindowOf(provider: ResolvedProvider): number | undefined {
+  const raw = (provider as { contextWindow?: unknown }).contextWindow;
+  return typeof raw === "number" && raw > 0 ? raw : undefined;
+}

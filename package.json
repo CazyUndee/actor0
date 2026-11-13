@@ -4,13 +4,15 @@
   "private": false,
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "apps/desktop/agent",
+    "apps/desktop/web"
   ],
   "scripts": {
     "build": "npm --workspace @actor0/harness run build && npm --workspace @actor0/providers run build && npm --workspace @actor0/cli run build",
-    "build:desktop": "npm --workspace @actor0/desktop-web run build",
-    "typecheck": "npm --workspace @actor0/harness run typecheck && npm --workspace @actor0/providers run typecheck && npm --workspace @actor0/cli run typecheck",
-    "test": "npm --workspace @actor0/harness run test && npm --workspace @actor0/providers run test && npm --workspace @actor0/cli run test",
+    "build:desktop": "npm --workspace @actor0/desktop-agent run build && npm --workspace @actor0/desktop-web run build",
+    "typecheck": "npm --workspace @actor0/harness run typecheck && npm --workspace @actor0/providers run typecheck && npm --workspace @actor0/cli run typecheck && npm --workspace @actor0/desktop-agent run typecheck && npm --workspace @actor0/desktop-web run typecheck",
+    "test": "npm --workspace @actor0/harness run test && npm --workspace @actor0/providers run test && npm --workspace @actor0/cli run test && npm --workspace @actor0/desktop-agent run test",
     "lint": "eslint .",
     "check:boundaries": "bash scripts/check-boundaries.sh",
     "check:theme": "node apps/cli/scripts/generate-theme.mjs --check",
