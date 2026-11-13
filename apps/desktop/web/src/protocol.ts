@@ -125,6 +125,8 @@ export type AgentCalls = {
   "provider.test": (params: { name?: string }) => Promise<ProviderTestResult>;
   "model.set": (params: { model: string }) => Promise<ConfigSnapshot>;
   "model.discover": () => Promise<ModelInfo[]>;
+  /** List the models of an endpoint being considered, before it is registered. */
+  "model.discoverFor": (params: { baseUrl: string; apiKey?: string }) => Promise<ModelInfo[]>;
   "thinking.set": (params: { effort: "low" | "medium" | "high" | null }) => Promise<ConfigSnapshot>;
   "provider.kinds": () => Promise<ProviderKind[]>;
   "provider.signIn": (params: { kind: string }) => Promise<SignInResult>;

@@ -129,79 +129,223 @@ export function ProviderPanel(props: {
   onRemove: (name: string) => void;
   onTest: (name?: string) => void;
   onAdd: (entry: { name?: string; baseUrl: string; model?: string; apiKey?: string }) => void;
+  /** Fetch the models the candidate endpoint offers; empty means it listed none. */
+  onDiscoverModels: (baseUrl: string, apiKey?: string) => Promise<string[]>;
   /** The sign-in kinds, fetched once by the app from the agent. */
   kinds: ProviderKind[];
   onSignIn: (kind: string) => Promise<SignInResult>;
   onClose: () => void;
 }) {
+  /**
+   * The add flow, phased like the CLI's: kind → url → key → verify → models.
+   *
+   * One form asking for four things at once is faster to write and worse to
+   * use: it cannot tell the user *which* field was wrong (the URL? the key?),
+   * and it cannot offer the models the endpoint actually has, which is the
+   * thing that saves a round trip to `/model` later. Each phase here can only
+   * be submitted with what it needs, and a failure lands in the phase it
+   * belongs to.
+   */
+  type AddPhase = "url" | "key" | "models";
   const [adding, setAdding] = useState(false);
+  const [phase, setPhase] = useState<AddPhase>("url");
+  const [form, setForm] = useState({ name: "", baseUrl: "", model: "", apiKey: "" });
+  const [discovered, setDiscovered] = useState<string[]>([]);
+  const [phaseError, setPhaseError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [signingIn, setSigningIn] = useState<string | null>(null);
   const [signInError, setSignInError] = useState<string | null>(null);
   const [manualUrl, setManualUrl] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", baseUrl: "", model: "", apiKey: "" });
   const providers = props.snapshot.providers;
 
   if (adding) {
+    const submitUrl = (): void => {
+      const url = form.baseUrl.trim();
+      if (!/^https?:\/\//i.test(url)) {
+        setPhaseError("A base URL starting with http:// or https:// is required.");
+        return;
+      }
+      setPhaseError(null);
+      setPhase("key");
+    };
+
+    const submitKey = (): void => {
+      setPhaseError(null);
+      setSubmitting(true);
+      void props
+        .onDiscoverModels(form.baseUrl.trim(), form.apiKey.trim() || undefined)
+        .then((models) => {
+          setDiscovered(models);
+          setPhase("models");
+        })
+        .catch((error: Error) => {
+          // A listing that failed is not a reason to abandon the provider: the
+          // key may be right and the list endpoint absent. The CLI treats this
+          // the same way — verify, and fall back to a manual model name.
+          setDiscovered([]);
+          setPhase("models");
+          setPhaseError(`Could not list models (${error.message}) — name one by hand.`);
+        })
+        .finally(() => setSubmitting(false));
+    };
+
+    const title = phase === "url" ? "Add provider — endpoint" : phase === "key" ? "Add provider — credential" : "Add provider — model";
+    const footer =
+      phase === "url"
+        ? "Enter to continue · Esc to go back"
+        : phase === "key"
+          ? "Enter to list models · Esc to go back"
+          : "Enter to add · Esc to go back";
+
     return (
-      <Panel title="Add provider" onClose={props.onClose} footer="Enter to add · Esc to go back">
+      <Panel
+        title={title}
+        onClose={() => {
+          // Esc in phase one leaves the whole flow; deeper phases step back, so a
+          // mistyped key is a correction rather than starting over.
+          if (phase === "url") {
+            setAdding(false);
+            return;
+          }
+          setPhaseError(null);
+          setPhase(phase === "models" ? "key" : "url");
+        }}
+        footer={footer}
+      >
         <div className="panel-form">
-          <label className="form-field">
-            <span className="form-label">base URL</span>
-            <input
-              className="form-input"
-              value={form.baseUrl}
-              placeholder="https://api.example.com/v1"
-              onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
-              autoFocus
-              spellCheck={false}
+          {/* Every phase shows what was chosen before it, so the user can see
+              the state of the add rather than remembering it. */}
+          {form.baseUrl.trim() && phase !== "url" ? (
+            <div className="form-review">{form.baseUrl.trim()}</div>
+          ) : null}
+
+          {phase === "url" ? (
+            <label className="form-field">
+              <span className="form-label">base URL</span>
+              <input
+                className="form-input"
+                value={form.baseUrl}
+                placeholder="https://api.example.com/v1"
+                onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    submitUrl();
+                  }
+                }}
+                autoFocus
+                spellCheck={false}
+              />
+            </label>
+          ) : null}
+
+          {phase === "key" ? (
+            <>
+              <label className="form-field">
+                <span className="form-label">api key</span>
+                <input
+                  className="form-input"
+                  type="password"
+                  value={form.apiKey}
+                  placeholder="stored in config.json, or ${ENV_VAR}"
+                  onChange={(event) => setForm({ ...form, apiKey: event.target.value })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      submitKey();
+                    }
+                  }}
+                  autoFocus
+                  spellCheck={false}
+                />
+              </label>
+              <label className="form-field">
+                <span className="form-label">name (optional)</span>
+                <input
+                  className="form-input"
+                  value={form.name}
+                  placeholder="defaults to the host"
+                  onChange={(event) => setForm({ ...form, name: event.target.value })}
+                  spellCheck={false}
+                />
+              </label>
+              <Row
+                marker="↻"
+                label={submitting ? "listing models…" : "Continue — list models"}
+                onClick={() => !submitting && submitKey()}
+              />
+            </>
+          ) : null}
+
+          {phase === "models" ? (
+            <>
+              {phaseError ? <div className="form-error">{phaseError}</div> : null}
+              {discovered.length > 0 ? (
+                discovered.map((model) => (
+                  <Row
+                    key={model}
+                    marker={form.model === model ? "✓" : " "}
+                    label={model}
+                    mono
+                    onClick={() => setForm({ ...form, model })}
+                  />
+                ))
+              ) : null}
+              <label className="form-field">
+                <span className="form-label">model {discovered.length > 0 ? "(or name another)" : ""}</span>
+                <input
+                  className="form-input"
+                  value={form.model}
+                  placeholder="e.g. gpt-4o-mini"
+                  onChange={(event) => setForm({ ...form, model: event.target.value })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      if (!form.model.trim()) {
+                        setPhaseError("Name the model this provider should use.");
+                        return;
+                      }
+                      props.onAdd({
+                        baseUrl: form.baseUrl.trim(),
+                        ...(form.name.trim() ? { name: form.name.trim() } : {}),
+                        model: form.model.trim(),
+                        ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
+                      });
+                      setAdding(false);
+                    }
+                  }}
+                  autoFocus
+                  spellCheck={false}
+                />
+              </label>
+              <Row
+                marker="+"
+                label="Add this provider"
+                onClick={() => {
+                  if (!form.model.trim()) {
+                    setPhaseError("Name the model this provider should use.");
+                    return;
+                  }
+                  props.onAdd({
+                    baseUrl: form.baseUrl.trim(),
+                    ...(form.name.trim() ? { name: form.name.trim() } : {}),
+                    model: form.model.trim(),
+                    ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
+                  });
+                  setAdding(false);
+                }}
+              />
+            </>
+          ) : null}
+
+          {phase === "url" ? (
+            <Row
+              marker="→"
+              label="Continue"
+              onClick={submitUrl}
             />
-          </label>
-          <label className="form-field">
-            <span className="form-label">name</span>
-            <input
-              className="form-input"
-              value={form.name}
-              placeholder="optional — defaults to the host"
-              onChange={(event) => setForm({ ...form, name: event.target.value })}
-              spellCheck={false}
-            />
-          </label>
-          <label className="form-field">
-            <span className="form-label">model</span>
-            <input
-              className="form-input"
-              value={form.model}
-              placeholder="optional — set it later with /model"
-              onChange={(event) => setForm({ ...form, model: event.target.value })}
-              spellCheck={false}
-            />
-          </label>
-          <label className="form-field">
-            <span className="form-label">api key</span>
-            <input
-              className="form-input"
-              type="password"
-              value={form.apiKey}
-              placeholder="stored in config.json, or ${ENV_VAR}"
-              onChange={(event) => setForm({ ...form, apiKey: event.target.value })}
-              spellCheck={false}
-            />
-          </label>
-          <Divider />
-          <Row
-            marker="+"
-            label="Add this provider"
-            onClick={() => {
-              if (!form.baseUrl.trim()) return;
-              props.onAdd({
-                baseUrl: form.baseUrl.trim(),
-                ...(form.name.trim() ? { name: form.name.trim() } : {}),
-                ...(form.model.trim() ? { model: form.model.trim() } : {}),
-                ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
-              });
-              setAdding(false);
-            }}
-          />
+          ) : null}
+          {phaseError && phase !== "models" ? <div className="form-error">{phaseError}</div> : null}
         </div>
       </Panel>
     );

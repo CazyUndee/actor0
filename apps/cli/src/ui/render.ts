@@ -745,10 +745,7 @@ export function frameLine(text: string, columns: number): string {
 export function composerRows(opts: { cols: number; draft: string; caret: number; busy: boolean; maxHeight?: number; topRight?: string; topRightColor?: string }): { rows: Seg[][]; inputRow: number; inputCol: number } {
   const width = Math.max(20, opts.cols);
   const inner = width - 2;
-  // A column of breathing room separates the draft from the left border, so
-  // every visual row wraps at inner - gutter, leaving the gutter for padding.
-  const gutter = 1;
-  const lineW = Math.max(4, inner - gutter);
+  const lineW = Math.max(4, inner);
   const caret = Math.max(0, Math.min(opts.caret, opts.draft.length));
 
   // Hard-wrap the draft into visual rows of fixed width, so a long line wraps
@@ -815,17 +812,16 @@ export function composerRows(opts: { cols: number; draft: string; caret: number;
   if (above > 0) rows.push([{ text: "│", color: color.crimson }, ...plain(`↑ ${above} more line${above === 1 ? "" : "s"}`, color.dim, true), { text: "│", color: color.crimson }]);
   visible.forEach((row) => {
     const content: Seg[] = [];
-    // A leading gutter keeps the draft from touching the left border.
-    content.push({ text: " ".repeat(gutter) });
     content.push({ text: row.text, color: color.text });
     rows.push([{ text: "│", color: color.crimson }, ...fitWidth(content, inner), { text: "│", color: color.crimson }]);
   });
   rows.push(plain(`╰${"─".repeat(inner)}╯`, color.crimson));
 
   // inputRow is the caret's row within `rows` (rows[0] is the top border);
-  // inputCol is the composer-box column just after its character.
+  // inputCol maps, after App adds the frame's left border and pad, onto the
+  // screen column of the draft's caret character.
   const inputRow = 1 + (above > 0 ? 1 : 0) + (caretRow - startIdx);
-  return { rows, inputRow, inputCol: 2 + gutter + caretCol };
+  return { rows, inputRow, inputCol: 3 + caretCol };
 }
 
 export interface PickerItem {

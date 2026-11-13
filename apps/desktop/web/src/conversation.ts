@@ -139,6 +139,11 @@ export function withUserInput(state: ConversationState, text: string): Conversat
   return { ...state, entries: [...state.entries, { kind: "user", text }], blocked: undefined, notice: undefined };
 }
 
+/** Show the command list in the transcript — a reference the user returns to. */
+export function withHelp(state: ConversationState): ConversationState {
+  return { ...state, entries: [...state.entries, { kind: "help" }] };
+}
+
 export function withNotice(state: ConversationState, tone: "info" | "warn" | "error", text: string): ConversationState {
   return { ...state, notice: { tone, text } };
 }

@@ -114,6 +114,8 @@ export type AgentMethods = {
   "provider.test": (params: { name?: string }) => Promise<ProviderTestResult>;
   "model.set": (params: { model: string }) => Promise<ConfigSnapshot>;
   "model.discover": (params: undefined) => Promise<ModelInfo[]>;
+  /** List the models of an endpoint being considered, before it is registered. */
+  "model.discoverFor": (params: { baseUrl: string; apiKey?: string }) => Promise<ModelInfo[]>;
   "thinking.set": (params: { effort: "low" | "medium" | "high" | null }) => Promise<ConfigSnapshot>;
   /** The sign-in options this host offers, from the presets in @actor0/providers. */
   "provider.kinds": (params: undefined) => Promise<ProviderKindWire[]>;

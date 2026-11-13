@@ -22,6 +22,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "clear", aliases: ["c"], description: "start a new conversation" },
   { name: "session", aliases: ["r", "resume"], description: "switch to a saved session" },
   { name: "usage", aliases: ["u"], description: "tokens and quota" },
+  { name: "help", aliases: ["h", "?"], description: "the command list" },
   { name: "quit", aliases: ["q", "exit"], description: "exit" },
 ];
 
@@ -34,6 +35,12 @@ export function resolveCommand(word: string): string {
   return ALIASES.get(lower) ?? lower;
 }
 
+/** The command listing `/help` shows: the name, its first alias, and the one-liner. */
+export const COMMAND_HELP: [string, string][] = SLASH_COMMANDS.map((command) => [
+  `/${command.name}  /${command.aliases[0]}`,
+  command.description,
+]);
+
 /** Commands whose name or alias starts with the typed query, in list order. */
 export function matchSlashCommands(query: string): SlashCommandDef[] {
   const q = query.toLowerCase();
@@ -41,6 +48,7 @@ export function matchSlashCommands(query: string): SlashCommandDef[] {
 }
 
 /** The commands whose name, alias or description contains the query. */
+/** Commands whose name, alias or description contains the query. */
 export function filterSlashCommands(query: string): SlashCommandDef[] {
   const q = query.toLowerCase();
   return SLASH_COMMANDS.filter(

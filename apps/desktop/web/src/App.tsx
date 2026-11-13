@@ -1,4 +1,5 @@
 /* eslint-disable react/no-array-index-key -- The transcript is append-only: entries are added, never reordered or removed, so an entry's position is its identity. */
+import type { UIEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HarnessEvent } from "@actor0/harness";
 import { AgentClient, type ConnectionState } from "./client";
@@ -160,9 +161,34 @@ export function App() {
     };
   }, [busy]);
 
+  // --- the transcript's scroll ---------------------------------------------
+  //
+  // The CLI keeps a scroll offset that survives streaming, and a desktop app
+  // that snaps to the bottom on every token is not that — it takes the reader's
+  // place away the moment they scroll up. So the transcript is *pinned* to the
+  // bottom only while the reader is already at the bottom, and a deliberate
+  // scroll up unpins it until the reader comes back down. This is the single
+  // biggest difference between an app that streams well and one that fights the
+  // person reading it.
+  const [pinned, setPinned] = useState(true);
+
+  /** Is the viewport at (or within a couple of rows of) the bottom? */
+  function nearBottom(node: HTMLElement): boolean {
+    return node.scrollHeight - node.scrollTop - node.clientHeight <= 24;
+  }
+
+  function onTranscriptScroll(event: UIEvent<HTMLDivElement>): void {
+    const node = event.currentTarget;
+    setPinned(nearBottom(node));
+  }
+
   useEffect(() => {
-    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight });
-  }, [conversation]);
+    const node = transcriptRef.current;
+    if (!node || !pinned) return;
+    node.scrollTo({ top: node.scrollHeight });
+    // A resize re-lands the bottom badly (the width change re-wraps every
+    // entry), so re-pin explicitly rather than trusting the browser.
+  }, [conversation, pinned]);
 
   // --- commands ------------------------------------------------------------
 
@@ -217,8 +243,13 @@ export function App() {
           case "quit":
             setNotice({ tone: "info", text: "Close the window to exit." });
             return;
+          case "help":
+            // A /help entry in the transcript, not a popup — it is a reference the
+            // user goes back to, which is where the CLI keeps it too.
+            setConversation((state) => ({ ...state, entries: [...state.entries, { kind: "help" }] }));
+            return;
           default:
-            setNotice({ tone: "warn", text: `Unknown command: /${name}` });
+            setNotice({ tone: "warn", text: `Unknown command: /${name} — try /help` });
         }
       } catch (error) {
         setNotice({ tone: "error", text: (error as Error).message });
@@ -253,14 +284,30 @@ export function App() {
     await clientRef.current?.call("turn.cancel");
   }, []);
 
-  // Escape stops a turn, anywhere that is not a text field.
+  // Escape stops a turn; Ctrl+C copies a selection — the CLI's Ctrl+C, translated.
+  //
+  // The browser already copies selected text natively, so this handler's job is
+  // the *other* Ctrl+C: with nothing selected and a turn running, it cancels —
+  // the composer's stop affordance as a keyboard form. When something *is*
+  // selected the browser's copy is the right behaviour and this stays out of the
+  // way, so Ctrl+C never both copies and interrupts.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && mode !== "chat") {
         setMode("chat");
         return;
       }
-      if (event.key === "Escape" && busy) void cancel();
+      if (event.key === "Escape" && busy) {
+        void cancel();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c" && busy) {
+        const selected = window.getSelection()?.toString() ?? "";
+        if (!selected.trim()) {
+          event.preventDefault();
+          void cancel();
+        }
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -342,7 +389,7 @@ export function App() {
           </div>
         ) : null}
 
-        <div className="transcript" ref={transcriptRef}>
+        <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll}>
           {conversation.entries.length === 0 && !busy ? (
             <div className="empty-state">
               <div className="empty-title">actor0</div>
@@ -407,6 +454,13 @@ export function App() {
             }}
             kinds={kinds}
             onSignIn={async (kind) => clientRef.current!.call("provider.signIn", { kind })}
+            onDiscoverModels={async (baseUrl, apiKey) => {
+              // The agent asks the candidate endpoint directly, so the models
+              // offered are the ones it actually has — and a failure here is
+              // the add flow's signal to fall back to naming one by hand.
+              const found = await clientRef.current!.call("model.discoverFor", { baseUrl, ...(apiKey ? { apiKey } : {}) });
+              return found.map((model) => model.id);
+            }}
             onAdd={async (entry) => {
               setSnapshot(await clientRef.current!.call("provider.add", { entry }));
               setNotice({ tone: "info", text: `Added ${entry.name ?? entry.baseUrl}` });

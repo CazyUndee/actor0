@@ -23,6 +23,7 @@ import {
   emptyLive,
   initialConversation,
   totalUsage,
+  withHelp,
   withNotice,
   withUserInput,
   type ConversationState,
@@ -562,6 +563,12 @@ export function App({ cwd, config: initialConfig, resumed, version = "0.0.0", tr
         return;
       case "quit":
         onExit();
+        return;
+      case "help":
+        // The command list as a transcript entry, not a popup: it is a reference
+        // the user goes back to, and the `unknown command — try /help` hint
+        // above has always promised it.
+        setConversation((state) => withHelp(state));
         return;
       case "unknown":
         notice("warn", `unknown command ${command.input} — try /help`);

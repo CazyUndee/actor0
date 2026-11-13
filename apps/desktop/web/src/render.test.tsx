@@ -117,3 +117,34 @@ describe("rendering chrome", () => {
     assert.ok(html.includes("row"));
   });
 });
+
+describe("rendering the M2 interaction surfaces", () => {
+  it("renders the copy affordance on an assistant entry", () => {
+    const html = markup(<EntryView entry={{ kind: "assistant", text: "an answer", partial: false }} />);
+    assert.ok(html.includes("copy-button"), "the copy control is there");
+    assert.ok(html.includes("Copy the answer"));
+  });
+
+  it("renders a copy control on a plan entry", () => {
+    const html = markup(<EntryView entry={{ kind: "plan", title: "The plan", plan: "1. read" }} />);
+    assert.ok(html.includes("Copy the plan"));
+  });
+
+  it("renders the help entry as the command list, with aliases and descriptions", () => {
+    const html = markup(<EntryView entry={{ kind: "help" }} />);
+    // The `/name  /alias` column is what teaches the aliases.
+    assert.ok(html.includes("/provider"), "the provider command is listed");
+    assert.ok(html.includes("/p"), "its alias is listed beside it");
+    assert.ok(html.includes("switch, sign in, add or remove"));
+    assert.ok(html.includes("commands"), "the listing has a title");
+  });
+
+  it("does not render a copy control on tool rows — the target is one click away", () => {
+    const html = markup(
+      <ToolEntry
+        entry={{ kind: "tool", name: "read", target: "a.ts", status: "ok", output: { data: "x", text: "x" } }}
+      />,
+    );
+    assert.ok(!html.includes("entry-copy"));
+  });
+});

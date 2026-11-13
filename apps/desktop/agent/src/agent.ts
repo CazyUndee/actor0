@@ -311,40 +311,34 @@ export class Agent implements AgentMethods {
     } catch {
       return [];
     }
-    // Only the OpenAI-compatible transport has a portable listing endpoint;
-    // the other two publish no equivalent and say so with an empty list rather
-    // than by inventing names.
-    if ((resolved.transport ?? "openai") !== "openai") return [];
-    const base = resolved.baseUrl.replace(/\/+$/, "");
-    const url = `${base}/models`;
-    try {
-      const response = await fetch(url, {
-        headers: {
-          ...(resolved.apiKey ? { Authorization: `Bearer ${resolved.apiKey}` } : {}),
-          ...(resolved.headers ?? {}),
-        },
-      });
-      if (!response.ok) return [];
-      const payload = (await response.json()) as { data?: { id?: unknown; context_window?: unknown }[] };
-      const models: ModelInfo[] = [];
-      for (const entry of payload.data ?? []) {
-        if (typeof entry.id !== "string" || !entry.id) continue;
-        models.push({
-          id: entry.id,
-          ...(typeof entry.context_window === "number" && entry.context_window > 0 ? { contextWindow: entry.context_window } : {}),
-        });
-      }
+    const models = await listModels(resolved);
+    // Context windows the endpoint volunteers are worth keeping, and the
+    // picker is the one place they arrive in bulk.
+    if (models.length > 0) {
       const windows: Record<string, number> = {};
       for (const model of models) if (model.contextWindow) windows[model.id] = model.contextWindow;
-      if (Object.keys(windows).length > 0) {
-        this.config = addModels(this.config, models.map((m) => m.id), windows);
-        saveConfig(this.config);
-        this.changed();
-      }
-      return models;
-    } catch {
-      return [];
+      this.config = addModels(this.config, models.map((model) => model.id), windows);
+      saveConfig(this.config);
+      this.changed();
     }
+    return models;
+  }
+
+  /**
+   * List the models of an endpoint the user is *considering*, not the active one.
+   *
+   * The add-provider flow offers the candidate's real models before it is
+   * registered, so the user picks from what exists rather than typing a name
+   * and fixing it in `/model` later. Failing soft — an empty list — is right
+   * for the picker; the add flow lets the user name a model by hand when the
+   * endpoint lists none.
+   */
+  async "model.discoverFor"(params: { baseUrl: string; apiKey?: string }): Promise<ModelInfo[]> {
+    const baseUrl = params.baseUrl.trim();
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      throw new ConfigError("a base URL starting with http:// or https:// is required");
+    }
+    return listModels({ baseUrl, transport: "openai", ...(params.apiKey?.trim() ? { apiKey: params.apiKey.trim() } : {}) });
   }
 
   async "thinking.set"(params: { effort: "low" | "medium" | "high" | null }): Promise<ConfigSnapshot> {
@@ -635,6 +629,41 @@ export class Agent implements AgentMethods {
   /** Stop everything; called on shutdown. */
   dispose(): void {
     this.controller?.abort(new Error("shutting down"));
+  }
+}
+
+/**
+ * List an endpoint’s models the way an OpenAI-compatible server publishes them.
+ *
+ * Only that transport has a portable listing endpoint; the others publish no
+ * equivalent and answer with an empty list rather than invented names. Failing
+ * soft is right for the picker, and both callers let the user name a model by
+ * hand when nothing is listed.
+ */
+async function listModels(resolved: { baseUrl: string; transport?: string; apiKey?: string; headers?: Record<string, string> }): Promise<ModelInfo[]> {
+  if ((resolved.transport ?? "openai") !== "openai") return [];
+  const base = resolved.baseUrl.replace(/\/+$/, "");
+  const url = `${base}/models`;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        ...(resolved.apiKey ? { Authorization: `Bearer ${resolved.apiKey}` } : {}),
+        ...(resolved.headers ?? {}),
+      },
+    });
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { data?: { id?: unknown; context_window?: unknown }[] };
+    const models: ModelInfo[] = [];
+    for (const entry of payload.data ?? []) {
+      if (typeof entry.id !== "string" || !entry.id) continue;
+      models.push({
+        id: entry.id,
+        ...(typeof entry.context_window === "number" && entry.context_window > 0 ? { contextWindow: entry.context_window } : {}),
+      });
+    }
+    return models;
+  } catch {
+    return [];
   }
 }
 

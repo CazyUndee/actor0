@@ -173,3 +173,33 @@ describe("the face", () => {
     assert.equal(stateFace({ live, blocked: false, busy: false }), "idle");
   });
 });
+
+describe("the command surface", () => {
+  it("offers /help with a one-letter alias and parses it", async () => {
+    const { SLASH_COMMANDS, parseSlash } = await import("./slash");
+    const help = SLASH_COMMANDS.find((command) => command.name === "help");
+    assert.ok(help, "/help is a listed command");
+    assert.deepEqual(help!.aliases, ["h", "?"]);
+    assert.deepEqual(parseSlash("/help"), { name: "help" });
+    assert.deepEqual(parseSlash("/?"), { name: "help" });
+    assert.deepEqual(parseSlash("/h"), { name: "help" });
+  });
+
+  it("lists every command in /help's listing, with its first alias", async () => {
+    const { COMMAND_HELP, SLASH_COMMANDS } = await import("./slash");
+    assert.equal(COMMAND_HELP.length, SLASH_COMMANDS.length);
+    for (let i = 0; i < SLASH_COMMANDS.length; i += 1) {
+      const [command] = COMMAND_HELP[i]!;
+      assert.ok(command.startsWith(`/${SLASH_COMMANDS[i]!.name}`));
+      assert.ok(command.includes(`/${SLASH_COMMANDS[i]!.aliases[0]}`));
+    }
+  });
+
+  it("revives the help entry as a pending transcript entry, and a reply replaces it", async () => {
+    const { withHelp } = await import("./conversation");
+    const state = withHelp(initialConversation());
+    assert.equal(state.entries[0]!.kind, "help");
+    // A question after help is still an ordinary question.
+    assert.equal(withUserInput(state, "hi").entries.length, 2);
+  });
+});

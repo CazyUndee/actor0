@@ -20,6 +20,7 @@ export type SlashCommand =
   | { name: "thinking"; effort?: string }
   | { name: "session"; id?: string }
   | { name: "quit" }
+  | { name: "help" }
   | { name: "unknown"; input: string };
 
 /** A slash command: its name, the short aliases that reach it, and a one-liner. */
@@ -47,6 +48,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "session", aliases: ["r", "resume"], description: "switch to a saved session" },
   { name: "usage", aliases: ["u"], description: "tokens and quota" },
   { name: "quit", aliases: ["q", "exit"], description: "exit" },
+  { name: "help", aliases: ["h", "?"], description: "the command list" },
 ];
 
 export const COMMANDS = SLASH_COMMANDS.map((command) => command.name);
@@ -96,6 +98,8 @@ export function parseSlash(input: string): SlashCommand | undefined {
       return argument ? { name: "session", id: argument } : { name: "session" };
     case "quit":
       return { name: "quit" };
+    case "help":
+      return { name: "help" };
     case "model":
       return argument ? { name: "model", model: argument } : { name: "model" };    // An argument is accepted and ignored rather than rejected: a user who
     // types `/provider openai` is asking where requests go, and telling them

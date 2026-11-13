@@ -1,7 +1,10 @@
 /* eslint-disable react/no-array-index-key -- A tool result is a string; its diff lines have no identity beyond their position, and the list is append-only. */
 import { useState } from "react";
 import type { Entry } from "../conversation";
+
 import { Markdown } from "./Markdown";
+import { COMMAND_HELP } from "../slash";
+import { CopyButton } from "./CopyButton";
 
 /**
  * The transcript's entries, one component per kind.
@@ -69,11 +72,15 @@ export function EntryView({ entry }: { entry: Entry }) {
       );
     case "assistant":
       return (
-        <div className="entry assistant">
+        <div className={`entry assistant ${entry.partial ? "has-partial" : ""}`}>
           <div className={`assistant-box ${entry.partial ? "partial" : ""}`}>
             <Markdown text={entry.text} />
             {entry.partial ? <div className="partial-note">incomplete</div> : null}
           </div>
+          {/* A click is the mouse-first equivalent of the CLI's Ctrl+C. The raw
+              markdown is what is copied, not the rendered DOM, because the
+              answer is the thing the user wants in a paste elsewhere. */}
+          <CopyButton text={entry.text} title="Copy the answer" className="entry-copy" />
         </div>
       );
     case "reasoning":
@@ -91,12 +98,25 @@ export function EntryView({ entry }: { entry: Entry }) {
             <div className="plan-title">{entry.title}</div>
             <pre className="plan-body">{entry.plan}</pre>
           </div>
+          <CopyButton text={`${entry.title}\n\n${entry.plan}`} title="Copy the plan" className="entry-copy" />
         </div>
       );
     case "help":
       return (
         <div className="entry help">
-          <div className="help-box">Type / for the command list. Enter sends, Shift+Enter adds a line, Esc cancels a turn.</div>
+          {/* The command list as a bordered reference the user can go back to,
+              not transcript chatter — the same decision the CLI's help box
+              makes. The `/name  /alias` columns are what teach the aliases. */}
+          <div className="help-box">
+            <div className="help-title">commands</div>
+            {COMMAND_HELP.map(([command, description]) => (
+              <div className="help-row" key={command}>
+                <span className="help-command">{command}</span>
+                <span className="help-description">{description}</span>
+              </div>
+            ))}
+            <div className="help-note">Enter sends · Shift+Enter adds a line · Esc cancels a turn</div>
+          </div>
         </div>
       );
     default:
