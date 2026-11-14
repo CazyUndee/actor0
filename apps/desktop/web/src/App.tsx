@@ -168,6 +168,20 @@ export function App() {
     if (!conversation.live.reasoning.trim()) reasoningStartedAtRef.current = null;
   }, [conversation.live.reasoning]);
 
+  // Frameless native window: register the title bar as the drag handle.
+  // CSS -webkit-app-region works in WebView2; the API is the explicit fallback.
+  useEffect(() => {
+    if (window.NL_MODE !== "window" && !showWindowControls) return;
+    const trySet = () => {
+      const w = window.Neutralino?.window;
+      if (w?.setDraggableRegion) void w.setDraggableRegion("titlebar").catch(() => {});
+    };
+    trySet();
+    const t = setInterval(trySet, 500);
+    const stop = setTimeout(() => clearInterval(t), 5000);
+    return () => { clearInterval(t); clearTimeout(stop); };
+  }, [showWindowControls]);
+
   useEffect(() => {
     if (!busy) return;
     const spinner = setInterval(() => setFrame((value) => (value + 1) % SPINNER_FRAMES.length), 120);

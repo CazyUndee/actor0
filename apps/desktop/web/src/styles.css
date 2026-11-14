@@ -69,19 +69,23 @@ button, input, textarea { font: inherit; color: inherit; }
 .titlebar-mascot {
   width: 20px; height: 20px; flex: none;
   border-radius: 5px;
-  -webkit-app-region: no-drag;
+  display: block;
 }
-.titlebar-name { font-size: 13px; font-weight: 700; letter-spacing: 0.2px; color: var(--text); }
-.titlebar-version { font-size: 12px; color: var(--dim); white-space: nowrap; }
+.titlebar-name {
+  font-size: 13px; font-weight: 700; letter-spacing: 0.2px; color: var(--text);
+  line-height: 20px; margin: 0; padding: 0;
+  display: flex; align-items: center;
+}
+.titlebar-version { font-size: 12px; color: var(--dim); white-space: nowrap; line-height: 1; display: flex; align-items: center; }
 
-.titlebar-controls { display: flex; align-items: stretch; height: 100%; -webkit-app-region: no-drag; }
-.titlebar-controls-win { margin-left: 4px; margin-right: -8px; }
+.titlebar-controls { display: flex; align-items: center; height: 100%; -webkit-app-region: no-drag; }
+.titlebar-controls-win { gap: 4px; margin-left: 6px; padding-right: 4px; }
 .wc {
   display: inline-flex; align-items: center; justify-content: center;
   border: none; background: transparent; color: var(--muted); cursor: pointer;
   padding: 0; transition: background 0.12s, color 0.12s;
 }
-.wc-min-win, .wc-max-win, .wc-close-win { width: 46px; height: 100%; }
+.wc-min-win, .wc-max-win, .wc-close-win { width: 34px; height: 26px; border-radius: 8px; }
 .wc-min-win:hover, .wc-max-win:hover { background: rgba(240, 237, 232, 0.08); color: var(--text); }
 .wc-close-win:hover { background: #c42b1c; color: #fff; }
 

@@ -8,26 +8,34 @@
   </head>
   <body>
     <div id="root"></div>
-    <!-- Neutralino's client library. In window mode with injectClientLibrary the
-         shell injects globals + library with a real per-session token. In chrome
-         mode the served globals endpoint carries NL_TOKEN='' (the token is not
-         exposed as a fetchable resource), so loading neutralino.js against it
-         makes the client replace the page with NE_CL_IVCTOKN. We only bring the
-         library up when a real token is present; without it the app still runs —
-         the agent is discovered via the port file a launcher writes — just with
-         no native shell APIs. -->
+    <!-- Neutralino client loader. Window mode: the shell injects globals+library
+         with a real token — loading the static globals endpoint would clobber it
+         (it serves NL_TOKEN=''), so we must not interfere. Chrome mode: the
+         globals endpoint is useful for NL_PORT/NL_PATH/NL_MODE/NL_OS but its
+         empty token makes neutralino.js replace the page with NE_CL_IVCTOKN, so
+         we load globals only. The launcher writes shell-mode.json to tell us. -->
     <script>
       (function () {
         if (typeof window.NL_TOKEN !== "undefined" && window.NL_TOKEN !== "") {
-          // Injected with a real token but maybe library not injected — load it.
           if (typeof window.Neutralino === "undefined") {
             document.write('<script src="/neutralino.js"><\/script>');
           }
           return;
         }
-        // Not injected: pull globals (gives NL_PORT/NL_PATH/mode, token stays
-        // empty) so the app knows its environment, but skip neutralino.js —
-        // connecting without a token is a fatal page-replacing error.
+        var mode = null;
+        try {
+          var x = new XMLHttpRequest();
+          x.open("GET", "/shell-mode.json", false);
+          if (x.status === 200) mode = (JSON.parse(x.responseText) || {}).mode || null;
+        } catch (e) {}
+        if (mode === "window") {
+          // Rely on injection for the real token and library. If injection
+          // didn't run, the native APIs won't be available but the app still
+          // works via the port file — better than destroying the page.
+          return;
+        }
+        // Chrome mode (or unknown): load globals for environment info, skip
+        // neutralino.js because the empty token is fatal to it.
         document.write('<script src="/__neutralino_globals.js"><\/script>');
       })();
     </script>

@@ -18,6 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const web = path.resolve(here, "..");
 const agentBundle = path.join(web, "resources", "agent", "agent.mjs");
 const servedPortFile = path.join(web, "resources", "app", "agent-port.json");
+const shellModeFile = path.join(web, "resources", "app", "shell-mode.json");
 const neuExe = path.join(web, "bin", "neutralino-win_x64.exe");
 
 const children = new Set();
@@ -67,6 +68,11 @@ async function main() {
   const mode = process.argv.includes("--window") ? "window" : "chrome";
   const { port } = await startAgent();
 
+  // Tell the UI which shell mode is active so it can load the Neutralino client
+  // correctly (window mode needs the injected client for native APIs; chrome mode
+  // must not load it against an empty token or the page is replaced with an error).
+  await writeFile(shellModeFile, JSON.stringify({ mode }), "utf8");
+
   // The UI discovers the agent via the port file we just wrote. Chrome mode is
   // the default because window mode (WebView2) segfaults intermittently on some
   // machines; pass --window for the frameless native shell when it is stable.
@@ -78,6 +84,7 @@ async function main() {
   neu.on("exit", async (code) => {
     children.delete(neu);
     await rm(servedPortFile, { force: true }).catch(() => {});
+    await rm(shellModeFile, { force: true }).catch(() => {});
     killAll();
     process.exit(code ?? 0);
   });
