@@ -215,6 +215,75 @@ test("a key given as ${NAME} is read from the environment, and a missing one is 
   });
 });
 
+test("${NAME} cannot read a secret the provider was never given (C-3)", () => {
+  // Without an allow-list, a config file naming ${AWS_SECRET_ACCESS_KEY} or
+  // ${GITHUB_TOKEN} would read that value out of the parent environment and
+  // send it as a bearer token or header to whatever baseUrl names —
+  // exfiltration by config, one repo-supplied config.json away. Only
+  // `ACTOR0_*`-prefixed variables and the provider's own `envAllow` list may
+  // be expanded; anything else is refused by name.
+  withConfigDir(() => {
+    const previous = process.env.MY_SYNTHETIC_SECRET;
+    process.env.MY_SYNTHETIC_SECRET = "SYNTHETIC-LEAK-42";
+    try {
+      // Not allow-listed: refused before the value is ever read.
+      assert.throws(
+        () =>
+          resolveProvider({
+            model: "m",
+            models: [],
+            provider: { baseUrl: "https://api.example.com/v1", apiKey: "${MY_SYNTHETIC_SECRET}" },
+          }),
+        /envAllow/,
+        "a variable outside ACTOR0_* and envAllow must be refused by name",
+      );
+
+      // Allow-listed on the provider: admitted.
+      const allowed = resolveProvider({
+        model: "m",
+        models: [],
+        providers: [
+          { name: "p", baseUrl: "https://api.example.com/v1", apiKey: "${MY_SYNTHETIC_SECRET}", envAllow: ["MY_SYNTHETIC_SECRET"] },
+        ],
+        activeProvider: "p",
+      });
+      assert.equal(allowed.apiKey, "SYNTHETIC-LEAK-42", "an explicitly allow-listed variable is expanded");
+    } finally {
+      if (previous === undefined) delete process.env.MY_SYNTHETIC_SECRET;
+      else process.env.MY_SYNTHETIC_SECRET = previous;
+    }
+  });
+});
+
+test("a header value obeys the same envAllow gate as the key", () => {
+  withConfigDir(() => {
+    const previous = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "ghs-synthetic-token";
+    try {
+      assert.throws(
+        () =>
+          resolveProvider({
+            model: "m",
+            models: [],
+            providers: [
+              {
+                name: "p",
+                baseUrl: "https://api.example.com/v1",
+                headers: { "X-Thing": "${GITHUB_TOKEN}" },
+              },
+            ],
+            activeProvider: "p",
+          }),
+        /envAllow/,
+        "a header naming an unlisted variable is refused, not expanded and sent",
+      );
+    } finally {
+      if (previous === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = previous;
+    }
+  });
+});
+
 test("ACTOR0_BASE_URL points a run at an endpoint with no config file at all", () => {
   // How a CI job or a benchmark run reaches a gateway: the environment, not a
   // file that may not exist and cannot be edited. A shell that cannot win is a

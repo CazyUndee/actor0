@@ -52,6 +52,17 @@ export type ProviderConfig = {
   auth?: ProviderAuth;
   /** The credential, when `auth` is "api-key". `${NAME}` reads from the environment. */
   apiKey?: string;
+  /**
+   * Environment variables this provider's `${NAME}` substitutions may read.
+   *
+   * `apiKey` and `headers` expand `${VAR}` placeholders, and without a list the
+   * expansion read *any* variable in the parent environment: a config (or a
+   * repo-supplied one) naming `${AWS_SECRET_ACCESS_KEY}` would send that value
+   * as a header or bearer token to whatever `baseUrl` names. Only variables
+   * listed here — plus the `ACTOR0_*` namespace the CLI itself documents — are
+   * expanded; anything else is a refused-by-name error rather than a leak.
+   */
+  envAllow?: string[];
   /** OAuth tokens, when `auth` is "oauth". */
   oauth?: OAuthTokens;
   /** Reasoning effort for models that support it — low / medium / high. */
@@ -191,6 +202,7 @@ function parseProviders(value: unknown): NamedProvider[] {
       ...(isTransport(entry.transport) ? { transport: entry.transport } : {}),
       ...(isAuth(entry.auth) ? { auth: entry.auth } : {}),
       ...(nonEmptyString(entry.apiKey) ? { apiKey: nonEmptyString(entry.apiKey)! } : {}),
+      ...(stringList(entry.envAllow).length ? { envAllow: stringList(entry.envAllow) } : {}),
       ...(oauth ? { oauth } : {}),
       ...(isEffort(entry.reasoningEffort) ? { reasoningEffort: entry.reasoningEffort } : {}),
       ...(stringMap(entry.headers) ? { headers: stringMap(entry.headers)! } : {}),
@@ -245,8 +257,15 @@ function contextWindowsOf(value: unknown): Record<string, number> | undefined {
  * request that is authenticated as nobody and a 401 that reads like a wrong
  * model, which is a genuinely hard thing to diagnose from the outside.
  */
-function expandEnv(value: string, field: string): string {
+function expandEnv(value: string, field: string, allowed: ReadonlySet<string>): string {
   return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => {
+    if (!allowed.has(name) && !name.startsWith("ACTOR0_")) {
+      throw new ConfigError(
+        `${field} refers to \${${name}}, but that variable is not in this provider's "envAllow" list. ` +
+          `Add "${name}" to the provider's "envAllow" array, or use an "ACTOR0_"-prefixed variable. ` +
+          `This is a guard against a config file that names secrets it was never given.`,
+      );
+    }
     const found = process.env[name];
     if (!found) {
       throw new ConfigError(
@@ -404,12 +423,15 @@ export function resolveProvider(config: CliConfig): ResolvedProvider {
   }
 
   const auth: ProviderAuth = stored?.auth ?? "api-key";
+  // Which variables this provider's `${NAME}` substitutions may read (C-3): the
+  // `ACTOR0_*` namespace plus whatever `envAllow` lists on the provider.
+  const envAllowed = new Set<string>(stored?.envAllow ?? []);
   // An exported-but-empty `ACTOR0_API_KEY=` is treated as unset, like every other
   // env override — otherwise it would delete a stored key and send the request
   // with no credential at all.
   const envKey = process.env.ACTOR0_API_KEY?.trim();
   const rawKey = envKey || stored?.apiKey;
-  const apiKey = rawKey ? expandEnv(rawKey, "apiKey") : undefined;
+  const apiKey = rawKey ? expandEnv(rawKey, "apiKey", envAllowed) : undefined;
   const oauth = stored?.oauth;
   // A provider that says it authenticates with OAuth but carries no tokens is
   // half-configured: fail here by name rather than degrading to an empty api key
@@ -419,7 +441,7 @@ export function resolveProvider(config: CliConfig): ResolvedProvider {
   }
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(stored?.headers ?? {})) {
-    headers[name] = expandEnv(value, `headers.${name}`);
+    headers[name] = expandEnv(value, `headers.${name}`, envAllowed);
   }
 
   return {
