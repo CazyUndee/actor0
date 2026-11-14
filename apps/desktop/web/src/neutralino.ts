@@ -28,10 +28,18 @@ export type NeutralinoApi = {
     createDirectory(path: string): Promise<void>;
   };
   events?: { on(name: string, handler: (event: NeutralinoEvent) => void): Promise<void> };
+  app?: {
+    exit(code?: number): Promise<void>;
+  };
   window?: {
     setTitle(title: string): Promise<void>;
     minimize?(): Promise<void>;
+    maximize?(): Promise<void>;
+    unmaximize?(): Promise<void>;
+    isMaximized?(): Promise<boolean>;
     close?(): Promise<void>;
+    setDraggableRegion?(domId: string): Promise<void>;
+    unsetDraggableRegion?(domId: string): Promise<void>;
   };
 };
 
@@ -42,5 +50,9 @@ declare global {
     NL_PATH?: string;
     /** The shell's own port. */
     NL_PORT?: string;
+    /** The host OS as Neutralino reports it (e.g. Windows, Linux, Darwin). */
+    NL_OS?: string;
+    /** The shell mode (window, chrome, browser, cloud). */
+    NL_MODE?: string;
   }
 }

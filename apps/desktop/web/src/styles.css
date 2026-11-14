@@ -54,9 +54,46 @@ button, input, textarea { font: inherit; color: inherit; }
   position: relative;
 }
 
-.chrome-row { display: flex; align-items: center; justify-content: space-between; flex: none; padding: 14px 18px 0; }
-.brand-mark { font-size: 16px; font-weight: 700; letter-spacing: 0.2px; }
-.brand-version { font-size: 13px; color: var(--dim); }
+/* Custom title bar — replaces the native top bar in borderless window mode and
+   sits at the very top of the app in every mode. Draggable so the window can
+   be moved; interactive children opt out. */
+.titlebar {
+  display: flex; align-items: center; flex: none;
+  height: 38px; padding: 0 8px 0 10px; gap: 8px;
+  -webkit-app-region: drag; user-select: none;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(17, 17, 17, 0.96);
+}
+.titlebar button, .titlebar a, .titlebar input { -webkit-app-region: no-drag; }
+.titlebar-drag { flex: 1; min-width: 12px; height: 100%; }
+.titlebar-mascot {
+  width: 20px; height: 20px; flex: none;
+  border-radius: 5px;
+  -webkit-app-region: no-drag;
+}
+.titlebar-name { font-size: 13px; font-weight: 700; letter-spacing: 0.2px; color: var(--text); }
+.titlebar-version { font-size: 12px; color: var(--dim); white-space: nowrap; }
+
+.titlebar-controls { display: flex; align-items: stretch; height: 100%; -webkit-app-region: no-drag; }
+.titlebar-controls-win { margin-left: 4px; margin-right: -8px; }
+.wc {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--muted); cursor: pointer;
+  padding: 0; transition: background 0.12s, color 0.12s;
+}
+.wc-min-win, .wc-max-win, .wc-close-win { width: 46px; height: 100%; }
+.wc-min-win:hover, .wc-max-win:hover { background: rgba(240, 237, 232, 0.08); color: var(--text); }
+.wc-close-win:hover { background: #c42b1c; color: #fff; }
+
+.titlebar-controls-mac { gap: 8px; align-items: center; padding: 0 4px 0 2px; }
+.titlebar-controls-spacer-mac { width: 64px; flex: none; }
+.wc-close, .wc-min, .wc-max {
+  width: 12px; height: 12px; border-radius: 50%; padding: 0;
+}
+.wc-close { background: #ff5f57; }
+.wc-min { background: #febc2e; }
+.wc-max { background: #28c840; }
+.wc-close:hover, .wc-min:hover, .wc-max:hover { filter: brightness(1.1); }
 
 .bar-row { display: flex; align-items: stretch; gap: 10px; flex: none; margin: 8px 16px 0; }
 .top-bar {

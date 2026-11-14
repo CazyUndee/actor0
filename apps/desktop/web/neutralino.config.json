@@ -19,8 +19,8 @@
     "os.showNotification",
     "events.*",
     "debug.*",
-    "window.setTitle",
-    "app.exit"
+    "window.*",
+    "app.*"
   ],
   "commandAllowList": [
     "node"
@@ -40,11 +40,12 @@
       "resizable": true,
       "exitProcessOnClose": true,
       "useSavedState": true,
-      "enableInspector": true,
-      "injectClientLibrary": true
+      "enableInspector": false,
+      "injectClientLibrary": true,
+      "borderless": true
     },
     "chrome": {
-      "args": "",
+      "args": "--user-data-dir=${NL_PATH}/.chrome-profile --class=actor0",
       "injectClientLibrary": true
     }
   },

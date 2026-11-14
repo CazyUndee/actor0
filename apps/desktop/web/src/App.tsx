@@ -13,6 +13,7 @@ import {
   FACE_CHAR,
   type ConversationState,
 } from "./conversation";
+import { mascotDataUri, needsCustomControls, platform, setFavicon } from "./mascot";
 import { SPINNER_FRAMES } from "./theme";
 import { parseSlash } from "./slash";
 import type { AgentInfo, ConfigSnapshot, McpStatus, ProviderKind, SessionSummary, UsageSnapshot } from "./protocol";
@@ -55,6 +56,24 @@ export function App() {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const reasoningStartedAtRef = useRef<number | null>(null);
   const turnStartedAtRef = useRef<number | null>(null);
+
+  const plat = useMemo(() => platform(), []);
+  const showWindowControls = useMemo(() => needsCustomControls(), []);
+  const [maximized, setMaximized] = useState(false);
+
+  const minimizeWindow = useCallback(() => { void window.Neutralino?.window?.minimize?.(); }, []);
+  const toggleMaximizeWindow = useCallback(async () => {
+    const w = window.Neutralino?.window;
+    if (!w?.isMaximized || !w.maximize || !w.unmaximize) return;
+    const isMax = await w.isMaximized();
+    if (isMax) await w.unmaximize(); else await w.maximize();
+    setMaximized(!isMax);
+  }, []);
+  const closeWindow = useCallback(() => {
+    const app = window.Neutralino?.app;
+    if (app?.exit) { void app.exit(); return; }
+    void window.Neutralino?.window?.close?.();
+  }, []);
 
   // --- the client ----------------------------------------------------------
 
@@ -323,6 +342,10 @@ export function App() {
     busy,
   });
 
+  // The mascot is the app's identity: keep the favicon in lockstep with its
+  // current state so the taskbar/tab reflects what the agent is doing.
+  useEffect(() => { setFavicon(face); }, [face]);
+
   const providerLabel = snapshot?.provider?.model ?? snapshot?.config.model ?? "no provider";
   const providerName = snapshot?.activeProvider ?? "built-in";
   const bridgeLabel = agentInfo ? `${agentInfo.bridge} · ${agentInfo.shell}` : "";
@@ -335,12 +358,53 @@ export function App() {
     return "working…";
   }, [conversation.live]);
 
+  const version = `v${agentInfo?.version ?? "—"}`;
+  const mascotSrc = mascotDataUri(face);
+
   return (
     <div className="app">
       <div className="shell">
-        <div className="chrome-row">
-          <div className="brand-mark">actor0</div>
-          <span className="brand-version">v{agentInfo?.version ?? "—"}</span>
+        <div className={`titlebar ${plat === "mac" ? "titlebar-mac" : "titlebar-win"}`} id="titlebar">
+          {plat === "mac" ? (
+            <>
+              {showWindowControls ? (
+                <div className="titlebar-controls titlebar-controls-mac">
+                  <button type="button" className="wc wc-close" onClick={closeWindow} aria-label="Close" />
+                  <button type="button" className="wc wc-min" onClick={minimizeWindow} aria-label="Minimize" />
+                  <button type="button" className="wc wc-max" onClick={() => void toggleMaximizeWindow()} aria-label={maximized ? "Restore" : "Maximize"} />
+                </div>
+              ) : <div className="titlebar-controls-spacer-mac" />}
+              <div className="titlebar-drag" />
+              <span className="titlebar-version">{version}</span>
+              <img className="titlebar-mascot" src={mascotSrc} alt="" aria-hidden="true" />
+              <span className="titlebar-name">actor0</span>
+              <div className="titlebar-drag" />
+            </>
+          ) : (
+            <>
+              <img className="titlebar-mascot" src={mascotSrc} alt="" aria-hidden="true" />
+              <span className="titlebar-name">actor0</span>
+              <div className="titlebar-drag" />
+              <span className="titlebar-version">{version}</span>
+              {showWindowControls ? (
+                <div className="titlebar-controls titlebar-controls-win">
+                  <button type="button" className="wc wc-min-win" onClick={minimizeWindow} aria-label="Minimize" title="Minimize">
+                    <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+                  </button>
+                  <button type="button" className="wc wc-max-win" onClick={() => void toggleMaximizeWindow()} aria-label={maximized ? "Restore" : "Maximize"} title={maximized ? "Restore" : "Maximize"}>
+                    {maximized ? (
+                      <svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 3v5h5V3H2zm1 1h3v3H3V4zm2-2h5v5H8V3H5V2z" fill="currentColor"/></svg>
+                    ) : (
+                      <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor"/></svg>
+                    )}
+                  </button>
+                  <button type="button" className="wc wc-close-win" onClick={closeWindow} aria-label="Close" title="Close">
+                    <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" strokeWidth="1.2"/></svg>
+                  </button>
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
 
         <div className="bar-row">

@@ -64,11 +64,13 @@ async function startAgent() {
 }
 
 async function main() {
+  const mode = process.argv.includes("--window") ? "window" : "chrome";
   const { port } = await startAgent();
 
-  // Launch Neutralino in chrome mode. The UI discovers the agent via the port
-  // file we just wrote; it no longer needs the in-page Neutralino spawn path.
-  const neu = spawn(neuExe, ["--load-dir-res", "--path=.", "--mode=chrome"], {
+  // The UI discovers the agent via the port file we just wrote. Chrome mode is
+  // the default because window mode (WebView2) segfaults intermittently on some
+  // machines; pass --window for the frameless native shell when it is stable.
+  const neu = spawn(neuExe, ["--load-dir-res", "--path=.", `--mode=${mode}`], {
     cwd: web,
     stdio: "inherit",
   });
@@ -85,7 +87,7 @@ async function main() {
     process.exit(1);
   });
 
-  console.log(`[run] Neutralino launched (chrome mode). Agent on ${port}. Close the window to exit.`);
+  console.log(`[run] Neutralino launched (${mode} mode). Agent on ${port}. Close the window to exit.`);
 }
 
 main().catch((err) => {
