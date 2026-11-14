@@ -22,64 +22,19 @@ const shellModeFile = path.join(web, "resources", "app", "shell-mode.json");
 const authInfoFile = path.join(web, ".tmp", "auth_info.json");
 const neuExe = path.join(web, "bin", "neutralino-win_x64.exe");
 
-/**
- * Ask DWM to round the native window's corners.
- *
- * CSS border-radius rounds the *content*; the OS still composites a square
- * top-level window, so the"rounding" was invisible: WebView2 paints an
- * opaque square and nothing shows through. Windows 11 can round any window
- * via DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND),
- * which is what this does — DWM then clips *everything* outside the curve,
- * content included, and the desktop shows through at the corners.
- *
- * Borderless (WS_POPUP-style) windows do not get the OS default rounding,
- * so the app must ask explicitly — same as Chrome does for its own windows.
- * PowerShell is the vehicle because the launcher is a script, not an addon.
- */
-function applyRoundedCorners() {
-  const ps = `
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public class Dwc {
-  [DllImport("dwmapi.dll")]
-  public static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);
-}
-'@
-$deadline = (Get-Date).AddSeconds(15)
-while ((Get-Date) -lt $deadline) {
-  $p = Get-Process neutralino-win_x64 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-  if ($p) {
-    $pref = 2 # DWMWCP_ROUND
-    [Dwc]::DwmSetWindowAttribute($p.MainWindowHandle, 33, [ref]$pref, 4) | Out-Null
-    exit 0
-  }
-  Start-Sleep -Milliseconds 250
-}
-exit 1
-`;
-  const win = process.platform === "win32";
-  if (!win) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.on("exit", (code) => resolve(code === 0));
-    child.on("error", () => resolve(false));
-  });
-}
-
 const children = new Set();
+
 function killAll() {
   for (const child of children) {
     try { child.kill(); } catch { /* already gone */ }
   }
 }
+
 process.on("exit", killAll);
 process.on("SIGINT", () => { killAll(); process.exit(130); });
 process.on("SIGTERM", () => { killAll(); process.exit(143); });
 
+/** Start the agent and resolve with the port it reports on stdout. */
 async function startAgent() {
   const child = spawn("node", [agentBundle], {
     cwd: web,
@@ -113,6 +68,92 @@ async function startAgent() {
   return { child, port };
 }
 
+/**
+ * Strip the native frame and clip the window to a rounded rect.
+ *
+ * Two separate Windows behaviours, both of which paint a border the app
+ * cannot reach from CSS:
+ *
+ *  1. resizable:true makes Neutralino add WS_THICKFRAME. That frame is a real
+ *     non-client area: the client rect shrinks by 7px on every side and DWM
+ *     paints the band (it showed up as a light/blue strip along the top, with
+ *     the content starting below it). Removing the style makes the client area
+ *     the whole window, so the only border left is the CSS hairline.
+ *  2. DWM's own corner rounding is a fixed ~8px and a borderless window may
+ *     not get it at all, so the shape is set explicitly with SetWindowRgn: a
+ *     rounded rectangle at the app's own radius (16px), which clips the window
+ *     to that curve and lets the desktop show through at the corners.
+ *
+ * Resize is handled in the page (invisible edge handles) precisely because
+ * the native thick frame is gone, so the region is re-applied whenever the
+ * window size changes -- hence the watcher loop, which exits with the app.
+ */
+function applyFramelessRound() {
+  const ps = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class FrameFix {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
+  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
+  [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int i, int v);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
+  [DllImport("gdi32.dll")] public static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
+  [DllImport("user32.dll")] public static extern int SetWindowRgn(IntPtr h, IntPtr r, bool redraw);
+  [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);
+}
+'@
+$deadline = (Get-Date).AddSeconds(20)
+$h = [IntPtr]::Zero
+while ((Get-Date) -lt $deadline) {
+  $p = Get-Process neutralino-win_x64 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+  if ($p) { $h = $p.MainWindowHandle; break }
+  Start-Sleep -Milliseconds 250
+}
+if ($h -eq [IntPtr]::Zero) { exit 1 }
+$GWL_STYLE = -16
+$WS_THICKFRAME = 0x00040000
+$style = [FrameFix]::GetWindowLong($h, $GWL_STYLE)
+if (($style -band $WS_THICKFRAME) -ne 0) {
+  [FrameFix]::SetWindowLong($h, $GWL_STYLE, $style -band (-bnot $WS_THICKFRAME)) | Out-Null
+}
+$pref = 2
+[FrameFix]::DwmSetWindowAttribute($h, 33, [ref]$pref, 4) | Out-Null
+function Set-Region {
+  $cr = New-Object FrameFix+RECT
+  [FrameFix]::GetClientRect($h, [ref]$cr) | Out-Null
+  $w = $cr.R; $ht = $cr.B
+  if ($w -le 0 -or $ht -le 0) { return }
+  $d = 32
+  $rgn = [FrameFix]::CreateRoundRectRgn(0, 0, $w, $ht, $d, $d)
+  [FrameFix]::SetWindowRgn($h, $rgn, $true) | Out-Null
+}
+Set-Region
+$lastW = 0; $lastH = 0
+while ($true) {
+  $cr = New-Object FrameFix+RECT
+  [FrameFix]::GetClientRect($h, [ref]$cr) | Out-Null
+  if ($cr.R -ne $lastW -or $cr.B -ne $lastH) {
+    $lastW = $cr.R; $lastH = $cr.B
+    Set-Region
+  }
+  Start-Sleep -Milliseconds 150
+}
+`;
+  if (process.platform !== "win32") return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    children.add(child);
+    child.on("exit", (code) => { children.delete(child); resolve(code === 0); });
+    child.on("error", () => resolve(false));
+    // The watcher only exits when the app does; report success once it has had
+    // time to apply the first region.
+    setTimeout(() => resolve(true), 3_000);
+  });
+}
 async function main() {
   const mode = process.argv.includes("--window") ? "window" : "chrome";
   const { port } = await startAgent();
@@ -175,11 +216,8 @@ async function main() {
   // Round the native window once it exists (Windows 11 DWM; see the function
   // doc). Chrome mode already gets OS-rounded corners from Chrome itself.
   if (mode === "window") {
-    void applyRoundedCorners().then((ok) => {
-      console.log(ok ? "[run] window corners rounded (DWM)" : "[run] could not set DWM corner preference");
-      return makeResizable();
-    }).then((ok) => {
-      console.log(ok ? "[run] window made resizable (WS_THICKFRAME)" : "[run] could not set resize styles");
+    void applyFramelessRound().then((ok) => {
+      console.log(ok ? "[run] window frameless + rounded (region)" : "[run] could not set frameless/round region");
     });
   }
 
@@ -192,63 +230,3 @@ main().catch((err) => {
   process.exit(1);
 });
 
-/**
- * Make the borderless window resizable and properly frameless-looking.
- *
- * Neutralino's `borderless: true` creates the window without WS_THICKFRAME,
- * so the OS offers no resize edges at all — `resizable: true` in the config
- * just can't work in that mode. Restoring WS_THICKFRAME on the created window
- * brings OS resize (and aero-snap, double-click-maximize on the caption band)
- * without any visible frame, provided non-client rendering is handed to DWM
- * (DWMWA_NCRENDERING_POLICY=TRUE → DWMWNCR_USEWINDOWSTYLE keeps it minimal).
- *
- * This mirrors what Chrome does for its own frameless-but-resizable windows.
- */
-function makeResizable() {
-  const ps = `
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public class WinFix {
-  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
-  [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int i, int v);
-  [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);
-}
-'@
-$deadline = (Get-Date).AddSeconds(15)
-while ((Get-Date) -lt $deadline) {
-  $p = Get-Process neutralino-win_x64 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-  if ($p) {
-    $h = $p.MainWindowHandle
-    $GWL_STYLE = -16
-    $WS_THICKFRAME = 0x00040000
-    $WS_CAPTION   = 0x00C00000
-    $WS_MINIMIZEBOX = 0x00020000
-    $WS_MAXIMIZEBOX = 0x00010000
-    $style = [WinFix]::GetWindowLong($h, $GWL_STYLE)
-    if (($style -band $WS_THICKFRAME) -eq 0) {
-      # thick-frame + caption bits give resize, minimize/maximize animations and
-      # double-click state toggles; painting stays ours because DWM skips NC
-      # rendering for windows with rounded-corner preference set.
-      $new = $style -bor $WS_THICKFRAME -bor $WS_MINIMIZEBOX -bor $WS_MAXIMIZEBOX -bor $WS_CAPTION
-      [WinFix]::SetWindowLong($h, $GWL_STYLE, $new) | Out-Null
-    }
-    # Keep the top-level frame from growing its own shadow/border paint.
-    $ncpr = 2 # DWMWNCRP_DISABLED
-    [WinFix]::DwmSetWindowAttribute($h, 95, [ref]$ncpr, 4) | Out-Null
-    exit 0
-  }
-  Start-Sleep -Milliseconds 250
-}
-exit 1
-`;
-  if (process.platform !== "win32") return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.on("exit", (code) => resolve(code === 0));
-    child.on("error", () => resolve(false));
-  });
-}

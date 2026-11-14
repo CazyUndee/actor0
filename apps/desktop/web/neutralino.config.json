@@ -37,7 +37,7 @@
       "minWidth": 520,
       "minHeight": 420,
       "center": true,
-      "resizable": true,
+      "resizable": false,
       "exitProcessOnClose": true,
       "useSavedState": true,
       "enableInspector": false,

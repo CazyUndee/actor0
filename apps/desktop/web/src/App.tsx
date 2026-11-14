@@ -17,6 +17,14 @@ import { mascotDataUri, needsCustomControls, platform, setFavicon } from "./masc
 import { SPINNER_FRAMES } from "./theme";
 import { parseSlash } from "./slash";
 import type { AgentInfo, ConfigSnapshot, McpStatus, ProviderKind, SessionSummary, UsageSnapshot } from "./protocol";
+
+/** One in-progress resize gesture (frameless window, edge handles). */
+type ResizeState = {
+  edge: string;
+  startX: number;
+  startY: number;
+  origin?: { x: number; y: number; width: number; height: number };
+};
 import { Composer } from "./components/Composer";
 import { EntryView } from "./components/Entry";
 import { McpPanel, ModelPanel, NoticeBar, ProviderPanel, SessionPanel, ThinkingPanel, UsagePanel } from "./components/Panels";
@@ -55,7 +63,7 @@ export function App() {
   const clientRef = useRef<AgentClient | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   /** Live drag state for the frameless-window title bar (saved between events). */
-  const dragging = useRef<{ startX: number; startY: number; armed: true; moving?: boolean } | undefined>(undefined);
+  const resizing = useRef<ResizeState | undefined>(undefined);
   const reasoningStartedAtRef = useRef<number | null>(null);
   const turnStartedAtRef = useRef<number | null>(null);
 
@@ -170,12 +178,15 @@ export function App() {
     if (!conversation.live.reasoning.trim()) reasoningStartedAtRef.current = null;
   }, [conversation.live.reasoning]);
 
-  // Frameless native window: pointer-based dragging. -webkit-app-region is
-  // a no-op under Neutralino's WebView2 host (the window never becomes a system
-  // drag region) and setDraggableRegion needs the element to exist before the
-  // client connects — which raced. Doing it in the page is the one route that
-  // works everywhere: mousedown on the title bar arms the drag, mousemove calls
-  // window.move with the cursor delta. Buttons and inputs opt out via class.
+  // Frameless native window: dragging the title bar.
+  //
+  // -webkit-app-region is a no-op under Neutralino's WebView2 host (the window
+  // never becomes a system drag region) and setDraggableRegion needs the
+  // element to exist before the client connects, which raced. Moving the window
+  // from JS on every pointermove also lags: one WebSocket round trip per event,
+  // so the window trails the pointer. beginDrag hands the gesture to Windows
+  // (ReleaseCapture + WM_SYSCOMMAND/SC_MOVE), which runs the system modal drag
+  // loop — it tracks the cursor exactly and at frame rate.
   useEffect(() => {
     if (window.NL_MODE !== "window" && !showWindowControls) return;
     const onPointerDown = (e: PointerEvent) => {
@@ -183,36 +194,87 @@ export function App() {
       if (!target || !target.closest(".titlebar")) return;
       if (target.closest("button, a, input, .titlebar-controls")) return;
       if (e.button !== 0) return;
-      dragging.current = { startX: e.screenX, startY: e.screenY, armed: true };
-    };
-    const onPointerMove = (e: PointerEvent) => {
-      const d = dragging.current;
-      if (!d?.armed) return;
-      const dx = e.screenX - d.startX;
-      const dy = e.screenY - d.startY;
-      if (d.moving !== true && Math.hypot(dx, dy) < 4) return;
-      if (d.moving !== true) d.moving = true;
       const w = window.Neutralino?.window;
-      if (!w) return;
-      // Move relative to the drag arming point, in one frame per event.
+      if (!w?.beginDrag) return;
+      e.preventDefault();
+      void w.beginDrag({ screenX: e.screenX, screenY: e.screenY }).catch(() => undefined);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [showWindowControls]);
+
+  // Frameless window: resize by dragging the edges.
+  //
+  // The window deliberately has no WS_THICKFRAME: the native thick frame is
+  // what painted the 7px light strip around the app (and DWM will not give it
+  // up — DWMWA_NCRENDERING_POLICY and DWMWA_BORDER_COLOR both leave it drawn,
+  // and DwmExtendFrameIntoClientArea does not move the client rect). Without
+  // it the client area is the whole window, so the only border is the CSS
+  // hairline. The cost is that the OS resize edges are gone, so they are
+  // rebuilt here: invisible strips on each edge/corner that move and size the
+  // window through the same Neutralino calls.
+  useEffect(() => {
+    if (window.NL_MODE !== "window" && !showWindowControls) return;
+    const MIN_W = 420;
+    const MIN_H = 320;
+    const onDown = (edge: string) => (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const state: ResizeState = { edge, startX: e.screenX, startY: e.screenY };
+      resizing.current = state;
       void (async () => {
         try {
-          const pos = await w.getPosition?.();
-          if (!pos || !w.move) return;
-          await w.move(pos.x + dx, pos.y + dy);
-        } catch { /* window API unavailable — dragging silently disabled */ }
+          const [pos, size] = await Promise.all([
+            window.Neutralino?.window?.getPosition?.(),
+            window.Neutralino?.window?.getSize?.(),
+          ]);
+          if (pos && size && resizing.current === state) state.origin = { ...pos, ...size };
+        } catch { /* ignore */ }
       })();
     };
-    const onPointerUp = (): void => { dragging.current = undefined; };
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
+    const onMove = (e: PointerEvent) => {
+      const r = resizing.current;
+      if (!r?.origin) return;
+      const w = window.Neutralino?.window;
+      if (!w?.move || !w.setSize) return;
+      const dx = e.screenX - r.startX;
+      const dy = e.screenY - r.startY;
+      const o = r.origin;
+      let { x, y, width, height } = o;
+      if (r.edge.includes("e")) width = Math.max(MIN_W, o.width + dx);
+      if (r.edge.includes("s")) height = Math.max(MIN_H, o.height + dy);
+      if (r.edge.includes("w")) {
+        width = Math.max(MIN_W, o.width - dx);
+        x = o.x + (o.width - width);
+      }
+      if (r.edge.includes("n")) {
+        height = Math.max(MIN_H, o.height - dy);
+        y = o.y + (o.height - height);
+      }
+      void (async () => {
+        try {
+          await w.move?.(x, y);
+          await w.setSize?.({ width, height });
+        } catch { /* ignore */ }
+      })();
+    };
+    const onUp = (): void => { resizing.current = undefined; };
+    const edges = Array.from(document.querySelectorAll<HTMLElement>("[data-resize-edge]"));
+    const bindings: Array<{ el: HTMLElement; handler: (e: PointerEvent) => void }> = [];
+    for (const el of edges) {
+      const handler = onDown(el.dataset.resizeEdge ?? "");
+      el.addEventListener("pointerdown", handler as EventListener);
+      bindings.push({ el, handler });
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
+      for (const { el, handler } of bindings) el.removeEventListener("pointerdown", handler as EventListener);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
   }, [showWindowControls]);
 
@@ -430,6 +492,18 @@ export function App() {
   return (
     <div className="app">
       <div className="shell">
+        {showWindowControls ? (
+          <div className="resize-edges" aria-hidden="true">
+            <span className="resize-edge resize-n" data-resize-edge="n" />
+            <span className="resize-edge resize-s" data-resize-edge="s" />
+            <span className="resize-edge resize-e" data-resize-edge="e" />
+            <span className="resize-edge resize-w" data-resize-edge="w" />
+            <span className="resize-edge resize-ne" data-resize-edge="ne" />
+            <span className="resize-edge resize-nw" data-resize-edge="nw" />
+            <span className="resize-edge resize-se" data-resize-edge="se" />
+            <span className="resize-edge resize-sw" data-resize-edge="sw" />
+          </div>
+        ) : null}
         <div className={`titlebar ${plat === "mac" ? "titlebar-mac" : "titlebar-win"}`} id="titlebar">
           {plat === "mac" ? (
             <>
