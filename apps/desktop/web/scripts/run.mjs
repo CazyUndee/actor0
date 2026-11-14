@@ -10,7 +10,7 @@
  * catches it and serves it to the UI as a static file.
  */
 import { spawn } from "node:child_process";
-import { mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,6 +19,7 @@ const web = path.resolve(here, "..");
 const agentBundle = path.join(web, "resources", "agent", "agent.mjs");
 const servedPortFile = path.join(web, "resources", "app", "agent-port.json");
 const shellModeFile = path.join(web, "resources", "app", "shell-mode.json");
+const authInfoFile = path.join(web, ".tmp", "auth_info.json");
 const neuExe = path.join(web, "bin", "neutralino-win_x64.exe");
 
 const children = new Set();
@@ -69,8 +70,8 @@ async function main() {
   const { port } = await startAgent();
 
   // Tell the UI which shell mode is active so it can load the Neutralino client
-  // correctly (window mode needs the injected client for native APIs; chrome mode
-  // must not load it against an empty token or the page is replaced with an error).
+  // correctly (window mode needs the client for native APIs; chrome mode must not
+  // load it against an empty token or the page is replaced with an error).
   await writeFile(shellModeFile, JSON.stringify({ mode }), "utf8");
 
   // The UI discovers the agent via the port file we just wrote. Chrome mode is
@@ -81,6 +82,24 @@ async function main() {
     stdio: "inherit",
   });
   children.add(neu);
+
+  // Neutralino writes its auth info once the server is up; expose the token so
+  // the page can connect the client library in window mode even when injection
+  // does not run (without this, window controls and dragging APIs are no-ops).
+  void (async () => {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      try {
+        const raw = await readFile(authInfoFile, "utf8");
+        const auth = JSON.parse(raw);
+        if (auth.nlToken && auth.nlPort) {
+          await writeFile(shellModeFile, JSON.stringify({ mode, nlToken: auth.nlToken, nlPort: auth.nlPort, nlConnectToken: auth.nlConnectToken }), "utf8");
+          return;
+        }
+      } catch { /* not written yet */ }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  })();
   neu.on("exit", async (code) => {
     children.delete(neu);
     await rm(servedPortFile, { force: true }).catch(() => {});

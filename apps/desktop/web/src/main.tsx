@@ -5,6 +5,79 @@ import { App } from "./App";
 import { setDiscoveredEndpoint } from "./client";
 import { available, startAgent } from "./shell";
 
+
+/** Connect the Neutralino client library when in window mode. */
+async function ensureNeutralinoClient(): Promise<void> {
+  const w = window as unknown as {
+    NL_MODE?: string;
+    NL_TOKEN?: string;
+    Neutralino?: {
+      init?: () => void;
+      events?: { on?: (name: string, handler: () => void) => Promise<void> };
+    };
+  };
+
+  const waitReady = (api: NonNullable<typeof w.Neutralino>): Promise<void> =>
+    new Promise<void>((resolve) => {
+      let settled = false;
+      const done = (): void => { if (!settled) { settled = true; resolve(); } };
+      try { void api.events?.on?.("ready", done); } catch { /* ignore */ }
+      setTimeout(done, 4_000);
+    });
+
+  // Already connected (injected with a real token and library).
+  if (w.Neutralino && w.NL_TOKEN) {
+    try { w.Neutralino.init?.(); } catch { /* already initialized */ }
+    await waitReady(w.Neutralino);
+    return;
+  }
+
+  // Only window mode needs the native client; chrome mode must not load it
+  // against an empty token (it replaces the page with NE_CL_IVCTOKN).
+  if (w.NL_MODE !== "window") return;
+
+  // Fetch the real token the launcher wrote (it appears shortly after start).
+  let token: string | undefined;
+  let nlPort: number | undefined;
+  for (let i = 0; i < 40; i++) {
+    try {
+      const res = await fetch("/shell-mode.json", { cache: "no-store" });
+      if (res.ok) {
+        const info = (await res.json()) as { nlToken?: string; nlPort?: number };
+        if (info.nlToken) { token = info.nlToken; nlPort = info.nlPort; break; }
+      }
+    } catch { /* not ready */ }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (!token) {
+    await NeutralinoLog("window mode: no Neutralino token available — native APIs disabled");
+    return;
+  }
+
+  w.NL_TOKEN = token;
+  if (nlPort) (w as { NL_PORT?: number }).NL_PORT = nlPort as unknown as undefined;
+
+  // Load the client library if injection didn't provide it.
+  if (!w.Neutralino) {
+    await new Promise<void>((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/neutralino.js";
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("failed to load neutralino.js"));
+      document.head.appendChild(s);
+    }).catch(() => {});
+  }
+
+  const api = (window as unknown as { Neutralino?: NonNullable<typeof w.Neutralino> }).Neutralino;
+  if (!api) {
+    await NeutralinoLog("window mode: neutralino.js loaded but Neutralino global missing");
+    return;
+  }
+  try { api.init?.(); } catch { /* ignore */ }
+  await waitReady(api);
+  await NeutralinoLog("Neutralino client connected (window mode)");
+}
+
 /**
  * Mount.
  *
@@ -16,33 +89,12 @@ import { available, startAgent } from "./shell";
  */
 async function boot(): Promise<void> {
   try {
-    // The client library defines `window.Neutralino` when injected, but its
-    // WebSocket is only connected after `init()`, and calls made before the
-    // socket opens are queued — while `spawnProcess` needs the socket live and
-    // its `spawnedProcess` listener registered before the spawn fires, or the
-    // port line is emitted to nobody. Waiting for `ready` is the documented
-    // sequencing; in a plain browser the globals are absent and this resolves
-    // immediately.
-    const Neutralino = (window as unknown as {
-      Neutralino?: {
-        init?: () => void;
-        events?: { on?: (name: string, handler: () => void) => Promise<void> };
-      };
-    }).Neutralino;
-    if (Neutralino) {
-      Neutralino.init?.();
-      await new Promise<void>((resolve) => {
-        let settled = false;
-        const done = (): void => {
-          if (!settled) {
-            settled = true;
-            resolve();
-          }
-        };
-        void Neutralino.events?.on?.("ready", done);
-        setTimeout(done, 3_000);
-      });
-    }
+    // In window mode the Neutralino client must be connected for native APIs
+    // (window controls, dragging). The static globals endpoint serves an empty
+    // token, so boot fetches the real one (written by the launcher) and loads
+    // the library before init. In chrome mode the library is intentionally not
+    // loaded — an empty-token connection destroys the page.
+    await ensureNeutralinoClient();
 
     let agentPort: number | undefined;
     if (available()) {
