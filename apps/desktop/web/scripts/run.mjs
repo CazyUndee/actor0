@@ -177,6 +177,9 @@ async function main() {
   if (mode === "window") {
     void applyRoundedCorners().then((ok) => {
       console.log(ok ? "[run] window corners rounded (DWM)" : "[run] could not set DWM corner preference");
+      return makeResizable();
+    }).then((ok) => {
+      console.log(ok ? "[run] window made resizable (WS_THICKFRAME)" : "[run] could not set resize styles");
     });
   }
 
@@ -188,3 +191,64 @@ main().catch((err) => {
   killAll();
   process.exit(1);
 });
+
+/**
+ * Make the borderless window resizable and properly frameless-looking.
+ *
+ * Neutralino's `borderless: true` creates the window without WS_THICKFRAME,
+ * so the OS offers no resize edges at all — `resizable: true` in the config
+ * just can't work in that mode. Restoring WS_THICKFRAME on the created window
+ * brings OS resize (and aero-snap, double-click-maximize on the caption band)
+ * without any visible frame, provided non-client rendering is handed to DWM
+ * (DWMWA_NCRENDERING_POLICY=TRUE → DWMWNCR_USEWINDOWSTYLE keeps it minimal).
+ *
+ * This mirrors what Chrome does for its own frameless-but-resizable windows.
+ */
+function makeResizable() {
+  const ps = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class WinFix {
+  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
+  [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int i, int v);
+  [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);
+}
+'@
+$deadline = (Get-Date).AddSeconds(15)
+while ((Get-Date) -lt $deadline) {
+  $p = Get-Process neutralino-win_x64 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+  if ($p) {
+    $h = $p.MainWindowHandle
+    $GWL_STYLE = -16
+    $WS_THICKFRAME = 0x00040000
+    $WS_CAPTION   = 0x00C00000
+    $WS_MINIMIZEBOX = 0x00020000
+    $WS_MAXIMIZEBOX = 0x00010000
+    $style = [WinFix]::GetWindowLong($h, $GWL_STYLE)
+    if (($style -band $WS_THICKFRAME) -eq 0) {
+      # thick-frame + caption bits give resize, minimize/maximize animations and
+      # double-click state toggles; painting stays ours because DWM skips NC
+      # rendering for windows with rounded-corner preference set.
+      $new = $style -bor $WS_THICKFRAME -bor $WS_MINIMIZEBOX -bor $WS_MAXIMIZEBOX -bor $WS_CAPTION
+      [WinFix]::SetWindowLong($h, $GWL_STYLE, $new) | Out-Null
+    }
+    # Keep the top-level frame from growing its own shadow/border paint.
+    $ncpr = 2 # DWMWNCRP_DISABLED
+    [WinFix]::DwmSetWindowAttribute($h, 95, [ref]$ncpr, 4) | Out-Null
+    exit 0
+  }
+  Start-Sleep -Milliseconds 250
+}
+exit 1
+`;
+  if (process.platform !== "win32") return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("exit", (code) => resolve(code === 0));
+    child.on("error", () => resolve(false));
+  });
+}

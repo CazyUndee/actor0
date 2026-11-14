@@ -40,6 +40,11 @@ export type NeutralinoApi = {
     close?(): Promise<void>;
     setDraggableRegion?(domId: string): Promise<void>;
     unsetDraggableRegion?(domId: string): Promise<void>;
+    getPosition?(): Promise<{ x: number; y: number }>;
+    move?(x: number, y: number): Promise<void>;
+    getSize?(): Promise<{ width: number; height: number }>;
+    setSize?(size: { width: number; height: number }): Promise<void>;
+    beginDrag?(point: { screenX: number; screenY: number }): Promise<void>;
   };
 };
 

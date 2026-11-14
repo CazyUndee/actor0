@@ -31,11 +31,12 @@
 html, body, #root { height: 100%; margin: 0; }
 html { overflow: hidden; }
 body {
-  /* Flat black backdrop: the shell is a rounded card floating on it, and the
-     cut corners only read as rounded when they stand against something. The
-     old radial gradients were nearly the same colour as the shell — rounding
-     was applied and invisible. */
-  background: #000;
+  /* No backdrop, no frame: DWM (DWMWCP_ROUND, set by the launcher) owns the
+     corner shape entirely, and the shell fills the window to the DWM curve.
+     The old black backdrop + 8px inset existed to fake rounded corners when
+     the native window was still square; with real DWM rounding they are dead
+     weight — removing them makes the CSS hairline ring the only border. */
+  background: var(--bg);
   color: var(--text);
   font: 14px/1.45 var(--font-mono);
   -webkit-font-smoothing: antialiased;
@@ -44,7 +45,7 @@ body {
 ::selection { background: var(--surface3); color: var(--text); }
 button, input, textarea { font: inherit; color: inherit; }
 
-.app { height: 100%; display: flex; align-items: stretch; justify-content: center; padding: 8px; }
+.app { height: 100%; display: flex; align-items: stretch; justify-content: center; }
 .shell {
   flex: 1;
   min-height: 0;
@@ -52,10 +53,10 @@ button, input, textarea { font: inherit; color: inherit; }
   display: flex;
   flex-direction: column;
   background: linear-gradient(180deg, rgba(26, 26, 26, 0.82), rgba(17, 17, 17, 0.92));
-  border-radius: 16px;
+  border-radius: var(--radius-lg); /* same curve family as every other element; DWM clips to its own curve outside this */
   overflow: hidden;
   position: relative;
-  box-shadow: inset 0 0 0 1px rgba(240, 237, 232, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(240, 237, 232, 0.16); /* the one and only border */
 }
 
 /* Custom title bar — replaces the native top bar in borderless window mode and

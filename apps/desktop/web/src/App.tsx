@@ -54,6 +54,8 @@ export function App() {
 
   const clientRef = useRef<AgentClient | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  /** Live drag state for the frameless-window title bar (saved between events). */
+  const dragging = useRef<{ startX: number; startY: number; armed: true; moving?: boolean } | undefined>(undefined);
   const reasoningStartedAtRef = useRef<number | null>(null);
   const turnStartedAtRef = useRef<number | null>(null);
 
@@ -168,18 +170,50 @@ export function App() {
     if (!conversation.live.reasoning.trim()) reasoningStartedAtRef.current = null;
   }, [conversation.live.reasoning]);
 
-  // Frameless native window: register the title bar as the drag handle.
-  // CSS -webkit-app-region works in WebView2; the API is the explicit fallback.
+  // Frameless native window: pointer-based dragging. -webkit-app-region is
+  // a no-op under Neutralino's WebView2 host (the window never becomes a system
+  // drag region) and setDraggableRegion needs the element to exist before the
+  // client connects — which raced. Doing it in the page is the one route that
+  // works everywhere: mousedown on the title bar arms the drag, mousemove calls
+  // window.move with the cursor delta. Buttons and inputs opt out via class.
   useEffect(() => {
     if (window.NL_MODE !== "window" && !showWindowControls) return;
-    const trySet = () => {
-      const w = window.Neutralino?.window;
-      if (w?.setDraggableRegion) void w.setDraggableRegion("titlebar").catch(() => {});
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || !target.closest(".titlebar")) return;
+      if (target.closest("button, a, input, .titlebar-controls")) return;
+      if (e.button !== 0) return;
+      dragging.current = { startX: e.screenX, startY: e.screenY, armed: true };
     };
-    trySet();
-    const t = setInterval(trySet, 500);
-    const stop = setTimeout(() => clearInterval(t), 5000);
-    return () => { clearInterval(t); clearTimeout(stop); };
+    const onPointerMove = (e: PointerEvent) => {
+      const d = dragging.current;
+      if (!d?.armed) return;
+      const dx = e.screenX - d.startX;
+      const dy = e.screenY - d.startY;
+      if (d.moving !== true && Math.hypot(dx, dy) < 4) return;
+      if (d.moving !== true) d.moving = true;
+      const w = window.Neutralino?.window;
+      if (!w) return;
+      // Move relative to the drag arming point, in one frame per event.
+      void (async () => {
+        try {
+          const pos = await w.getPosition?.();
+          if (!pos || !w.move) return;
+          await w.move(pos.x + dx, pos.y + dy);
+        } catch { /* window API unavailable — dragging silently disabled */ }
+      })();
+    };
+    const onPointerUp = (): void => { dragging.current = undefined; };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
   }, [showWindowControls]);
 
   // Zoom stays off: a desktop app has a fixed layout, and pinch/ctrl+wheel
