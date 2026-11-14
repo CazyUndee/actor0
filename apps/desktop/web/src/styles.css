@@ -29,14 +29,14 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
-html { overflow: hidden; }
+html { overflow: hidden; background: transparent; }
 body {
-  /* No backdrop, no frame: DWM (DWMWCP_ROUND, set by the launcher) owns the
-     corner shape entirely, and the shell fills the window to the DWM curve.
-     The old black backdrop + 8px inset existed to fake rounded corners when
-     the native window was still square; with real DWM rounding they are dead
-     weight — removing them makes the CSS hairline ring the only border. */
-  background: var(--bg);
+  /* The window is transparent (modes.window.transparent), so the page's alpha is
+     the window's alpha: this must be transparent, or the corners come back as
+     opaque blocks. The 16px card below is the silhouette, and its curve is
+     anti-aliased by the browser at any radius — which is what neither a clip
+     region (hard mask) nor DWM (fixed 8px) can do. */
+  background: transparent;
   color: var(--text);
   font: 14px/1.45 var(--font-mono);
   -webkit-font-smoothing: antialiased;
@@ -52,16 +52,27 @@ button, input, textarea { font: inherit; color: inherit; }
   width: 100%;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, rgba(26, 26, 26, 0.82), rgba(17, 17, 17, 0.92));
-  /* Matches DWM's fixed ~8px window radius (DWMWCP_ROUND): the ring then
-     follows the window curve exactly, with no clipped crescent at the corners.
-     A larger CSS radius cannot be honoured — the OS caps window rounding and
-     a translucent window (the only way CSS could own the silhouette) is not
-     available through Neutralino's WebView2 host. */
-  border-radius: 8px;
+  background: linear-gradient(180deg, #1a1a1a, #111);
+  /* The silhouette: the window is transparent, so this radius is the window's
+     corner radius. Anti-aliased by the browser, at any size. */
+  border-radius: var(--radius-lg);
   overflow: hidden;
   position: relative;
-  box-shadow: inset 0 0 0 1px rgba(240, 237, 232, 0.16); /* the one and only border */
+}
+/* The one and only border, drawn as an overlay.
+
+   An inset box-shadow on .shell paints *under* the children, and the titlebar
+   reaches every edge — so the ring was only visible where nothing covered it,
+   i.e. the corners, which is exactly the "rounded grey corner with nothing
+   inside" look. As an ::after above the content it reads on all four edges. */
+.shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(240, 237, 232, 0.16);
+  pointer-events: none;
+  z-index: 40;
 }
 
 /* Custom title bar — replaces the native top bar in borderless window mode and

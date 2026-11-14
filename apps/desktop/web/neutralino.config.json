@@ -43,7 +43,8 @@
       "enableInspector": false,
       "injectClientLibrary": false,
       "borderless": true,
-      "sizeConstraint": false
+      "sizeConstraint": false,
+      "transparent": true
     },
     "chrome": {
       "args": "--user-data-dir=${NL_PATH}/.chrome-profile --class=actor0 --disable-pinch --disable-zoom --app-window-title=actor0",
