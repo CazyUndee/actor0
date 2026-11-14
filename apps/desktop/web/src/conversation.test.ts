@@ -203,3 +203,39 @@ describe("the command surface", () => {
     assert.equal(withUserInput(state, "hi").entries.length, 2);
   });
 });
+
+describe("M3 — rendering a resumed CLI session", () => {
+  // M3's second half: a conversation started in the CLI renders identically in
+  // the desktop once resumed. entriesFromMessages is that path — the picker
+  // loads StoredSession.messages and this turns them into transcript entries.
+  // The fixtures mirror what the CLI actually writes: stray system messages it
+  // never persists are absent, but cleared tool payloads from its compaction
+  // are present, and tool results follow their calls.
+  it("turns a CLI transcript (with a cleared tool payload) into the same entries a native one gives", () => {
+    const entries = entriesFromMessages([
+      { role: "user", content: "what is in package.json?" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: "t1", type: "function", function: { name: "read", arguments: "{\"path\":\"package.json\"}" } }],
+      },
+      { role: "tool", content: "[cleared: read 1,200 chars to save context]", tool_call_id: "t1", name: "read" },
+      { role: "assistant", content: "It is the workspace root." },
+    ] as never);
+    assert.equal(entries.length, 3);
+    assert.equal(entries[0]!.kind, "user");
+    assert.equal(entries[1]!.kind, "tool");
+    assert.equal(entries[1]!.status, "ok", "a cleared payload is compaction, not an error");
+    assert.ok((entries[1] as { output: { data: string } }).output.data.includes("cleared"));
+    assert.equal(entries[2]!.kind, "assistant");
+  });
+
+  it("marks a CLI session's partial answers as partial, matching the live stream", () => {
+    const entries = entriesFromMessages([
+      { role: "user", content: "go" },
+      { role: "assistant", content: "half an answer\n\n[interrupted]" },
+    ] as never);
+    assert.equal(entries.length, 2);
+    assert.equal((entries[1] as { partial?: boolean }).partial, true);
+  });
+});

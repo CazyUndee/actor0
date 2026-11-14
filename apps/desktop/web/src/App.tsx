@@ -603,11 +603,12 @@ export function App() {
                   void (async () => {
                     await clientRef.current?.call("session.load", { id });
                     setSessionId(id);
+                    setSessionTitle(sessions.find((s) => s.id === id)?.title);
                     setBlocked(false);
                     setConversation(initialConversation());
-                    const loaded = await clientRef.current?.call("conversation.get");
-                    if (loaded && loaded.messages.length > 0) {
-                      setConversation({ entries: entriesFromMessages(loaded.messages as never), live: initialConversation().live });
+                    const current = await clientRef.current?.call("conversation.get");
+                    if (current && current.messages.length > 0) {
+                      setConversation({ entries: entriesFromMessages(current.messages as never), live: initialConversation().live });
                     }
                     void refreshSessions();
                   })().catch((error) => setNotice({ tone: "error", text: String((error as Error).message) }));

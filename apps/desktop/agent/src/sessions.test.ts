@@ -124,3 +124,81 @@ describe("the stored file", () => {
     assert.ok(onDisk.messages.some((message) => message.content.includes("cleared from the saved transcript")));
   });
 });
+
+describe("M3 — session sharing with the CLI", () => {
+  // M3 is exactly this: a session written by one host opens in the other, and
+  // a round trip through the desktop never breaks the CLI's reader. Both hosts
+  // share ~/.local/share/actor0/sessions and the StoredSession shape, but
+  // nothing but a test holds the two honest as the formats drift (the desktop
+  // added cwd/title in build 84; the CLI has its own budget-based compaction).
+  // These tests pin the interoperation with a CLI-shaped file built by hand —
+  // no CLI import, so the desktop suite stays boundary-clean.
+
+  /** The CLI's StoredSession shape: exactly these keys, and no cwd/title. */
+  function writeCliSession(id: string, msgs: ChatMessage[]): void {
+    const payload = {
+      version: 1,
+      id,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T01:00:00.000Z",
+      model: "cli-model",
+      messages: msgs,
+    };
+    writeFileSync(join(sessionsDir(), `${id}.json`), JSON.stringify(payload, null, 2), "utf8");
+  }
+
+  const cliShape = (raw: string): Record<string, unknown> => JSON.parse(raw) as Record<string, unknown>;
+
+  it("loads a CLI-written session, including one with cleared tool payloads", () => {
+    const msgs: ChatMessage[] = [
+      { role: "user", content: "read the config" },
+      { role: "assistant", content: "", tool_calls: [{ id: "t1", type: "function", function: { name: "read", arguments: "{}" } }] },
+      // The CLI's own compaction marker — a desktop resume must show it as-is.
+      { role: "tool", content: "[cleared: read 4,000 chars to save context]", tool_call_id: "t1", name: "read" },
+      { role: "assistant", content: "The config sets the model." },
+    ];
+    writeCliSession("2026-03-03T00-00-00-000Z", msgs);
+    const loaded = loadSession("2026-03-03T00-00-00-000Z");
+    assert.ok(loaded, "a CLI-written session must load");
+    assert.equal(loaded.messages.length, 4);
+    assert.match(loaded.messages[2]!.content, /cleared/);
+  });
+
+  it("keeps every message through a desktop round trip, so the CLI can reopen it", () => {
+    const msgs: ChatMessage[] = [
+      { role: "user", content: "hello from the CLI" },
+      { role: "assistant", content: "hello from the model" },
+    ];
+    writeCliSession("2026-04-04T00-00-00-000Z", msgs);
+    const loaded = loadSession("2026-04-04T00-00-00-000Z")!;
+    // A desktop resume persists the session again (title/cwd added, transcript kept).
+    saveSession({
+      id: loaded.id,
+      createdAt: loaded.createdAt,
+      updatedAt: new Date().toISOString(),
+      model: loaded.model,
+      messages: loaded.messages,
+      cwd: "d:/somewhere",
+      title: "a CLI conversation",
+    });
+    const roundTripped = cliShape(readFileSync(join(sessionsDir(), `${loaded.id}.json`), "utf8"));
+    // The fields the CLI reads are intact, and unknown-to-CLI fields are
+    // additive — a CLI load of this file keeps working (its loader filters by
+    // shape and ignores extras).
+    assert.equal((roundTripped.messages as { role: string }[]).length, 2);
+    assert.equal(roundTripped.id, loaded.id);
+    assert.equal(roundTripped.model, "cli-model");
+    assert.equal(typeof roundTripped.cwd, "string");
+    assert.equal(roundTripped.title, "a CLI conversation");
+  });
+
+  it("lists a CLI session in the picker with no title and no cwd", () => {
+    writeCliSession("2026-05-05T00-00-00-000Z", [{ role: "user", content: "hi" }, { role: "assistant", content: "yo" }]);
+    const summaries = listSessionSummaries();
+    const cli = summaries.find((summary) => summary.id === "2026-05-05T00-00-00-000Z");
+    assert.ok(cli, "a CLI session appears in the desktop picker");
+    assert.equal(cli.title, undefined, "a CLI session has no title until the desktop writes one");
+    assert.equal(cli.cwd, undefined, "a CLI session has no cwd until the desktop writes one");
+    assert.equal(cli.messageCount, 2);
+  });
+});
