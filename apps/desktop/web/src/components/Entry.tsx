@@ -126,16 +126,16 @@ export function EntryView({ entry }: { entry: Entry }) {
 
 function ReasoningEntry({ entry }: { entry: Extract<Entry, { kind: "reasoning" }> }) {
   const [open, setOpen] = useState(false);
-  const firstLine = entry.text.split("\n")[0] ?? "";
   return (
     <div className="entry reasoning">
-      <button type="button" className="reasoning-header" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-        <span className="reasoning-mark">{open ? "▾" : "▸"}</span>
-        <span className="reasoning-label">thought</span>
-        {entry.durationSeconds !== undefined ? <span className="reasoning-time">{formatDuration(entry.durationSeconds)}</span> : null}
-        <span className="reasoning-preview">{firstLine}</span>
-      </button>
-      {open ? <pre className="reasoning-body">{entry.text}</pre> : null}
+      <div className={`reasoning-box ${open ? "open" : ""}`}>
+        <button type="button" className="reasoning-header" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+          <span className="reasoning-mark">{open ? "⌄" : "›"}</span>
+          <span className="reasoning-label">thought</span>
+          {entry.durationSeconds !== undefined ? <span className="reasoning-time">{formatDuration(entry.durationSeconds)}</span> : null}
+        </button>
+        {open ? <pre className="reasoning-body">{entry.text}</pre> : null}
+      </div>
     </div>
   );
 }

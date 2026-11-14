@@ -56,6 +56,19 @@ describe("rendering an entry", () => {
     assert.ok(html.includes("err"));
     assert.ok(html.includes("shell"));
   });
+
+  it("uses chevron carets, not triangles, for expand/collapse", () => {
+    // The expand/collapse affordance is a v-shaped chevron. A filled triangle
+    // (▾/▸) read as a caret the user asked to be replaced; pin the glyphs so
+    // they do not creep back.
+    for (const entry of [
+      { kind: "reasoning" as const, text: "a thought" },
+      { kind: "tool" as const, name: "read", target: "a.ts", status: "ok" as const, output: { data: "x", text: "x" } },
+    ]) {
+      const html = markup(<EntryView entry={entry} />);
+      assert.ok(!html.includes("▾") && !html.includes("▸"), `triangle caret leaked into ${entry.kind}: ${html.slice(0, 200)}`);
+    }
+  });
 });
 
 describe("rendering markdown", () => {

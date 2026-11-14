@@ -486,6 +486,10 @@ export function App() {
     return "working…";
   }, [conversation.live]);
 
+  // The TUI shimmers the label exactly when the model is thinking or reading
+  // (not for every status line), so the shimmer keys off those two.
+  const shimmering = Boolean(conversation.live.reasoning || conversation.live.readingToolOutput);
+
   const version = `v${agentInfo?.version ?? "—"}`;
   const mascotSrc = mascotDataUri(face);
 
@@ -557,11 +561,11 @@ export function App() {
                 title={snapshot?.provider?.endpoint ?? "no endpoint configured"}
               >
                 <span className="dropdown-value">{providerName}</span>
-                <span className="dropdown-caret">▾</span>
+                <span className="dropdown-caret">⌄</span>
               </button>
               <button type="button" className="dropdown-trigger" onClick={() => setMode("model")}>
                 <span className="dropdown-value">{providerLabel}</span>
-                <span className="dropdown-caret">▾</span>
+                <span className="dropdown-caret">⌄</span>
               </button>
             </div>
             <span className="status-meta" title={bridgeLabel}>
@@ -606,7 +610,9 @@ export function App() {
           {busy ? (
             <div className="live">
               <span className="spinner">{SPINNER_FRAMES[frame]}</span>
-              <span className="live-status">{statusLine}</span>
+              {/* The ChatGPT-style shimmer from the TUI: a soft highlight sweeping
+                  across the label while the model is thinking/reading. */}
+              <span className={`live-status${shimmering ? " shimmer" : ""}`}>{statusLine}</span>
               {elapsed > 0 ? <span className="live-time">{elapsed}s</span> : null}
               {conversation.live.retrying ? <span className="live-note">retry {conversation.live.retrying.attempt}</span> : null}
             </div>

@@ -83,7 +83,10 @@ export function Composer(props: {
         </div>
       ) : null}
 
-      <div className={`composer ${props.busy ? "busy" : ""}`}>
+      <div
+        className={`composer ${props.busy ? "busy" : ""}`}
+        onClick={() => textareaRef.current?.focus()}
+      >
         <textarea
           ref={textareaRef}
           className="composer-input"

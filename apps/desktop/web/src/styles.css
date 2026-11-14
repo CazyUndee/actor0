@@ -212,7 +212,7 @@ button, input, textarea { font: inherit; color: inherit; }
 .stream-text { margin: 0; white-space: pre-wrap; font: inherit; }
 .partial-note { margin-top: 6px; font-size: 12px; color: var(--warning); }
 
-.md { display: flex; flex-direction: column; gap: 8px; }
+.md { display: flex; flex-direction: column; gap: 14px; }
 .md-heading { margin: 4px 0 0; font-size: 15px; font-weight: 700; }
 .md-para { margin: 0; white-space: pre-wrap; }
 .md-code {
@@ -221,6 +221,7 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .md-link { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
 .md-list { margin: 0; padding-left: 20px; }
+.md-list li + li { margin-top: 6px; }
 .md-quote { margin: 0; padding-left: 12px; border-left: 2px solid var(--border-subtle); color: var(--muted); }
 .md-rule { border: none; border-top: 2px solid var(--border-subtle); margin: 4px 0; }
 .md-fence {
@@ -253,16 +254,35 @@ button, input, textarea { font: inherit; color: inherit; }
 .diff-line.add { color: var(--success); }
 .diff-line.del { color: var(--error); }
 
+/* The thinking block is a rounded-rectangle card. Minimised it is a single
+   1-row-tall rounded rectangle; expanded it holds the body inside the same
+   rounded frame. The body springs down into place when it appears. */
+.reasoning-box {
+  border: 2px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface2);
+  overflow: hidden;
+}
 .reasoning-header {
-  display: flex; align-items: baseline; gap: 8px; width: 100%;
-  padding: 4px 2px; border: none; background: transparent; cursor: pointer; text-align: left;
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 12px; border: none; background: transparent; cursor: pointer; text-align: left;
   color: var(--dim); font-size: 12.5px;
 }
 .reasoning-mark { color: var(--dim); }
 .reasoning-label { color: var(--muted); }
-.reasoning-time { color: var(--dim); }
-.reasoning-preview { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.reasoning-body { margin: 4px 0 0; padding: 8px 12px; border-left: 2px solid var(--border-subtle); color: var(--muted); font: 12.5px/1.5 var(--font-mono); white-space: pre-wrap; max-height: 320px; overflow: auto; }
+.reasoning-time { color: var(--dim); margin-left: auto; }
+.reasoning-body {
+  margin: 0; padding: 10px 14px; border-top: 2px solid var(--border-subtle);
+  color: var(--muted); font: 12.5px/1.5 var(--font-mono); white-space: pre-wrap;
+  max-height: 320px; overflow: auto;
+  /* Spring-down: starts a touch above and above it, then settles with a
+     slight overshoot (easeOutBack) so the text visibly drops into place. */
+  animation: spring-down 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes spring-down {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
 .plan-box { border: 2px solid rgba(107, 168, 196, 0.35); border-radius: var(--radius-sm); background: rgba(107, 168, 196, 0.06); padding: 10px 12px; }
 .plan-title { color: var(--info); font-weight: 600; }
@@ -272,16 +292,33 @@ button, input, textarea { font: inherit; color: inherit; }
 .live { display: flex; align-items: center; gap: 10px; width: min(820px, 86vw); padding: 2px; color: var(--muted); font-size: 13px; }
 .spinner { color: var(--accent-text); }
 .live-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+/* The TUI's ChatGPT-style shimmer, drawn in CSS: a soft highlight band sweeps
+   across the label while the model thinks. background-clip:text keeps it on the
+   glyphs only; the band is a moving light stop in the gradient. */
+.live-status.shimmer {
+  background: linear-gradient(90deg, var(--muted) 0%, #f2f0ec 50%, var(--muted) 100%);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-sweep 1.6s linear infinite;
+}
+@keyframes shimmer-sweep {
+  from { background-position: 150% 0; }
+  to { background-position: -150% 0; }
+}
 .live-time, .live-note { color: var(--dim); }
-.live-reasoning { width: min(820px, 86vw); color: var(--muted); font-size: 12.5px; }
+.live-reasoning { width: min(820px, 86vw); color: var(--muted); font-size: 12.5px; animation: spring-down 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .live-reasoning pre { margin: 0; white-space: pre-wrap; max-height: 200px; overflow: auto; border-left: 2px solid var(--border-subtle); padding-left: 10px; }
 
-.composer-area { position: relative; flex: none; width: min(820px, 86vw); margin: 0 auto; padding: 12px 16px; }
+.composer-area { position: relative; flex: none; width: min(820px, 86vw); margin: 0 auto; padding: 12px 0; }
 .composer {
-  display: flex; align-items: flex-end; gap: 10px;
+  display: flex; align-items: center; gap: 10px;
   padding: 8px 10px 8px 14px;
   border: 2px solid var(--border-strong); border-radius: 14px;
   background: #2a2a2a;
+  cursor: text;
 }
 .composer:focus-within { border-color: var(--crimson); }
 .composer.busy { border-color: rgba(125, 124, 121, 0.45); }
