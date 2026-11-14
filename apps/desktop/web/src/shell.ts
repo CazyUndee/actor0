@@ -97,7 +97,6 @@ export async function startAgent(options: { cwd?: string; token?: string; timeou
   const envs: Record<string, string> = {};
   if (options.cwd) envs.ACTOR0_AGENT_CWD = options.cwd;
   if (options.token) envs.ACTOR0_AGENT_TOKEN = options.token;
-
   let process: NeutralinoSpawnedProcess | undefined;
   try {
     process = await api.os.spawnProcess(agentCommand(), {
@@ -116,13 +115,36 @@ export async function startAgent(options: { cwd?: string; token?: string; timeou
   }
   if (port === undefined) throw new Error("the agent did not report a port in time");
 
-  // Record it where `discoverAgentUrl` can read it back on reconnect.
+  // Record it where `discoverAgentUrl` can read it back on reconnect. The
+  // token is stored alongside the port so a reconnecting UI presents the same
+  // secret the agent requires — without it the socket is refused.
   if (api.filesystem) {
     await api.filesystem.createDirectory(`${base}/.tmp`).catch(() => undefined);
-    await api.filesystem.writeFile(`${base}/${AGENT_INFO_PATH}`, JSON.stringify({ port, pid: process.pid })).catch(() => undefined);
+    await api.filesystem
+      .writeFile(
+        `${base}/${AGENT_INFO_PATH}`,
+        JSON.stringify({ port, pid: process.pid, ...(options.token ? { token: options.token } : {}) }),
+      )
+      .catch(() => undefined);
   }
 
   return port;
+}
+
+/**
+ * A fresh shared secret for the agent socket.
+ *
+ * The agent binds a localhost port that any local process can reach, and it
+ * exposes `config.get` (provider credentials) and `turn.send` (the whole tool
+ * set). Without a token the server disables auth entirely, so this is the one
+ * control that keeps a random local process — a dependency's postinstall, a
+ * second app, malware — from reading the config or driving the tools. 32 random
+ * bytes, hex-encoded, from the Web Crypto the webview already has.
+ */
+export function generateAgentToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /**

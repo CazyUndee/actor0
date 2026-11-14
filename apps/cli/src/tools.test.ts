@@ -551,6 +551,25 @@ test("shell returns stdout, and the exit code on the last line when non-zero", a
   assert.match(out, /Command exited with code 3$/, "the code rides last, next to where the model decides");
 });
 
+test("shell does not hand the model the agent's own credentials (T-3)", async () => {
+  // The model authors the command, so a prompt-injected model can run `env` and
+  // exfiltrate any value. The agent's own provider credential must never be in
+  // the child's environment: a shell command has no legitimate use for
+  // ACTOR0_API_KEY, and it is the one secret this tool used to leak.
+  const saved = process.env.ACTOR0_API_KEY;
+  process.env.ACTOR0_API_KEY = "sk-super-secret-value";
+  try {
+    const out = (await host(scratch()).execute(
+      call("shell", { command: script("echo KEY=$ACTOR0_API_KEY", "echo KEY=$env:ACTOR0_API_KEY", "echo KEY=%ACTOR0_API_KEY%") }),
+      signal,
+    )).text!;
+    assert.ok(!out.includes("sk-super-secret-value"), `the credential leaked into the child env: ${out}`);
+  } finally {
+    if (saved === undefined) delete process.env.ACTOR0_API_KEY;
+    else process.env.ACTOR0_API_KEY = saved;
+  }
+});
+
 test("shell reports a non-zero exit in the result, not as a rejection", async () => {
   // The model needs to see and reason about a failure, not have the turn abort.
   const out = (await host(scratch()).execute(
@@ -959,6 +978,32 @@ test("write creates a file whose parent directories do not exist yet", async () 
   const dir = scratch();
   await host(dir).execute(call("write", { path: "a/b/c/deep.txt", content: "hi" }), signal);
   assert.equal(readFileSync(join(dir, "a", "b", "c", "deep.txt"), "utf8"), "hi");
+});
+
+test("a dangling symlink inside the working directory cannot carry a write outside (T-1)", async () => {
+  // A *dangling* link (its target does not exist yet) defeats a realpath-only
+  // containment: realpath fails on it, so the deepest existing ancestor is the
+  // root and the link path is lexically inside — but the OS follows the link on
+  // write and lands outside. The tail must be lstat'd and the link followed so
+  // the escape is caught. This is the containment test the existing suite was
+  // missing: it only covered a link whose target already exists.
+  const outer = scratch();
+  const inner = join(outer, "project");
+  mkdirSync(inner);
+  const outsideTarget = join(outer, "planted.txt");
+  const link = join(inner, "escape.txt");
+  try {
+    // A file symlink to a path that does not exist yet — the dangling case.
+    symlinkSync(outsideTarget, link);
+  } catch {
+    return; // No symlink permission here.
+  }
+  const attack = host(inner);
+  await assert.rejects(
+    () => attack.execute(call("write", { path: "escape.txt", content: "planted by write tool" }), signal),
+    /outside the working directory/,
+  );
+  assert.equal(existsSync(outsideTarget), false, "nothing was written outside the root through the dangling link");
 });
 
 test("paths inside the working directory are fine, however they are spelled", async () => {

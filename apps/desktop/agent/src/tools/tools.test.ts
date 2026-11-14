@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -146,6 +146,57 @@ describe("containment", () => {
       await assert.rejects(() => within(dir, join(outside, "secret.txt"), true), /outside the working directory/);
     } finally {
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a write through a dangling symlink that points outside (T-1)", async () => {
+    // A dangling link (target does not exist yet) defeats a realpath-only check:
+    // realpath fails on it, so the deepest existing ancestor is the root and the
+    // link path is lexically inside — but the OS follows the link on write. The
+    // tail must be lstat'd and the link followed so the escape is caught.
+    const outer = mkdtempSync(join(tmpdir(), "actor0-dangling-"));
+    const root = join(outer, "root");
+    try {
+      mkdirSync(root);
+      const target = join(outer, "planted.txt");
+      const link = join(root, "escape.txt");
+      try {
+        symlinkSync(target, link);
+      } catch {
+        return; // No symlink permission on this host.
+      }
+      await assert.rejects(() => within(root, "escape.txt", true), /outside the working directory/);
+      assert.equal(existsSync(target), false, "nothing was written through the dangling link");
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bundled ripgrep resolution", () => {
+  it("never resolves a binary from process.cwd() (T-4)", async () => {
+    // The desktop agent's cwd is the project the user opened under `npm run
+    // dev`, in tests, or under any host that sets ACTOR0_AGENT_CWD. A repo that
+    // shipped `resources/bin/rg.exe` would otherwise supply the executable the
+    // `rg` tool runs — arbitrary code execution from merely opening a repo.
+    const { bundledRgPath } = await import("./rg.js");
+    const project = mkdtempSync(join(tmpdir(), "actor0-rg-"));
+    const savedCwd = process.cwd();
+    const savedNl = process.env.NL_PATH;
+    try {
+      // Plant a fake rg in the cwd-relative location the old code trusted.
+      const binDir = join(project, "resources", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const fake = join(binDir, process.platform === "win32" ? "rg.exe" : "rg");
+      writeFileSync(fake, "not a real ripgrep", "utf8");
+      process.chdir(project);
+      delete process.env.NL_PATH;
+      assert.equal(bundledRgPath(), undefined, "a cwd-relative rg must not be returned");
+    } finally {
+      process.chdir(savedCwd);
+      if (savedNl === undefined) delete process.env.NL_PATH;
+      else process.env.NL_PATH = savedNl;
+      rmSync(project, { recursive: true, force: true });
     }
   });
 });

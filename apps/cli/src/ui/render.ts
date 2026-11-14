@@ -32,7 +32,7 @@ function toolDisplayName(name: string): string {
  * hundred-line result never floods the transcript.
  */
 function toolOutputLines(status: "ok" | "error", output: string, cols: number): string[] {
-  const text = output.replace(new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g"), "").replace(/\r/g, "").trim();
+  const text = stripTerminalControls(output).replace(/\r/g, "").trim();
   if (!text) return [];
   const width = Math.max(20, cols - 4);
   const raw = text.split("\n").filter((l, i) => !(i === 0 && /^\S.*\(\d+ .*\):$/.test(l.trim())));
@@ -58,15 +58,53 @@ export function segWidth(segs: Seg[]): number {
   return segs.reduce((n, s) => n + s.text.length, 0);
 }
 
+/**
+ * Remove every terminal control sequence and C0/C1 control byte from a string.
+ *
+ * This is the one boundary where untrusted text — a model answer, tool output,
+ * a quoted file, a provider error — becomes bytes a terminal will act on. A
+ * model (or a file it quotes, or a MITM'd stream) that emits `ESC[2J` can clear
+ * the transcript, `ESC[10;1H` can move the caret, `ESC]0;…BEL` can rewrite the
+ * window title and `ESC]8;;URL` can forge a clickable link; a bare CR can
+ * overwrite the line the user is reading. The CLI's own colour lives in the
+ * `color`/`bg`/`bold`/`dim` fields and is applied by `paint` after this runs, so
+ * nothing legitimate is lost.
+ *
+ * Stripped: C0 (except tab, which layout uses) and DEL, C1, and the CSI / OSC /
+ * DCS / SOS / PM / APC escape sequences (a leading ESC followed by one of `[`,
+ * `]`, `P`, `X`, `^`, `_`, and run to their string terminator or, for CSI, to a
+ * final byte in `@`-`~`).
+ */
+export function stripTerminalControls(text: string): string {
+  /* eslint-disable no-control-regex -- stripping terminal control sequences from untrusted text is the point */
+  return (
+    text
+      // OSC (ESC ] ... BEL or ST), DCS/SOS/PM/APC (ESC P/X/^/_ ... ST): run to terminator.
+      .replace(/\u001b[\]P^_X][\s\S]*?(?:\u0007|\u001b\\)?/g, "")
+      // CSI (ESC [ ... final byte) and any other ESC + single char.
+      .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+      .replace(/\u001b[@-Z\\-_]/g, "")
+      // Any remaining lone ESC.
+      .replace(/\u001b/g, "")
+      // C0 (keep \t and \n) and DEL, plus C1 (0x80-0x9f).
+      .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "")
+  );
+  /* eslint-enable no-control-regex */
+}
+
 /** Colourise a run of segments into an ANSI string. */
 export function paint(segs: Seg[]): string {
   return segs
     .map((s) => {
+      // The single choke point: untrusted text is stripped of terminal control
+      // sequences here, before the app's own colour (which lives in the fields,
+      // not the text) is applied. See stripTerminalControls.
+      const text = stripTerminalControls(s.text);
       let fn = s.color ? chalk.hex(s.color) : chalk;
       if (s.bg) fn = fn.bgHex(s.bg);
       if (s.dim) fn = fn.dim;
       if (s.bold) fn = fn.bold;
-      return fn(s.text);
+      return fn(text);
     })
     .join("");
 }
@@ -489,7 +527,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
       // is only as wide as the widest wrapped line (plus a column of breathing
       // room each side), then left-padded so its right border meets the frame.
       const wrapW = Math.max(20, cols - 4);
-      const lines = wrapText(entry.text, wrapW).split("\n");
+      const lines = wrapText(stripTerminalControls(entry.text), wrapW).split("\n");
       const widest = Math.max(0, ...lines.map((l) => l.length));
       const inner = Math.max(4, widest + 2);
       const boxed = box(lines.map((l) => plain(` ${l}`, color.text)), inner + 2, { border: color.crimson });
@@ -499,7 +537,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
     }
 
     case "assistant": {
-      const rows = renderMarkdown(entry.text, cols - 4);
+      const rows = renderMarkdown(stripTerminalControls(entry.text), cols - 4);
       if (entry.partial) rows.push(plain("… response ended before completion", color.warning));
       const boxed = box(rows, cols, { border: color.dim });
       return tight ? boxed : [blank(), ...boxed];
@@ -511,7 +549,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
       // the full chain, rendered as any other long text with no truncation,
       // even if it runs past the bottom of the screen.
       const rows: Seg[][] = expandReasoning
-        ? flattenText(entry.text, proseWidth(cols - 6)).map((l) => plain(l, color.muted))
+        ? flattenText(stripTerminalControls(entry.text), proseWidth(cols - 6)).map((l) => plain(l, color.muted))
         : [[
             { text: entry.durationSeconds != null ? `thought for ${formatTimer(entry.durationSeconds)}` : "thinking", color: color.muted },
           ]];
@@ -527,7 +565,7 @@ export function entryLines(entry: Entry, cols: number, expandReasoning = false, 
       const first = lines.findIndex((l) => l.trim() !== "");
       const h = first >= 0 ? /^#{1,6}\s+(.*)$/.exec(lines[first]!.trim()) : null;
       const body = h && h![1]!.trim() === entry.title.trim() ? lines.filter((_, i) => i !== first).join("\n") : entry.plan;
-      return [blank(), plain(`◆ ${entry.title}`, color.info, true), ...renderMarkdown(body, cols - 4)];
+      return [blank(), plain(`◆ ${stripTerminalControls(entry.title)}`, color.info, true), ...renderMarkdown(stripTerminalControls(body), cols - 4)];
     }
 
     case "tool": {

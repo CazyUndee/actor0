@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { lstat, readlink, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 /**
@@ -13,9 +13,13 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
  * merely reads as inside the root, and a symlink or Windows junction inside the
  * working directory is exactly such a path: `link/escape/secret.txt` is
  * lexically inside and physically anywhere. So the deepest ancestor that
- * exists is resolved with `realpath` and the tail is appended — the target of a
- * `write` usually does not exist yet, and a non-existent tail cannot contain a
- * link, because there is nothing to point at.
+ * exists is resolved with `realpath` and the tail is re-applied one component at
+ * a time — the target of a `write` usually does not exist yet. A *non-existent*
+ * tail cannot be a live link, but a **dangling** link (`escape.txt` -> a path
+ * outside the root that does not exist yet) can sit in that tail: realpath fails
+ * on it, yet lstat sees the link and readlink reveals where it points. Each
+ * missing component is lstat'd and a symlink is followed before the path is
+ * accepted, so a planted dangling link cannot carry a write outside the root.
  *
  * Readers resolve but are not contained: inspecting the wider machine is the
  * point of `read`, `glob` and `rg`, and a read can neither plant nor modify
@@ -43,7 +47,24 @@ export async function within(cwd: string, path: string, contain = true): Promise
   for (;;) {
     const real = await realpath(resolved).catch(() => null);
     if (real !== null) {
-      resolved = tail.length === 0 ? real : resolve(real, ...tail.reverse());
+      // Re-apply the missing tail one component at a time from the deepest real
+      // ancestor, following any symlink — including a dangling one — so the
+      // containment check runs against where the OS would actually write.
+      if (tail.length === 0) {
+        resolved = real;
+      } else {
+        resolved = real;
+        for (const component of tail.reverse()) {
+          const next = resolve(resolved, component);
+          const link = await lstat(next).catch(() => null);
+          if (link?.isSymbolicLink()) {
+            const dest = await readlink(next).catch(() => null);
+            resolved = dest === null ? next : resolve(dirname(next), dest);
+          } else {
+            resolved = next;
+          }
+        }
+      }
       break;
     }
     const parent = dirname(resolved);

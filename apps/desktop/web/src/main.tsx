@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { App } from "./App";
 import { setDiscoveredEndpoint } from "./client";
-import { available, startAgent } from "./shell";
+import { available, generateAgentToken, startAgent } from "./shell";
 import { mayConnect } from "./neutralino-loader";
 
 
@@ -71,9 +71,21 @@ async function boot(): Promise<void> {
     await ensureNeutralinoClient();
 
     let agentPort: number | undefined;
-    if (available()) {
+    // The agent's localhost socket is reachable by any local process and exposes
+    // the provider config and the full tool set, so it is generated a token and
+    // started with it: without one the server disables auth entirely (T-2).
+    const agentToken = available() ? generateAgentToken() : undefined;
+    // The launcher starts the agent and publishes its port as a static file. If
+    // that file is there the agent is already running: spawning another one
+    // through Neutralino fails on the port, and boot() threw before mounting the
+    // UI. Only spawn when nothing has claimed the job.
+    const launched = await readLaunchedAgentPort();
+    if (launched !== null) {
+      agentPort = launched;
+      await NeutralinoLog(`using the agent the launcher started on port ${launched}`);
+    } else if (available()) {
       try {
-        agentPort = await startAgent();
+        agentPort = await startAgent(agentToken ? { token: agentToken } : {});
         await NeutralinoLog(`agent started on port ${agentPort}`);
       } catch (error) {
         // The app still mounts: the UI's own reconnect loop (and the served
@@ -89,7 +101,7 @@ async function boot(): Promise<void> {
           `os=${typeof (window as { Neutralino?: { os?: unknown } }).Neutralino?.os}`,
       );
     }
-    if (agentPort !== undefined) setDiscoveredEndpoint(agentPort);
+    if (agentPort !== undefined) setDiscoveredEndpoint(agentPort, agentToken);
 
     const root = document.getElementById("root");
     if (!root) throw new Error("no #root element to mount into");
@@ -111,12 +123,30 @@ async function boot(): Promise<void> {
 
 void boot();
 
-/** One diagnostic line into the shell's own log, where a report can read it. */
-async function NeutralinoLog(message: string): Promise<void> {
+/** One diagnostic line into the shell's own log, where a report can read it. */async function NeutralinoLog(message: string): Promise<void> {
   try {
     const api = (window as unknown as { Neutralino?: { debug?: { log?: (line: string) => Promise<void> } } }).Neutralino;
     await api?.debug?.log?.(`[actor0] ${message}`);
   } catch {
     /* diagnostics must never be the thing that breaks the app */
+  }
+}
+
+/**
+ * The port the launcher already started the agent on, if any.
+ *
+ * The launcher writes `agent-port.json` next to the page precisely so the UI can
+ * find an agent it did not start. Reading it here is what stops boot() from
+ * spawning a second agent on the same machine (which fails on the port and, if
+ * it throws, stops React from ever mounting).
+ */
+async function readLaunchedAgentPort(): Promise<number | null> {
+  try {
+    const res = await fetch("/agent-port.json", { cache: "no-store" });
+    if (!res.ok) return null;
+    const info = (await res.json()) as { port?: unknown };
+    return typeof info.port === "number" && info.port > 0 ? info.port : null;
+  } catch {
+    return null;
   }
 }

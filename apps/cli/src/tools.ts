@@ -1,5 +1,5 @@
 import type { ToolCall, ToolDefinition, ToolHost, ToolResult } from "@actor0/harness";
-import { readFile, readdir, realpath, stat, writeFile, mkdir, open } from "node:fs/promises";
+import { readFile, readdir, realpath, stat, writeFile, mkdir, open, lstat, readlink } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, dirname, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { formatEditDiff } from "./diff.js";
@@ -155,8 +155,13 @@ function requireText(args: Record<string, unknown>, key: string): string {
  *
  * Symlinks are resolved for the deepest ancestor that exists, because the
  * target of a `write` usually does not exist yet: `a/b/c.txt` is checked as
- * realpath(`a/b`) + `c.txt`. The tail cannot contain a link, because a
- * non-existent path has nothing to point at.
+ * realpath(`a/b`) + `c.txt`. A *non-existent* tail cannot be a live link — but
+ * a **dangling** link (`escape.txt` -> a path outside the root that does not
+ * exist yet) can sit in that tail: realpath fails on it, yet lstat sees the
+ * link and readlink reveals where it points. Each missing component is
+ * therefore lstat'd, and a symlink is followed (readlink + resolve) before the
+ * path is accepted, so a planted dangling link cannot carry a write outside the
+ * working directory.
  *
  * `contain` decides what the boundary does to a path that escapes it.
  * Writers stay contained (`contain: true`, the default): the escape is a
@@ -177,7 +182,29 @@ async function within(cwd: string, path: string, contain = true): Promise<string
   for (;;) {
     const real = await realpath(resolved).catch(() => null);
     if (real !== null) {
-      resolved = tail.length === 0 ? real : resolve(real, ...tail.reverse());
+      // Re-apply the missing tail one component at a time from the deepest
+      // real ancestor. A component that is a symlink — including a *dangling*
+      // one, which realpath() cannot follow but lstat() can see — is resolved
+      // through readlink() before it is accepted, so the final containment
+      // check runs against where the OS would actually write, not against a
+      // link path that merely reads as inside the root.
+      if (tail.length === 0) {
+        resolved = real;
+      } else {
+        resolved = real;
+        for (const component of tail.reverse()) {
+          const next = resolve(resolved, component);
+          const link = await lstat(next).catch(() => null);
+          if (link?.isSymbolicLink()) {
+            const dest = await readlink(next).catch(() => null);
+            // A link we cannot read is treated as the link itself: the escapes()
+            // check below then refuses it rather than trusting it.
+            resolved = dest === null ? next : resolve(dirname(next), dest);
+          } else {
+            resolved = next;
+          }
+        }
+      }
       break;
     }
     const parent = dirname(resolved);
@@ -875,6 +902,35 @@ function appendBounded(acc: Output, next: string): Output {
  * going to work here. The name is now a fact it can check, and the description
  * says which shell this actually is.
  */
+/**
+ * The environment a shell tool child runs with.
+ *
+ * The model authors the command, so the child's environment is reachable by a
+ * prompt-injected model: it can run `env`, print a value into the transcript it
+ * then sends to the provider, or POST it somewhere. The agent's own credentials
+ * — `ACTOR0_API_KEY` and the other `ACTOR0_*` variables — are the ones that must
+ * never be there: a shell command has no legitimate use for them, and their only
+ * reader is the agent itself. They are stripped here.
+ *
+ * A full allow-list (PATH, HOME, locale, the Windows SystemRoot/COMSPEC/PATHEXT
+ * set) is the stronger form but a fragile one: miss a variable a real build tool
+ * needs and the tool breaks on a user's machine for reasons unrelated to
+ * security. So this removes the agent's own credential namespace and keeps the
+ * rest, which closes the demonstrated leak without guessing at what every
+ * toolchain requires. PAGER/GIT_PAGER are pinned so an interactive pager cannot
+ * stall a captured command.
+ */
+function childEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("ACTOR0_")) continue;
+    env[key] = value;
+  }
+  env.GIT_PAGER = "cat";
+  env.PAGER = "cat";
+  return env;
+}
+
 let cachedShellDefinition: ToolDefinition | undefined;
 const shellTool: CliTool = {
   get definition(): ToolDefinition {
@@ -913,7 +969,7 @@ const shellTool: CliTool = {
     return await new Promise<string>((resolve, reject) => {
       const child = spawn(shell.command, [...shell.prefixArgs, command], {
         cwd: ctx.cwd,
-        env: { ...process.env, GIT_PAGER: "cat", PAGER: "cat" },
+        env: childEnv(),
         // Detached + a killed process group on POSIX; taskkill /T on Windows.
         detached: process.platform !== "win32",
         windowsHide: true,

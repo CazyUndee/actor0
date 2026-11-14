@@ -36,6 +36,48 @@ const PROBE = "echo actor0-probe";
 /** A cached resolution; the probe spawns a process, so it runs once. */
 let cached: ResolvedShell | undefined;
 
+/**
+ * Background children started by the `shell` tool, so shutdown can reap them.
+ *
+ * A `background: true` command is spawned, unref'd, and returned as a pid — but
+ * nothing tracked it, the AbortSignal handler is registered after the early
+ * return so a cancel never reached it, and there is no timeout. The result was
+ * an unbounded set of long-lived processes (dev servers, miners, reverse shells)
+ * that survived cancel, session end and app exit, with no UI surface listing
+ * them. They are registered here and killed by `reapBackgroundProcesses()`, which
+ * `Agent.dispose()` calls on shutdown.
+ */
+const backgroundChildren = new Set<ChildProcess>();
+
+/** Kill every background shell child and forget them. Called on shutdown. */
+export function reapBackgroundProcesses(): void {
+  for (const child of backgroundChildren) {
+    killTree(child);
+  }
+  backgroundChildren.clear();
+}
+
+/** The environment a shell tool child runs with.
+ *
+ * The model authors the command, so the child's environment is reachable by a
+ * prompt-injected model (it can run `env` and print or POST any value). The
+ * agent's own provider credentials — `ACTOR0_API_KEY` and any other
+ * `ACTOR0_SECRET_*`/`ACTOR0_*_KEY` — must never be there: a shell command has no
+ * legitimate use for them. They are stripped; the harmless `ACTOR0=1` marker and
+ * the routing vars the tool itself reads (`ACTOR0_AGENT_*`, `NL_*`) are kept,
+ * because they are not secrets and a child may legitimately see them.
+ */
+function childEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ACTOR0: "1" };
+  for (const key of Object.keys(env)) {
+    if (key === "ACTOR0") continue;
+    if (key === "ACTOR0_API_KEY" || key.startsWith("ACTOR0_SECRET_") || /_API_KEY$/.test(key) || key === "ACTOR0_SEARCH_MCP_URL") {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
 function probe(shell: ResolvedShell): boolean {
   try {
     const result = spawnSync(shell.command, [...shell.prefixArgs, PROBE], {
@@ -165,13 +207,17 @@ export async function runShell(args: Record<string, unknown>, ctx: ToolContext):
 
   const child = spawn(shell.command, [...shell.prefixArgs, command], {
     cwd,
-    env: { ...process.env, ACTOR0: "1" },
+    env: childEnv(),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
     detached: process.platform !== "win32",
   });
 
   if (background) {
+    // Track it so shutdown can reap it; unref so it does not hold the process
+    // open on its own. `dispose()` kills everything registered here.
+    backgroundChildren.add(child);
+    child.once("close", () => backgroundChildren.delete(child));
     child.unref();
     return `[started in the background: ${shell.label} pid ${child.pid ?? "unknown"}]`;
   }

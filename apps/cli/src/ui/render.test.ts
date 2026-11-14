@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addErrorRows, addKeyRows, addKindRows, addManualRows, addModelsRows, addUrlRows, addWorkingRows, composerRows, entryLines, formatTimer, liveLines, managePanelRows, mcpPanelRows, modelPickerRows, pickerRows, providerPanelRows, sessionPickerRows, slashPopupRows, thinkingPickerRows, usagePanelRows, windowRows } from "./render.js";
+import { addErrorRows, addKeyRows, addKindRows, addManualRows, addModelsRows, addUrlRows, addWorkingRows, composerRows, entryLines, formatTimer, liveLines, managePanelRows, mcpPanelRows, modelPickerRows, paint, pickerRows, providerPanelRows, sessionPickerRows, slashPopupRows, thinkingPickerRows, usagePanelRows, windowRows } from "./render.js";
 import type { Entry } from "../conversation.js";
 
 /** Join rendered rows to plain text (no colour), for assertions. */
@@ -192,4 +192,29 @@ test("windowRows returns empty for zero height", () => {
   const all = ["a", "b", "c"];
   assert.deepEqual(windowRows(all, 0, 0), []);
   assert.deepEqual(windowRows(all, -1, 0), []);
+});
+
+test("terminal control sequences in untrusted text never reach the screen (C-1)", () => {
+  // A model (or a file it quotes, or an injected stream) that emits ESC[2J,
+  // cursor moves, an OSC window-title, or an OSC-8 hyperlink must not be able
+  // to clear the transcript, forge a prompt line, rewrite the title, or plant a
+  // clickable phishing link. Every untrusted path is stripped of terminal
+  // control sequences before it becomes rows, and paint() strips again as the
+  // single backstop where Seg text becomes terminal bytes.
+  const hostile =
+    "clear\u001b[2Jhere \u001b[10;1Hhome \u001b]0;PWNED\u0007link \u001b]8;;https://evil.example\u0007click\u001b]8;;\u0007 done";
+  const entries: Entry[] = [
+    { kind: "assistant", text: hostile, partial: false },
+    { kind: "user", text: hostile },
+    { kind: "reasoning", text: hostile },
+    { kind: "tool", name: "read", target: "f", status: "ok", output: { data: hostile, text: hostile } },
+  ];
+  for (const entry of entries) {
+    const out = text(entryLines(entry, COLS));
+    assert.ok(!out.includes("\u001b"), `an ESC survived entryLines for a ${entry.kind} entry`);
+    assert.ok(!out.includes("\u0007"), `a BEL survived entryLines for a ${entry.kind} entry`);
+  }
+  // And paint() is the final backstop: a raw Seg carrying an escape is cleaned.
+  const painted = paint([{ text: hostile }]);
+  assert.ok(!painted.includes("\u001b[2J"), "paint must strip a clear-screen from raw seg text");
 });

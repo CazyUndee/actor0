@@ -44,8 +44,7 @@ import {
 import { defaultSystemPrompt, withProjectContext } from "./prompt.js";
 import { forStorage, repairHistory } from "./history.js";
 import { createToolHost } from "./tools/host.js";
-import { resolveShell } from "./tools/shell.js";
-import { createTaskDelegate, runTurn } from "./turn.js";
+import { reapBackgroundProcesses, resolveShell } from "./tools/shell.js";import { createTaskDelegate, runTurn } from "./turn.js";
 import type { FileBridge } from "./native/bridge.js";
 import type {
   AgentInfo,
@@ -629,6 +628,10 @@ export class Agent implements AgentMethods {
   /** Stop everything; called on shutdown. */
   dispose(): void {
     this.controller?.abort(new Error("shutting down"));
+    // Detached background shell children outlive a cancel and the session;
+    // reap them explicitly so a dev server the model started cannot survive the
+    // app exiting.
+    reapBackgroundProcesses();
   }
 }
 

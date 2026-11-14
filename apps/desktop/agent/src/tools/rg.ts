@@ -41,13 +41,17 @@ function isGrepMode(value: string | undefined): value is GrepMode {
  * beside the other resources. The two names cover Windows (`rg.exe`) and POSIX
  * (`rg`), and the check is `existsSync` because a path that does not exist is
  * simply the next candidate.
+ *
+ * Deliberately **not** `process.cwd()`: under `npm run dev`, in tests, or under
+ * any host that sets `ACTOR0_AGENT_CWD`, `process.cwd()` is the project the user
+ * opened, so a repository shipping `resources/bin/rg.exe` would supply the
+ * executable the `rg` tool runs — arbitrary code execution from merely opening a
+ * repo. Only the app's own `NL_PATH` (and the explicit `ACTOR0_RG_PATH` override,
+ * handled by the caller) are trusted locations.
  */
 export function bundledRgPath(): string | undefined {
   const nlPath = process.env.NL_PATH?.trim();
-  const roots = [
-    ...(nlPath ? [join(nlPath, "resources", "bin"), join(nlPath, "resources")] : []),
-    join(process.cwd(), "resources", "bin"),
-  ];
+  const roots = nlPath ? [join(nlPath, "resources", "bin"), join(nlPath, "resources")] : [];
   for (const root of roots) {
     for (const name of ["rg.exe", "rg"]) {
       const candidate = join(root, name);
