@@ -31,24 +31,20 @@
 html, body, #root { height: 100%; margin: 0; }
 html { overflow: hidden; }
 body {
-  background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(201, 122, 122, 0.08), transparent 50%),
-    radial-gradient(900px 500px at 110% 0%, rgba(107, 35, 35, 0.12), transparent 45%),
-    var(--bg);
+  /* Flat black backdrop: the shell is a rounded card floating on it, and the
+     cut corners only read as rounded when they stand against something. The
+     old radial gradients were nearly the same colour as the shell — rounding
+     was applied and invisible. */
+  background: #000;
   color: var(--text);
   font: 14px/1.45 var(--font-mono);
   -webkit-font-smoothing: antialiased;
-  border-radius: 10px;
   overflow: hidden;
 }
 ::selection { background: var(--surface3); color: var(--text); }
 button, input, textarea { font: inherit; color: inherit; }
 
-/* Zoom is disabled: a desktop app has a fixed layout, and pinch/ctrl-wheel
-   scaling breaks the large fixed hit areas and spacing. */
-button, input, textarea, select { zoom: none; }
-
-.app { height: 100%; display: flex; align-items: stretch; justify-content: center; }
+.app { height: 100%; display: flex; align-items: stretch; justify-content: center; padding: 8px; }
 .shell {
   flex: 1;
   min-height: 0;
@@ -56,7 +52,10 @@ button, input, textarea, select { zoom: none; }
   display: flex;
   flex-direction: column;
   background: linear-gradient(180deg, rgba(26, 26, 26, 0.82), rgba(17, 17, 17, 0.92));
-  border-radius: 10px; overflow: hidden; position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 0 0 1px rgba(240, 237, 232, 0.16);
 }
 
 /* Custom title bar — replaces the native top bar in borderless window mode and

@@ -95,7 +95,15 @@ async function main() {
       try {
         const raw = await readFile(authInfoFile, "utf8");
         const auth = JSON.parse(raw);
-        if (auth.nlToken && auth.nlPort) {
+        // A token is only published when it plausibly belongs to *this*
+        // server: the connect token is the per-run half of nlToken. rm()
+        // before the spawn already removed any previous run's file; this
+        // guard is the second line of defence against publishing a stale
+        // session — the exact bug that showed as NE_CL_IVCTOKN.
+        if (
+          auth.nlToken && auth.nlPort && auth.nlConnectToken &&
+          auth.nlToken.endsWith(auth.nlConnectToken)
+        ) {
           await writeFile(shellModeFile, JSON.stringify({ mode, nlToken: auth.nlToken, nlPort: auth.nlPort, nlConnectToken: auth.nlConnectToken }), "utf8");
           return;
         }

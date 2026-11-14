@@ -8,25 +8,13 @@
   </head>
   <body>
     <div id="root"></div>
-    <!-- Neutralino globals/client loader. With tokenSecurity "none" the served
-         globals endpoint carries the real session token, so the page can load
-         globals + client library directly and native APIs work without
-         injection. Minor tradeoff: any local client reaching this port can call
-         the allow-listed APIs; the nativeAllowList stays minimal. -->
-    <script>
-      (function () {
-        if (typeof window.NL_TOKEN !== "undefined" && window.NL_TOKEN !== "") {
-          if (typeof window.Neutralino === "undefined") {
-            document.write('<script src="/neutralino.js"><\/script>');
-          }
-          return;
-        }
-        document.write('<script src="/__neutralino_globals.js"><\/script>');
-        if (typeof window.Neutralino === "undefined") {
-          document.write('<script src="/neutralino.js"><\/script>');
-        }
-      })();
-    </script>
+    <!-- Neutralino globals/client loader. The decision table and the reasons
+         behind it live in src/neutralino-loader.ts (tested) as
+         decideClientLoad; scripts/assemble.mjs regenerates this file from that
+         module on every assemble, so the page and the tests cannot drift apart.
+         It runs before the app bundle because the library must exist before
+         boot() calls init(). -->
+    <script src="/neutralino-loader.inline.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

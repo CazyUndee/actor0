@@ -4,6 +4,7 @@ import "./styles.css";
 import { App } from "./App";
 import { setDiscoveredEndpoint } from "./client";
 import { available, startAgent } from "./shell";
+import { mayConnect } from "./neutralino-loader";
 
 
 /**
@@ -23,6 +24,13 @@ async function ensureNeutralinoClient(): Promise<void> {
   };
   const api = w.Neutralino;
   if (!api) return;
+  // mayConnect (neutralino-loader.ts, tested) is the NE_CL_IVCTOKN guard: an
+  // empty token must never reach init(), because the library treats a failed
+  // auth handshake by replacing the entire page.
+  if (!mayConnect({ get NL_TOKEN() { return w.NL_TOKEN; }, Neutralino: api })) {
+    await NeutralinoLog("refusing to connect the Neutralino client without a token (NE_CL_IVCTOKN guard)");
+    return;
+  }
   try {
     api.init?.();
   } catch {
