@@ -241,3 +241,17 @@ test("real status markers still work", () => {
   const result = run(["[·] Reading files\n", "[·] Compiling\n", "[·] 2 of 5\n"]);
   assert.deepEqual(result.statuses, ["Reading files", "Compiling", "2 of 5"]);
 });
+
+test("a long run of whitespace does not stall the event loop", () => {
+  // M-1: 50,000 single-space deltas used to block ~10s (Θ(n²)) because the
+  // plan-prefix hold re-tested the whole growing buffer every push. It must now
+  // complete quickly and release the spaces as answer text.
+  const filter = createAnswerFilter();
+  const started = Date.now();
+  let answer = "";
+  for (let i = 0; i < 50_000; i += 1) answer += filter.push(" ").text;
+  answer += filter.flush().text;
+  const elapsed = Date.now() - started;
+  assert.equal(answer.length, 50_000, "every space must eventually be released as text");
+  assert.ok(elapsed < 2_000, `50k whitespace deltas took ${elapsed}ms — the hold must not re-test the whole buffer`);
+});
