@@ -77,6 +77,8 @@ export type SessionSummary = {
   updatedAt: string;
   model: string;
   messageCount: number;
+  cwd?: string;
+  title?: string;
 };
 
 export type McpStatus = { configured: number; servers: string[] };
@@ -132,7 +134,8 @@ export type AgentCalls = {
   "provider.signIn": (params: { kind: string }) => Promise<SignInResult>;
   "session.list": () => Promise<SessionSummary[]>;
   "session.load": (params: { id: string }) => Promise<{ messages: unknown[]; model: string }>;
-  "session.new": () => Promise<{ ok: true }>;
+  "session.new": (params: { cwd?: string }) => Promise<{ ok: true }>;
+  "session.delete": (params: { ids: string[] }) => Promise<{ deleted: string[]; missing: string[] }>;
   "conversation.get": () => Promise<{ sessionId: string; messages: unknown[] }>;
   "usage.get": (params: { period: "day" | "week" | "month" | "all" }) => Promise<UsageSnapshot>;
   "mcp.status": () => Promise<McpStatus>;

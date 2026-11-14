@@ -6,6 +6,7 @@ import { EntryView, ToolEntry } from "./components/Entry";
 import { Markdown } from "./components/Markdown";
 import { Composer } from "./components/Composer";
 import { Panel } from "./components/Panels";
+import { SessionDropdown } from "./components/SessionDropdown";
 
 /**
  * Does it actually render?
@@ -57,17 +58,15 @@ describe("rendering an entry", () => {
     assert.ok(html.includes("shell"));
   });
 
-  it("uses chevron carets, not triangles, for expand/collapse", () => {
-    // The expand/collapse affordance is a v-shaped chevron. A filled triangle
-    // (▾/▸) read as a caret the user asked to be replaced; pin the glyphs so
-    // they do not creep back.
-    for (const entry of [
-      { kind: "reasoning" as const, text: "a thought" },
-      { kind: "tool" as const, name: "read", target: "a.ts", status: "ok" as const, output: { data: "x", text: "x" } },
-    ]) {
-      const html = markup(<EntryView entry={entry} />);
-      assert.ok(!html.includes("▾") && !html.includes("▸"), `triangle caret leaked into ${entry.kind}: ${html.slice(0, 200)}`);
-    }
+  it("uses SVG chevron carets, not triangle glyphs, for expand/collapse", () => {
+    // The expand/collapse affordance is a vector chevron (caret-svg class): a
+    // text glyph rides the font's baseline and never centres optically. Pin
+    // both the class and the absence of the triangle glyphs. (The tool entry
+    // toggles with +/−, which is a different affordance, so only the reasoning
+    // entry is asserted here.)
+    const html = markup(<EntryView entry={{ kind: "reasoning", text: "a thought" }} />);
+    assert.ok(html.includes("caret-svg"), `vector caret missing: ${html.slice(0, 200)}`);
+    assert.ok(!html.includes("▾") && !html.includes("▸"), `triangle caret leaked: ${html.slice(0, 200)}`);
   });
 });
 
@@ -108,9 +107,10 @@ describe("rendering chrome", () => {
     assert.ok(!html.includes("slash-popup"));
   });
 
-  it("opens the slash popup for a half-typed command", () => {
+  it("opens the centered slash palette for a half-typed command", () => {
     const html = markup(<Composer value="/" onChange={() => {}} onSubmit={() => {}} onCancel={() => {}} busy={false} blocked={false} />);
-    assert.ok(html.includes("slash-popup"));
+    assert.ok(html.includes("slash-modal"));
+    assert.ok(html.includes("slash-modal-panel"));
     assert.ok(html.includes("/provider"));
   });
 
@@ -159,5 +159,72 @@ describe("rendering the M2 interaction surfaces", () => {
       />,
     );
     assert.ok(!html.includes("entry-copy"));
+  });
+});
+
+describe("rendering the conversation picker", () => {
+  const sessions = [
+    { id: "a", updatedAt: "2026-11-14T10:00:00Z", model: "gpt", messageCount: 2, cwd: "d:/projects/actor0", title: "fix the window" },
+    { id: "b", updatedAt: "2026-11-14T09:00:00Z", model: "gpt", messageCount: 4, cwd: "d:/projects/actor0" },
+    { id: "c", updatedAt: "2026-11-13T09:00:00Z", model: "gpt", messageCount: 1, cwd: "d:/projects/other" },
+  ];
+
+  it("groups sessions by the last path segment and names them", () => {
+    const html = markup(
+      <SessionDropdown
+        sessions={sessions}
+        currentId="a"
+        busy={false}
+        stopped={new Set()}
+        onLoad={() => {}}
+        onNew={() => {}}
+        onDelete={() => {}}
+        onPickFolder={async () => undefined}
+        initiallyOpen
+      />,
+    );
+    // The group header is the last path segment, not the full path.
+    assert.ok(html.includes(">actor0<"), "expected the actor0 group name");
+    assert.ok(html.includes(">other<"), "expected the other group name");
+    assert.ok(!html.includes("d:/projects"), "the full path must not be the group name");
+  });
+
+  it("marks the current conversation, the streaming one, and stopped ones", () => {
+    const html = markup(
+      <SessionDropdown
+        sessions={sessions}
+        currentId="a"
+        busy
+        stopped={new Set(["b"])}
+        onLoad={() => {}}
+        onNew={() => {}}
+        onDelete={() => {}}
+        onPickFolder={async () => undefined}
+        initiallyOpen
+      />,
+    );
+    assert.ok(html.includes("✓"), "the current conversation carries a tick");
+    assert.ok(html.includes("active-turn"), "the streaming conversation shimmers");
+    assert.ok(html.includes("stopped-dot"), "a stopped conversation carries a dot");
+    // A titled session shows the model's title, not its id.
+    assert.ok(html.includes("fix the window"));
+  });
+
+  it("renders the new-conversation and delete affordances", () => {
+    const html = markup(
+      <SessionDropdown
+        sessions={sessions}
+        currentId={null}
+        busy={false}
+        stopped={new Set()}
+        onLoad={() => {}}
+        onNew={() => {}}
+        onDelete={() => {}}
+        onPickFolder={async () => undefined}
+        initiallyOpen
+      />,
+    );
+    assert.ok(html.includes("new conversation"));
+    assert.ok(html.includes("delete conversations"));
   });
 });

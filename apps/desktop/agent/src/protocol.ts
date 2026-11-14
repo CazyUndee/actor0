@@ -66,6 +66,8 @@ export type SessionSummaryWire = {
   updatedAt: string;
   model: string;
   messageCount: number;
+  cwd?: string;
+  title?: string;
 };
 
 export type McpStatus = { configured: number; servers: string[] };
@@ -128,7 +130,8 @@ export type AgentMethods = {
   "provider.signIn": (params: { kind: string }) => Promise<SignInResultWire>;
   "session.list": (params: undefined) => Promise<SessionSummaryWire[]>;
   "session.load": (params: { id: string }) => Promise<{ messages: unknown[]; model: string }>;
-  "session.new": (params: undefined) => Promise<{ ok: true }>;
+  "session.new": (params: { cwd?: string }) => Promise<{ ok: true }>;
+  "session.delete": (params: { ids: string[] }) => Promise<{ deleted: string[]; missing: string[] }>;
   /** The current transcript, so a UI that (re)connects can rebuild its view. */
   "conversation.get": (params: undefined) => Promise<{ sessionId: string; messages: unknown[] }>;
   "usage.get": (params: { period: "day" | "week" | "month" | "all" }) => Promise<UsageSnapshot>;

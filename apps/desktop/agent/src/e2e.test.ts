@@ -190,7 +190,11 @@ describe("a turn through the real stack", () => {
       assert.match(conversation.messages[conversation.messages.length - 1]!.content, /Hello from the endpoint/);
 
       // The request went where the config said, with the credential attached.
-      assert.equal(requests.length, 1);
+      // The first exchange also asks the model for a 3-5 word conversation
+      // title (titleConversation), so the stub endpoint sees two requests:
+      // the turn itself, then the title prompt.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(requests.length, 2);
       assert.equal(requests[0]!.path, "/v1/chat/completions");
       const body = JSON.parse(requests[0]!.body) as { model: string; messages: { role: string }[]; tools?: unknown[] };
       assert.equal(body.model, "stub-model");
@@ -199,12 +203,19 @@ describe("a turn through the real stack", () => {
       assert.match(JSON.stringify(body.messages[0]), /actor0/);
       // Tools were advertised, so the model can actually call them.
       assert.ok(Array.isArray(body.tools) && body.tools.length >= 9);
+      // The title request advertised no tools (the array is present but empty)
+      // — it is a one-shot prompt with nothing to call.
+      const titleBody = JSON.parse(requests[1]!.body) as { messages: { role: string; content: string }[]; tools?: unknown[] };
+      assert.match(titleBody.messages[0]!.content, /3-5 word title/);
+      assert.ok(Array.isArray(titleBody.tools) && titleBody.tools.length === 0);
 
-      // The session is on disk, in the CLI's format.
+      // The session is on disk, in the CLI's format — with the model's title
+      // (whatever the stub endpoint answered) recorded on it.
       const sessions = listSessions();
       assert.equal(sessions.length, 1);
       assert.equal(sessions[0]!.model, "stub-model");
       assert.equal(sessions[0]!.messages.length, 2);
+      assert.equal(typeof sessions[0]!.title, "string");
     } finally {
       client.close();
       await server.close();

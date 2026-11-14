@@ -5,6 +5,7 @@ import type { Entry } from "../conversation";
 import { Markdown } from "./Markdown";
 import { COMMAND_HELP } from "../slash";
 import { CopyButton } from "./CopyButton";
+import { Caret } from "./Caret";
 
 /**
  * The transcript's entries, one component per kind.
@@ -126,15 +127,33 @@ export function EntryView({ entry }: { entry: Entry }) {
 
 function ReasoningEntry({ entry }: { entry: Extract<Entry, { kind: "reasoning" }> }) {
   const [open, setOpen] = useState(false);
+  // The body springs *up* out on close, so closing is the opening animation
+  // played backwards rather than an instant disappear. Mounting the body for
+  // the duration of the animation is the whole trick — the box's rounded frame
+  // stays put, only the body collapses.
+  const [closing, setClosing] = useState(false);
+  const toggle = (): void => {
+    if (open) {
+      setClosing(true);
+      setTimeout(() => {
+        setClosing(false);
+        setOpen(false);
+      }, 250);
+    } else {
+      setOpen(true);
+    }
+  };
   return (
     <div className="entry reasoning">
       <div className={`reasoning-box ${open ? "open" : ""}`}>
-        <button type="button" className="reasoning-header" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-          <span className="reasoning-mark">{open ? "⌄" : "›"}</span>
+        <button type="button" className="reasoning-header" onClick={toggle} aria-expanded={open}>
+          <span className="reasoning-mark"><Caret open={open} /></span>
           <span className="reasoning-label">thought</span>
-          {entry.durationSeconds !== undefined ? <span className="reasoning-time">{formatDuration(entry.durationSeconds)}</span> : null}
+          {entry.durationSeconds !== undefined ? (
+            <span className="reasoning-time">for {formatDuration(entry.durationSeconds)}</span>
+          ) : null}
         </button>
-        {open ? <pre className="reasoning-body">{entry.text}</pre> : null}
+        {open ? <pre className={`reasoning-body ${closing ? "closing" : ""}`}>{entry.text}</pre> : null}
       </div>
     </div>
   );

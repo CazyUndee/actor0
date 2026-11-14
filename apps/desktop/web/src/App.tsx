@@ -26,6 +26,8 @@ type ResizeState = {
   origin?: { x: number; y: number; width: number; height: number };
 };
 import { Composer } from "./components/Composer";
+import { SessionDropdown } from "./components/SessionDropdown";
+import { Caret } from "./components/Caret";
 import { EntryView } from "./components/Entry";
 import { McpPanel, ModelPanel, NoticeBar, ProviderPanel, SessionPanel, ThinkingPanel, UsagePanel } from "./components/Panels";
 
@@ -87,6 +89,12 @@ export function App() {
 
   // --- the client ----------------------------------------------------------
 
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  /** Sessions the agent stopped on (needs_user) while this app was open — a dot in the picker. */
+  const [stoppedSessions, setStoppedSessions] = useState<Set<string>>(new Set());
+  /** The model's title for the current conversation, when it has one. */
+  const [sessionTitle, setSessionTitle] = useState<string | undefined>(undefined);
+
   const refreshConfig = useCallback(async () => {
     const client = clientRef.current;
     if (!client) return;
@@ -131,6 +139,16 @@ export function App() {
             setBlocked(notification.result.blocked);
             turnStartedAtRef.current = null;
             reasoningStartedAtRef.current = null;
+            // A session the agent stopped on keeps its dot until the user
+            // resumes it; a clean turn clears any stale dot.
+            if (sessionId !== null) {
+              setStoppedSessions((prev) => {
+                const next = new Set(prev);
+                if (notification.result.blocked) next.add(sessionId);
+                else next.delete(sessionId);
+                return next;
+              });
+            }
             void refreshSessions();
             return;
           }
@@ -140,6 +158,15 @@ export function App() {
           }
           case "state.changed": {
             void refreshConfig();
+            // The agent names the conversation (titleConversation) right after
+            // the first turn, so the title may have appeared since the last look.
+            void (async () => {
+              try {
+                const list = await clientRef.current?.call("session.list");
+                if (!list || sessionId === null) return;
+                setSessionTitle(list.find((s) => s.id === sessionId)?.title);
+              } catch { /* the title is cosmetic */ }
+            })();
             return;
           }
           default:
@@ -157,9 +184,13 @@ export function App() {
         // the presets in @actor0/providers. A hard-coded list here is how a UI
         // comes to offer a flow this build does not implement.
         setKinds(await client.call("provider.kinds"));
-        const { messages } = await client.call("conversation.get");
-        if (Array.isArray(messages) && messages.length > 0) {
-          setConversation({ entries: entriesFromMessages(messages as never), live: initialConversation().live });
+        const current = await client.call("conversation.get");
+        setSessionId(current.sessionId);
+        const currentSummary = (await client.call("session.list")).find((s) => s.id === current.sessionId);
+        setSessionTitle(currentSummary?.title);
+        setSessions(await client.call("session.list"));
+        if (Array.isArray(current.messages) && current.messages.length > 0) {
+          setConversation({ entries: entriesFromMessages(current.messages as never), live: initialConversation().live });
         }
       } catch (error) {
         setNotice({ tone: "error", text: `Could not reach the agent: ${(error as Error).message}` });
@@ -474,6 +505,14 @@ export function App() {
   // current state so the taskbar/tab reflects what the agent is doing.
   useEffect(() => { setFavicon(face); }, [face]);
 
+  // The window's own icon (taskbar, hover preview, alt-tab) is the mascot too.
+  // The favicon covers the in-page mark; setIcon covers everything the OS shows.
+  // Re-setting it per face is cheap and keeps the two in sync.
+  useEffect(() => {
+    if (window.NL_MODE !== "window") return;
+    void window.Neutralino?.window?.setIcon?.({ icon: "/app/icon.png" }).catch(() => undefined);
+  }, []);
+
   const providerLabel = snapshot?.provider?.model ?? snapshot?.config.model ?? "no provider";
   const providerName = snapshot?.activeProvider ?? "built-in";
   const bridgeLabel = agentInfo ? `${agentInfo.bridge} · ${agentInfo.shell}` : "";
@@ -554,6 +593,51 @@ export function App() {
         <div className="bar-row">
           <div className="top-bar">
             <div className="selector-group">
+              <SessionDropdown
+                title={sessionTitle}
+                sessions={sessions}
+                currentId={sessionId}
+                busy={busy}
+                stopped={stoppedSessions}
+                onLoad={(id) => {
+                  void (async () => {
+                    await clientRef.current?.call("session.load", { id });
+                    setSessionId(id);
+                    setBlocked(false);
+                    setConversation(initialConversation());
+                    const loaded = await clientRef.current?.call("conversation.get");
+                    if (loaded && loaded.messages.length > 0) {
+                      setConversation({ entries: entriesFromMessages(loaded.messages as never), live: initialConversation().live });
+                    }
+                    void refreshSessions();
+                  })().catch((error) => setNotice({ tone: "error", text: String((error as Error).message) }));
+                }}
+                onNew={(cwd) => {
+                  void (async () => {
+                    await clientRef.current?.call("session.new", cwd ? { cwd } : {});
+                    setConversation(initialConversation());
+                    setBlocked(false);
+                    void refreshSessions();
+                    const current = await clientRef.current?.call("conversation.get");
+                    setSessionId(current?.sessionId ?? null);
+                    setSessionTitle(undefined);
+                  })().catch((error) => setNotice({ tone: "error", text: String((error as Error).message) }));
+                }}
+                onDelete={(ids) => {
+                  void (async () => {
+                    const result = await clientRef.current?.call("session.delete", { ids });
+                    if (result?.missing.length) {
+                      setNotice({ tone: "warn", text: `${result.missing.length} conversation(s) were already gone.` });
+                    }
+                    void refreshSessions();
+                  })().catch((error) => setNotice({ tone: "error", text: String((error as Error).message) }));
+                }}
+                onPickFolder={async () => {
+                  return window.Neutralino?.os?.showFolderDialog
+                    ? await window.Neutralino.os.showFolderDialog("Choose a directory")
+                    : undefined;
+                }}
+              />
               <button
                 type="button"
                 className="dropdown-trigger"
@@ -561,11 +645,11 @@ export function App() {
                 title={snapshot?.provider?.endpoint ?? "no endpoint configured"}
               >
                 <span className="dropdown-value">{providerName}</span>
-                <span className="dropdown-caret">⌄</span>
+                <span className="dropdown-caret"><Caret /></span>
               </button>
               <button type="button" className="dropdown-trigger" onClick={() => setMode("model")}>
                 <span className="dropdown-value">{providerLabel}</span>
-                <span className="dropdown-caret">⌄</span>
+                <span className="dropdown-caret"><Caret /></span>
               </button>
             </div>
             <span className="status-meta" title={bridgeLabel}>

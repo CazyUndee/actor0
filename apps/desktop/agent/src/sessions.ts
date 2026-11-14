@@ -28,6 +28,10 @@ export type StoredSession = {
   updatedAt: string;
   model: string;
   messages: ChatMessage[];
+  /** The working directory the conversation was had in, for grouping. */
+  cwd?: string;
+  /** A short natural-language title the model set on the first turn. */
+  title?: string;
 };
 
 /** A session as the picker shows it, without the transcript. */
@@ -37,6 +41,8 @@ export type SessionSummary = {
   updatedAt: string;
   model: string;
   messageCount: number;
+  cwd?: string;
+  title?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -131,6 +137,8 @@ export function loadSession(id: string): StoredSession | undefined {
     createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : "",
     updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
     model: typeof parsed.model === "string" ? parsed.model : "",
+    ...(typeof parsed.cwd === "string" && parsed.cwd ? { cwd: parsed.cwd } : {}),
+    ...(typeof parsed.title === "string" && parsed.title ? { title: parsed.title } : {}),
     messages: repairHistory(parsed.messages.filter(isChatMessage)),
   };
 }
@@ -158,7 +166,20 @@ export function listSessionSummaries(): SessionSummary[] {
     updatedAt: session.updatedAt,
     model: session.model,
     messageCount: session.messages.length,
+    ...(session.cwd ? { cwd: session.cwd } : {}),
+    ...(session.title ? { title: session.title } : {}),
   }));
+}
+
+/** Delete a session file. Returns false when it did not exist. */
+export function deleteSession(id: string): boolean {
+  assertSessionId(id);
+  try {
+    rmSync(sessionFile(id), { force: false });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** A short, human label for a session id. */

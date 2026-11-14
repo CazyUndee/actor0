@@ -61,25 +61,34 @@ export function Composer(props: {
   return (
     <div className="composer-area">
       {matches.length > 0 ? (
-        <div className="slash-popup" role="listbox" aria-label="Commands">
-          {matches.map((command, index) => (
-            <div
-              key={command.name}
-              role="option"
-              aria-selected={index === slashIndex}
-              className={`slash-item ${index === slashIndex ? "selected" : ""}`}
-              onMouseEnter={() => setSlashIndex(index)}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                choose(command);
-              }}
-            >
-              <span className="slash-name">
-                /{command.name} <span className="muted">/{command.aliases[0]}</span>
-              </span>
-              <span className="slash-desc">{command.description}</span>
-            </div>
-          ))}
+        <div
+          className="slash-modal"
+          onMouseDown={(event) => {
+            // Clicking the blurred backdrop (not a command) dismisses, like
+            // every command palette.
+            if (event.target === event.currentTarget) setDismissed(true);
+          }}
+        >
+          <div className="slash-modal-panel" role="listbox" aria-label="Commands">
+            {matches.map((command, index) => (
+              <div
+                key={command.name}
+                role="option"
+                aria-selected={index === slashIndex}
+                className={`slash-item ${index === slashIndex ? "selected" : ""}`}
+                onMouseEnter={() => setSlashIndex(index)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  choose(command);
+                }}
+              >
+                <span className="slash-name">
+                  /{command.name} <span className="muted">/{command.aliases[0]}</span>
+                </span>
+                <span className="slash-desc">{command.description}</span>
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -137,7 +146,7 @@ export function Composer(props: {
             title={props.busy ? "Stop (Esc)" : "Send (Enter)"}
             aria-label={props.busy ? "Stop" : "Send"}
           >
-            {props.busy ? "■" : "⏎"}
+            {props.busy ? <StopIcon /> : <SendIcon />}
           </button>
         </div>
       </div>
@@ -145,5 +154,23 @@ export function Composer(props: {
         {props.blocked ? "The agent stopped and needs a reply to continue." : "Actor0 is an experimental agent and may make mistakes."}
       </div>
     </div>
+  );
+}
+
+/** The send glyph: an arrow taking most of the button. */
+function SendIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 19V5m0 0l-6 6m6-6l6 6" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** The stop glyph: a filled square, prominent while a turn streams. */
+function StopIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="5" y="5" width="14" height="14" rx="3" fill="currentColor" />
+    </svg>
   );
 }

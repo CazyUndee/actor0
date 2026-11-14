@@ -29,7 +29,7 @@ import {
   type DesktopConfig,
   type NamedProvider,
 } from "./config.js";
-import { listSessionSummaries, loadSession, newSessionId, saveSession } from "./sessions.js";
+import { deleteSession, listSessionSummaries, loadSession, newSessionId, saveSession } from "./sessions.js";
 import {
   formatTokens,
   readUsage,
@@ -114,6 +114,8 @@ export class Agent implements AgentMethods {
   private config: DesktopConfig;
   private messages: ChatMessage[] = [];
   private session: { id: string; createdAt: string } = { id: newSessionId(), createdAt: new Date().toISOString() };
+  /** The model's short natural-language title for the conversation, set on the first turn. */
+  private sessionTitle: string | undefined;
   private turnId = 0;
   private controller: AbortController | undefined;
   private running = false;
@@ -355,6 +357,8 @@ export class Agent implements AgentMethods {
       updatedAt: summary.updatedAt,
       model: summary.model,
       messageCount: summary.messageCount,
+      ...(summary.cwd ? { cwd: summary.cwd } : {}),
+      ...(summary.title ? { title: summary.title } : {}),
     }));
   }
 
@@ -364,6 +368,7 @@ export class Agent implements AgentMethods {
     if (this.running) throw new Error("cannot switch sessions while a turn is running");
     this.messages = stored.messages;
     this.session = { id: stored.id, createdAt: stored.createdAt || new Date().toISOString() };
+    this.sessionTitle = stored.title;
     if (stored.model) {
       this.config = withModel(this.config, stored.model);
       saveConfig(this.config);
@@ -372,12 +377,29 @@ export class Agent implements AgentMethods {
     return { messages: stored.messages, model: stored.model };
   }
 
-  async "session.new"(): Promise<{ ok: true }> {
+  /** `cwd` is accepted but not applied: the working directory is fixed when the
+   * agent process starts, so a conversation in another directory means launching
+   * the agent there. The UI sends it for forward-compatibility only. */
+  async "session.new"(_params?: { cwd?: string }): Promise<{ ok: true }> {
+    void _params;
     if (this.running) throw new Error("cannot start a new conversation while a turn is running");
     this.messages = [];
     this.session = { id: newSessionId(), createdAt: new Date().toISOString() };
+    this.sessionTitle = undefined;
     this.changed();
     return { ok: true };
+  }
+
+  async "session.delete"(params: { ids: string[] }): Promise<{ deleted: string[]; missing: string[] }> {
+    if (!Array.isArray(params?.ids ?? undefined)) throw new Error("ids: expected a list of session ids");
+    const deleted: string[] = [];
+    const missing: string[] = [];
+    for (const id of params.ids) {
+      if (id === this.session.id) throw new Error("cannot delete the conversation you are in");
+      if (deleteSession(id)) deleted.push(id);
+      else missing.push(id);
+    }
+    return { deleted, missing };
   }
 
   /** The current transcript, for a UI that is (re)connecting. */
@@ -534,6 +556,13 @@ export class Agent implements AgentMethods {
           text: `Conversation did not fit — cleared stale tool output and retried (${formatTokens(outcome.recovery.before - outcome.recovery.after)} characters).`,
         });
       }
+      // The first exchange names the conversation: the model writes a short
+      // natural-language title once, and the session picker stops showing an
+      // ISO timestamp nobody reads. Best-effort — a provider without a cheap
+      // mode simply leaves the session untitled.
+      if (!this.sessionTitle && !controller.signal.aborted) {
+        void this.titleConversation(provider, controller.signal).catch(() => undefined);
+      }
       if (blocked) this.notify({ type: "notice", tone: "warn", text: "Stopped — reply to continue." });
       if (truncated) this.notify({ type: "notice", tone: "warn", text: "The answer was cut off at the model's output limit." });
     } catch (error) {
@@ -611,6 +640,8 @@ export class Agent implements AgentMethods {
         updatedAt: new Date().toISOString(),
         model: this.config.model,
         messages: this.messages,
+        ...(this.cwd ? { cwd: this.cwd } : {}),
+        ...(this.sessionTitle ? { title: this.sessionTitle } : {}),
       });
     } catch (error) {
       this.notify({
@@ -623,6 +654,39 @@ export class Agent implements AgentMethods {
 
   private changed(): void {
     this.notify({ type: "state.changed" });
+  }
+
+  /**
+   * Ask the model for a 3–5 word natural-language title for the conversation.
+   *
+   * Runs once, after the first successful exchange, as a detached best-effort
+   * request: a failure leaves the session untitled (the picker falls back to
+   * the date) and never blocks or breaks the turn that triggered it.
+   */
+  private async titleConversation(provider: ResolvedProvider, signal: AbortSignal): Promise<void> {
+    const firstUser = this.messages.find((message) => message.role === "user");
+    if (!firstUser) return;
+    const client = this.createClient(provider);
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content:
+          `Write a 3-5 word title for this conversation, in the same language as the user's message. ` +
+          `Reply with only the title, no quotes, no punctuation at the end.\n\nConversation:\n${firstUser.content.slice(0, 2000)}`,
+      },
+    ];
+    // ModelClient only streams; collect the answer text from the events. The
+    // title request carries no tools, so nothing else can arrive.
+    let text = "";
+    for await (const event of client.stream(messages, [], signal)) {
+      if (event.type === "token") text += event.delta;
+    }
+    const title = text.trim().replace(/^["']+|["']+$/g, "").split("\n")[0];
+    if (title && title.length >= 2 && title.length <= 80) {
+      this.sessionTitle = title.slice(0, 80);
+      this.persist();
+      this.changed();
+    }
   }
 
   /** Stop everything; called on shutdown. */
