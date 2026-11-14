@@ -1,7 +1,7 @@
 {
   "applicationId": "com.actor0.desktop",
   "version": "0.5.7",
-  "defaultMode": "window",
+  "defaultMode": "chrome",
   "url": "/",
   "documentRoot": "/resources/app",
   "enableServer": true,
@@ -13,10 +13,12 @@
     "filesystem.*",
     "os.spawnProcess",
     "os.updateSpawnedProcess",
+    "os.getSpawnedProcesses",
     "os.getEnv",
     "os.open",
     "os.showNotification",
     "events.*",
+    "debug.*",
     "window.setTitle",
     "app.exit"
   ],
@@ -38,15 +40,17 @@
       "resizable": true,
       "exitProcessOnClose": true,
       "useSavedState": true,
-      "enableInspector": false
+      "enableInspector": true,
+      "injectClientLibrary": true
     },
     "chrome": {
-      "browserBinary": "/usr/bin/google-chrome",
-      "arguments": "--user-data-dir=${APP_HOME}/.chrome-profile --window-size=1100,780"
+      "args": "",
+      "injectClientLibrary": true
     }
   },
   "cli": {
     "binaryVersion": "6.10.0",
     "clientVersion": "6.10.0"
-  }
+  },
+  "injectClientLibrary": true
 }

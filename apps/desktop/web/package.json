@@ -12,10 +12,12 @@
     "agent": "npm --workspace @actor0/desktop-agent run build",
     "shell": "npm run build && npm run agent && npm run assemble && neu run",
     "package:win": "npm run build && npm run agent && npm run assemble && neu build --platform win --arch x64",
-    "assemble": "node scripts/assemble.mjs"
+    "assemble": "node scripts/assemble.mjs",
+    "start": "node scripts/run.mjs"
   },
   "dependencies": {
     "@actor0/harness": "*",
+    "@neutralinojs/lib": "^6.10.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

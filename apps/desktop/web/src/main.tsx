@@ -2,34 +2,95 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { App } from "./App";
+import { setDiscoveredEndpoint } from "./client";
 import { available, startAgent } from "./shell";
 
 /**
  * Mount.
  *
- * The agent is started *before* the UI is mounted when a shell is present, so
- * the first render can already find it and the app does not flash a
- * "connecting" state on every launch. In a browser there is no shell, the start
- * is a no-op, and the UI falls back to the dev default.
+ * The agent is started *before* the UI is mounted when a shell is present, and
+ * the port it reports is handed straight to the client — not re-derived. That
+ * hand-off is the whole handshake: `startAgent` watches the agent's stdout for
+ * its port, and a port thrown away here is a UI that guesses 3000 while a live
+ * agent sits on an OS-assigned one nobody is talking to.
  */
 async function boot(): Promise<void> {
-  if (available()) {
-    try {
-      await startAgent();
-    } catch (error) {
-      // The app still mounts: the UI's own reconnect loop is the thing that
-      // keeps trying, and a fatal error screen would hide the message the
-      // connection banner already shows.
-      console.error("actor0: agent start failed", error);
+  try {
+    // The client library defines `window.Neutralino` when injected, but its
+    // WebSocket is only connected after `init()`, and calls made before the
+    // socket opens are queued — while `spawnProcess` needs the socket live and
+    // its `spawnedProcess` listener registered before the spawn fires, or the
+    // port line is emitted to nobody. Waiting for `ready` is the documented
+    // sequencing; in a plain browser the globals are absent and this resolves
+    // immediately.
+    const Neutralino = (window as unknown as {
+      Neutralino?: {
+        init?: () => void;
+        events?: { on?: (name: string, handler: () => void) => Promise<void> };
+      };
+    }).Neutralino;
+    if (Neutralino) {
+      Neutralino.init?.();
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const done = (): void => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        };
+        void Neutralino.events?.on?.("ready", done);
+        setTimeout(done, 3_000);
+      });
     }
+
+    let agentPort: number | undefined;
+    if (available()) {
+      try {
+        agentPort = await startAgent();
+        await NeutralinoLog(`agent started on port ${agentPort}`);
+      } catch (error) {
+        // The app still mounts: the UI's own reconnect loop (and the served
+        // port file a launcher may have written) is what keeps trying, and a
+        // fatal error screen would hide the message the banner already shows.
+        const message = error instanceof Error ? error.message : String(error);
+        await NeutralinoLog(`agent start failed: ${message}`);
+        console.error("actor0: agent start failed", error);
+      }
+    } else {
+      await NeutralinoLog(
+        `shell not available — Neutralino=${typeof (window as { Neutralino?: unknown }).Neutralino}, ` +
+          `os=${typeof (window as { Neutralino?: { os?: unknown } }).Neutralino?.os}`,
+      );
+    }
+    if (agentPort !== undefined) setDiscoveredEndpoint(agentPort);
+
+    const root = document.getElementById("root");
+    if (!root) throw new Error("no #root element to mount into");
+    createRoot(root).render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+  } catch (error) {
+    // A boot that dies silently is a white window with nothing to diagnose.
+    // The error goes where the user can see it and where the log file catches
+    // it for a report.
+    console.error("actor0: boot failed", error);
+    document.body.innerHTML = `<pre style="padding:2rem;color:#c46b6b;font:13px/1.5 ui-monospace,monospace">actor0 failed to start:\n${
+      error instanceof Error ? error.stack ?? error.message : String(error)
+    }</pre>`;
   }
-  const root = document.getElementById("root");
-  if (!root) throw new Error("no #root element to mount into");
-  createRoot(root).render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  );
 }
 
 void boot();
+
+/** One diagnostic line into the shell's own log, where a report can read it. */
+async function NeutralinoLog(message: string): Promise<void> {
+  try {
+    const api = (window as unknown as { Neutralino?: { debug?: { log?: (line: string) => Promise<void> } } }).Neutralino;
+    await api?.debug?.log?.(`[actor0] ${message}`);
+  } catch {
+    /* diagnostics must never be the thing that breaks the app */
+  }
+}

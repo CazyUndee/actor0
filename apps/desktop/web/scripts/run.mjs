@@ -1,0 +1,95 @@
+#!/usr/bin/env node
+/**
+ * Launch the desktop app end-to-end: start the agent, write its port where the
+ * UI can read it, then open Neutralino in chrome mode.
+ *
+ * This is the reliable dev path: it does not depend on the page being able to
+ * call Neutralino's native API (which needs a valid client token — something
+ * chrome mode does not inject into a fetchable globals file), and it does not
+ * depend on the agent picking port 3000. The agent prints its port; this script
+ * catches it and serves it to the UI as a static file.
+ */
+import { spawn } from "node:child_process";
+import { mkdir, writeFile, rm } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const web = path.resolve(here, "..");
+const agentBundle = path.join(web, "resources", "agent", "agent.mjs");
+const servedPortFile = path.join(web, "resources", "app", "agent-port.json");
+const neuExe = path.join(web, "bin", "neutralino-win_x64.exe");
+
+const children = new Set();
+function killAll() {
+  for (const child of children) {
+    try { child.kill(); } catch { /* already gone */ }
+  }
+}
+process.on("exit", killAll);
+process.on("SIGINT", () => { killAll(); process.exit(130); });
+process.on("SIGTERM", () => { killAll(); process.exit(143); });
+
+async function startAgent() {
+  const child = spawn("node", [agentBundle], {
+    cwd: web,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env },
+  });
+  children.add(child);
+  child.on("exit", (code, signal) => {
+    children.delete(child);
+    console.error(`[run] agent exited (code=${code} signal=${signal})`);
+  });
+  child.stderr.on("data", (d) => process.stderr.write(`[agent] ${d}`));
+
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("agent did not report a port within 15s")), 15_000);
+    let buf = "";
+    child.stdout.on("data", (chunk) => {
+      const text = String(chunk);
+      process.stdout.write(`[agent] ${text}`);
+      buf += text;
+      const m = /"port"\s*:\s*(\d+)/.exec(buf);
+      if (m) { clearTimeout(timeout); resolve(Number(m[1])); }
+    });
+    child.on("error", (err) => { clearTimeout(timeout); reject(err); });
+    child.on("exit", (code) => { clearTimeout(timeout); reject(new Error(`agent exited early (code=${code})`)); });
+  });
+
+  await mkdir(path.dirname(servedPortFile), { recursive: true });
+  await writeFile(servedPortFile, JSON.stringify({ port, pid: child.pid }), "utf8");
+  console.log(`[run] agent ready on ws://127.0.0.1:${port} (wrote ${path.relative(web, servedPortFile)})`);
+  return { child, port };
+}
+
+async function main() {
+  const { port } = await startAgent();
+
+  // Launch Neutralino in chrome mode. The UI discovers the agent via the port
+  // file we just wrote; it no longer needs the in-page Neutralino spawn path.
+  const neu = spawn(neuExe, ["--load-dir-res", "--path=.", "--mode=chrome"], {
+    cwd: web,
+    stdio: "inherit",
+  });
+  children.add(neu);
+  neu.on("exit", async (code) => {
+    children.delete(neu);
+    await rm(servedPortFile, { force: true }).catch(() => {});
+    killAll();
+    process.exit(code ?? 0);
+  });
+  neu.on("error", (err) => {
+    console.error(`[run] failed to start Neutralino: ${err.message}`);
+    killAll();
+    process.exit(1);
+  });
+
+  console.log(`[run] Neutralino launched (chrome mode). Agent on ${port}. Close the window to exit.`);
+}
+
+main().catch((err) => {
+  console.error(`[run] ${err.stack ?? err.message}`);
+  killAll();
+  process.exit(1);
+});

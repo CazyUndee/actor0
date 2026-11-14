@@ -41,15 +41,31 @@ const DEV_DEFAULT_PORT = 3000;
 /** Where the shell records the agent's port and token, beside its own auth file. */
 export const AGENT_INFO_FILE = ".tmp/agent.json";
 
+/** A port handed to us directly (by the shell, or by a launcher that started the agent). */
+let discoveredPort: number | undefined;
+let discoveredToken: string | undefined;
+
+/** Remember the agent endpoint the moment it becomes known, so discovery does not guess. */
+export function setDiscoveredEndpoint(port: number, token?: string): void {
+  discoveredPort = port;
+  discoveredToken = token;
+}
+
 /**
  * Find the agent's endpoint.
  *
- * The shell writes `{port, token}` when it starts the agent, and the UI reads
- * it through the native API. A missing file is not an error — it means the UI
- * is not running under the shell (a browser, a test), and the dev default is
- * the honest answer there.
+ * Sources, in the order they become known and reliable: an endpoint handed to
+ * us in-process (freshest), the port file the shell wrote via the native API,
+ * the port file a launcher dropped next to the served app (fetchable over HTTP,
+ * which is the path that works in chrome mode without a working Neutralino
+ * bridge), and finally the dev default — the honest answer only when the agent
+ * really is expected on 3000.
  */
 export async function discoverAgentUrl(): Promise<{ url: string; token?: string }> {
+  if (discoveredPort !== undefined) {
+    return { url: `ws://127.0.0.1:${discoveredPort}`, ...(discoveredToken ? { token: discoveredToken } : {}) };
+  }
+
   const Neutralino = typeof window !== "undefined" ? window.Neutralino : undefined;
   const base = typeof window !== "undefined" ? window.NL_PATH : undefined;
   if (Neutralino?.filesystem && base) {
@@ -60,9 +76,25 @@ export async function discoverAgentUrl(): Promise<{ url: string; token?: string 
         return { url: `ws://127.0.0.1:${info.port}`, ...(info.token ? { token: info.token } : {}) };
       }
     } catch {
-      // No shell record: fall through to the dev default rather than failing.
+      // No shell record: try the other sources.
     }
   }
+
+  // A launcher that starts the agent outside the shell can drop the port as a
+  // static file next to the app — the one path that works when the native API
+  // is unavailable (chrome mode without a connected Neutralino client).
+  try {
+    const res = await fetch("/agent-port.json", { cache: "no-store" });
+    if (res.ok) {
+      const info = (await res.json()) as { port?: number; token?: string };
+      if (typeof info.port === "number" && info.port > 0) {
+        return { url: `ws://127.0.0.1:${info.port}`, ...(info.token ? { token: info.token } : {}) };
+      }
+    }
+  } catch {
+    // Not served by a launcher.
+  }
+
   const envPort = typeof import.meta !== "undefined" ? import.meta.env?.VITE_AGENT_PORT : undefined;
   const port = envPort ? Number(envPort) : DEV_DEFAULT_PORT;
   return { url: `ws://127.0.0.1:${port}` };

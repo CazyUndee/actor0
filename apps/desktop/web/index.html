@@ -7,6 +7,29 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Neutralino's client library. In window mode with injectClientLibrary the
+         shell injects globals + library with a real per-session token. In chrome
+         mode the served globals endpoint carries NL_TOKEN='' (the token is not
+         exposed as a fetchable resource), so loading neutralino.js against it
+         makes the client replace the page with NE_CL_IVCTOKN. We only bring the
+         library up when a real token is present; without it the app still runs —
+         the agent is discovered via the port file a launcher writes — just with
+         no native shell APIs. -->
+    <script>
+      (function () {
+        if (typeof window.NL_TOKEN !== "undefined" && window.NL_TOKEN !== "") {
+          // Injected with a real token but maybe library not injected — load it.
+          if (typeof window.Neutralino === "undefined") {
+            document.write('<script src="/neutralino.js"><\/script>');
+          }
+          return;
+        }
+        // Not injected: pull globals (gives NL_PORT/NL_PATH/mode, token stays
+        // empty) so the app knows its environment, but skip neutralino.js —
+        // connecting without a token is a fatal page-replacing error.
+        document.write('<script src="/__neutralino_globals.js"><\/script>');
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

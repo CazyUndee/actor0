@@ -27,6 +27,13 @@ rmSync(agentTarget, { recursive: true, force: true });
 mkdirSync(agentTarget, { recursive: true });
 cpSync(agentDist, join(agentTarget, "agent.mjs"));
 
+// The Neutralino client library, served beside the page so the same bundle
+// works when the shell does not inject it (dev mode through the static server).
+const clientLib = join(webRoot, "..", "..", "..", "node_modules", "@neutralinojs", "lib", "dist", "neutralino.js");
+if (existsSync(clientLib)) {
+  cpSync(clientLib, join(webRoot, "resources", "app", "neutralino.js"));
+}
+
 const ui = join(webRoot, "resources", "app", "index.html");
 if (!existsSync(ui)) {
   console.error(`missing ${ui} — run: npm --workspace @actor0/desktop-web run build`);
