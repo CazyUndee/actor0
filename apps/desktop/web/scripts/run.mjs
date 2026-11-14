@@ -74,6 +74,9 @@ async function main() {
   // load it against an empty token or the page is replaced with an error).
   await writeFile(shellModeFile, JSON.stringify({ mode }), "utf8");
 
+  // Remove stale auth info so we never publish a previous instance's token.
+  await rm(authInfoFile, { force: true }).catch(() => {});
+
   // The UI discovers the agent via the port file we just wrote. Chrome mode is
   // the default because window mode (WebView2) segfaults intermittently on some
   // machines; pass --window for the frameless native shell when it is stable.

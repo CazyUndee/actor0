@@ -8,12 +8,11 @@
   </head>
   <body>
     <div id="root"></div>
-    <!-- Neutralino globals/client loader. Always load globals for environment
-         info (NL_PORT/NL_PATH/NL_OS/NL_MODE). The static endpoint serves
-         NL_TOKEN='' — in chrome mode loading neutralino.js against that destroys
-         the page (NE_CL_IVCTOKN), so the library is only loaded in window mode,
-         and only after the real token is supplied (boot does that). If injection
-         already provided a real token, respect it. -->
+    <!-- Neutralino globals/client loader. With tokenSecurity "none" the served
+         globals endpoint carries the real session token, so the page can load
+         globals + client library directly and native APIs work without
+         injection. Minor tradeoff: any local client reaching this port can call
+         the allow-listed APIs; the nativeAllowList stays minimal. -->
     <script>
       (function () {
         if (typeof window.NL_TOKEN !== "undefined" && window.NL_TOKEN !== "") {
@@ -23,6 +22,9 @@
           return;
         }
         document.write('<script src="/__neutralino_globals.js"><\/script>');
+        if (typeof window.Neutralino === "undefined") {
+          document.write('<script src="/neutralino.js"><\/script>');
+        }
       })();
     </script>
     <script type="module" src="/src/main.tsx"></script>

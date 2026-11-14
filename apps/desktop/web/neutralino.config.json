@@ -6,7 +6,7 @@
   "documentRoot": "/resources/app",
   "enableServer": true,
   "enableNativeAPI": true,
-  "tokenSecurity": "one-time",
+  "tokenSecurity": "none",
   "exportAuthInfo": true,
   "singlePageServe": true,
   "nativeAllowList": [
@@ -41,11 +41,12 @@
       "exitProcessOnClose": true,
       "useSavedState": true,
       "enableInspector": false,
-      "injectClientLibrary": true,
-      "borderless": true
+      "injectClientLibrary": false,
+      "borderless": true,
+      "sizeConstraint": false
     },
     "chrome": {
-      "args": "--user-data-dir=${NL_PATH}/.chrome-profile --class=actor0",
+      "args": "--user-data-dir=${NL_PATH}/.chrome-profile --class=actor0 --disable-pinch --disable-zoom --app-window-title=actor0",
       "injectClientLibrary": true
     }
   },

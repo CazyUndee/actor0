@@ -29,6 +29,7 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+html { overflow: hidden; }
 body {
   background:
     radial-gradient(1200px 600px at 10% -10%, rgba(201, 122, 122, 0.08), transparent 50%),
@@ -37,9 +38,15 @@ body {
   color: var(--text);
   font: 14px/1.45 var(--font-mono);
   -webkit-font-smoothing: antialiased;
+  border-radius: 10px;
+  overflow: hidden;
 }
 ::selection { background: var(--surface3); color: var(--text); }
 button, input, textarea { font: inherit; color: inherit; }
+
+/* Zoom is disabled: a desktop app has a fixed layout, and pinch/ctrl-wheel
+   scaling breaks the large fixed hit areas and spacing. */
+button, input, textarea, select { zoom: none; }
 
 .app { height: 100%; display: flex; align-items: stretch; justify-content: center; }
 .shell {
@@ -49,9 +56,7 @@ button, input, textarea { font: inherit; color: inherit; }
   display: flex;
   flex-direction: column;
   background: linear-gradient(180deg, rgba(26, 26, 26, 0.82), rgba(17, 17, 17, 0.92));
-  outline: 2px solid rgba(240, 237, 232, 0.22);
-  overflow: hidden;
-  position: relative;
+  border-radius: 10px; overflow: hidden; position: relative;
 }
 
 /* Custom title bar — replaces the native top bar in borderless window mode and
@@ -64,6 +69,7 @@ button, input, textarea { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--border-subtle);
   background: rgba(17, 17, 17, 0.96);
 }
+.titlebar button, .titlebar a, .titlebar input { -webkit-app-region: no-drag; }
 .titlebar button, .titlebar a, .titlebar input { -webkit-app-region: no-drag; }
 .titlebar-drag { flex: 1; min-width: 12px; height: 100%; }
 .titlebar-mascot {

@@ -182,6 +182,24 @@ export function App() {
     return () => { clearInterval(t); clearTimeout(stop); };
   }, [showWindowControls]);
 
+  // Zoom stays off: a desktop app has a fixed layout, and pinch/ctrl+wheel
+  // scaling breaks spacing and hit areas. Ctrl+/-/0 and pinch are eaten here;
+  // plain scrolling keeps working, and selection-friendly keys are untouched.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && (e.key === "+" || e.key === "-" || e.key === "=" || e.key === "0")) e.preventDefault();
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown, { passive: false });
+    window.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("wheel", onWheel);
+    };
+  }, []);
+
   useEffect(() => {
     if (!busy) return;
     const spinner = setInterval(() => setFrame((value) => (value + 1) % SPINNER_FRAMES.length), 120);
