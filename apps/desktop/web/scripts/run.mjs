@@ -22,6 +22,54 @@ const shellModeFile = path.join(web, "resources", "app", "shell-mode.json");
 const authInfoFile = path.join(web, ".tmp", "auth_info.json");
 const neuExe = path.join(web, "bin", "neutralino-win_x64.exe");
 
+/**
+ * Ask DWM to round the native window's corners.
+ *
+ * CSS border-radius rounds the *content*; the OS still composites a square
+ * top-level window, so the"rounding" was invisible: WebView2 paints an
+ * opaque square and nothing shows through. Windows 11 can round any window
+ * via DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND),
+ * which is what this does — DWM then clips *everything* outside the curve,
+ * content included, and the desktop shows through at the corners.
+ *
+ * Borderless (WS_POPUP-style) windows do not get the OS default rounding,
+ * so the app must ask explicitly — same as Chrome does for its own windows.
+ * PowerShell is the vehicle because the launcher is a script, not an addon.
+ */
+function applyRoundedCorners() {
+  const ps = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class Dwc {
+  [DllImport("dwmapi.dll")]
+  public static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);
+}
+'@
+$deadline = (Get-Date).AddSeconds(15)
+while ((Get-Date) -lt $deadline) {
+  $p = Get-Process neutralino-win_x64 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+  if ($p) {
+    $pref = 2 # DWMWCP_ROUND
+    [Dwc]::DwmSetWindowAttribute($p.MainWindowHandle, 33, [ref]$pref, 4) | Out-Null
+    exit 0
+  }
+  Start-Sleep -Milliseconds 250
+}
+exit 1
+`;
+  const win = process.platform === "win32";
+  if (!win) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("exit", (code) => resolve(code === 0));
+    child.on("error", () => resolve(false));
+  });
+}
+
 const children = new Set();
 function killAll() {
   for (const child of children) {
@@ -123,6 +171,14 @@ async function main() {
     killAll();
     process.exit(1);
   });
+
+  // Round the native window once it exists (Windows 11 DWM; see the function
+  // doc). Chrome mode already gets OS-rounded corners from Chrome itself.
+  if (mode === "window") {
+    void applyRoundedCorners().then((ok) => {
+      console.log(ok ? "[run] window corners rounded (DWM)" : "[run] could not set DWM corner preference");
+    });
+  }
 
   console.log(`[run] Neutralino launched (${mode} mode). Agent on ${port}. Close the window to exit.`);
 }
