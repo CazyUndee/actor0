@@ -269,3 +269,43 @@ test("a save keeps the results the model is still reasoning about", () => {
   }
   assert.ok(results[0]!.content.startsWith("[result cleared"), "the oldest payload should still have gone");
 });
+
+// --- M3: the other direction of session sharing -----------------------------
+
+test("M3: the CLI loads a desktop-written session, ignoring the fields it does not know", () => {
+  // The desktop app writes cwd/title alongside the shared StoredSession fields
+  // (build 84). The CLI's loader filters by shape, so those extra keys must be
+  // ignored, not rejected — otherwise every desktop conversation would be
+  // unopenable here. This is the "vice versa" half of M3, pinned.
+  const id = "2026-01-01T00-00-00-000Z-desktop";
+  const payload = {
+    version: 1,
+    id,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:05:00.000Z",
+    model: "desktop-model",
+    messages: [
+      { role: "user", content: "written by the desktop app" },
+      { role: "assistant", content: "and read back by the CLI" },
+    ],
+    cwd: "d:/projects/example",
+    title: "desktop session round trip",
+  };
+  mkdirSync(join(process.env.ACTOR0_DATA_DIR!, "sessions"), { recursive: true });
+  writeFileSync(sessionFile(id), JSON.stringify(payload, null, 2), "utf8");
+
+  const loaded = loadSession(id);
+  assert.ok(loaded, "a desktop-written session must load in the CLI");
+  assert.equal(loaded.model, "desktop-model");
+  assert.equal(loaded.messages.length, 2);
+  assert.equal(loaded.messages[0]!.role, "user");
+  assert.equal(loaded.messages[0]!.content, "written by the desktop app");
+  // The unknown fields are not a load failure, and do not become part of the
+  // CLI's own view of a session.
+  assert.equal(Object.hasOwn(loaded, "cwd"), false, "cwd must not leak into the CLI's StoredSession");
+
+  // And it appears in the list, which is how a user would reach it.
+  const listed = listSessions().find((session) => session.id === id);
+  assert.ok(listed, "a desktop-written session must appear in --sessions");
+  assert.equal(listed.messages.length, 2);
+});
