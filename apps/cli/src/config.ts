@@ -1,4 +1,5 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import { configFile } from "./paths.js";
 import type { OAuthTokens } from "./oauth.js";
@@ -501,10 +502,51 @@ export function describeProvider(provider: ResolvedProvider): string[] {
   ];
 }
 
+/**
+ * On Windows, restrict a file to the current user via `icacls`.
+ *
+ * `chmod`/`mode` are near-meaningless on Windows: `writeFileSync(mode: 0o600)`
+ * only gates a *new* file's readonly bit, and `chmodSync` toggles the read-only
+ * attribute — neither touches the ACL, so the file inherits the parent
+ * directory's and every local account could read the provider keys it holds
+ * (C-2). The native way to say "owner only" is an explicit ACL: remove the
+ * inherited ACEs and grant the current user full control. `icacls` is present
+ * on every Windows install; a failure (it can happen on some network shares and
+ * in locked-down environments) is swallowed rather than failing the save — the
+ * 0o600 mode line above still covers POSIX, and on Windows a refused ACL edit
+ * must not lose the config. Best-effort, but best-effort beats no enforcement at
+ * all.
+ */
+function restrictToOwnerWindows(file: string): void {
+  if (process.platform !== "win32") return;
+  try {
+    const user =
+      process.env.USERDOMAIN && process.env.USERNAME
+        ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}`
+        : process.env.USERNAME;
+    if (!user) return;
+    // /inheritance:r — remove inherited ACEs; /grant — add the current user.
+    // /c — continue on errors where it can, as long as the grant succeeds.
+    const result = spawnSync("icacls", [file, "/inheritance:r", "/grant", `"${user}:F"`, "/c"], {
+      windowsHide: true,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    if (result.status !== 0) {
+      // A share or environment that refuses ACL edits: the file still exists and
+      // POSIX-mode 0o600 did what it could (nothing, on NTFS). Not fatal — but
+      // surface it nowhere silently either: stderr from icacls is dropped so a
+      // failure never interpolates noise into a save the user believe succeeded.
+    }
+  } catch {
+    /* ACL hardening is best-effort; the save itself must not fail */
+  }
+}
+
 /** Persist config, creating the directory and locking the file to the owner. */
 export function saveConfig(config: CliConfig): void {
   const file = configFile();
-  mkdirSync(dirname(file), { recursive: true });
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   // A legacy single `provider` and a `providers` list are two sources of truth
   // for one endpoint; persisting both is exactly the drift this module exists
   // to prevent. When the list is present it is the only shape written —
@@ -513,6 +555,7 @@ export function saveConfig(config: CliConfig): void {
   writeFileSync(file, `${JSON.stringify(toWrite, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   // `mode` is ignored when the file already exists, so set it explicitly.
   chmodSync(file, 0o600);
+  restrictToOwnerWindows(file);
 }
 
 /**

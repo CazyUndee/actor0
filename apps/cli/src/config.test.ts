@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -360,6 +361,25 @@ test("saving keeps the file to the owner", { skip: process.platform === "win32" 
     saveConfig({ model: "m", models: [] });
     const file = join(dir, "config.json");
     assert.equal(statSync(file).mode & 0o777, 0o600, "config holds no credential, but it is still private");
+  });
+});
+
+test("on Windows the config's ACL grants only the current user (C-2)", { skip: process.platform !== "win32" }, () => {
+  // `mode: 0o600` is a no-op for the ACL on Windows — `chmodSync` only toggles
+  // the read-only bit, so the file inherited the parent directory's ACL and
+  // every local account could read the provider keys. saveConfig now sets an
+  // explicit ACL (inheritance removed, current user granted full control).
+  // Assert against the ACL icacls itself reports.
+  withConfigDir((dir) => {
+    saveConfig({ model: "m", models: [] });
+    const file = join(dir, "config.json");
+    const out = spawnSync("icacls", [file], { encoding: "utf8", windowsHide: true, timeout: 10_000 });
+    assert.equal(out.status, 0, "icacls must be able to read the ACL back");
+    const report = out.stdout ?? "";
+    // The one grant present is the current user, and the inherited ACEs are gone.
+    const user = process.env.USERNAME ?? "";
+    assert.ok(user && report.includes(user), `the ACL must name the current user:\n${report}`);
+    assert.ok(!/BUILTIN\\Users|Mandatory Label|Everyone/i.test(report), `the ACL must not grant other local accounts:\n${report}`);
   });
 });
 
