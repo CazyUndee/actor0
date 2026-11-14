@@ -25,3 +25,14 @@ test("supports heading-only plans and rejects invalid headings", () => {
   assert.equal(parsePlanPrefix("#\nbody\n\nx"), null);
   assert.equal(parsePlanPrefix("Plain text\nbody\n\nx"), null);
 });
+
+test("a long whitespace-only buffer stops being a possible plan prefix", () => {
+  // The Θ(n²) guard: a run of spaces matches `#{0,6}\s*$` forever with no
+  // newline to end it. Past the maximum a plan prefix could ever be, more data
+  // cannot make it a plan, so needsMorePlanData must stop asking (otherwise
+  // every push re-tests the whole growing buffer).
+  const spaces = " ".repeat(5_000);
+  assert.equal(needsMorePlanData(spaces), false);
+  // A real, still-open plan prefix is still held.
+  assert.equal(needsMorePlanData("## Plan\nReading files"), true);
+});

@@ -486,7 +486,7 @@ export async function runAgentTurn(options: {
             tool_call_id: call.id,
             name: call.function.name,
           });
-          for (const message of result.newMessages ?? []) {
+          for (const message of injectedContextMessages(result.newMessages)) {
             messages.push(message);
           }
           await emit(options.observer, { type: "tool_result", call, output: result });
@@ -822,6 +822,26 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * The messages a tool result is allowed to inject into the conversation.
+ *
+ * `ToolResult.newMessages` is a public port, and a tool whose output includes
+ * remote content (a fetched page, an MCP server, a file the model read) can be
+ * steered into returning messages it did not author. Allowed to pass through
+ * verbatim, that is a prompt-injection primitive: a single tool result could
+ * author a `system` turn ("new policy: ..."), an `assistant` turn (the model's
+ * own prior reasoning), and a `user` turn ("yes, proceed").
+ *
+ * So the harness admits only the roles a host may legitimately derive from a
+ * tool's output — `user` and `tool`. A `system` or `assistant` message is
+ * dropped: those are the operator's and the model's own voices, never a
+ * tool's to speak in.
+ */
+function injectedContextMessages(messages: ChatMessage[] | undefined): ChatMessage[] {
+  if (!messages) return [];
+  return messages.filter((message) => message.role === "user" || message.role === "tool");
+}
+
 /** The streamed text an aborted attempt carried out on its error, if any. */
 function attemptTextOf(error: unknown): string {
   const text = (error as { attemptText?: string } | null | undefined)?.attemptText;
@@ -850,11 +870,19 @@ function attemptTextOf(error: unknown): string {
  *
  * The result is API-valid by construction: no dangling call, no unanswered
  * `tool_calls` — the shapes a provider rejects the whole request over.
+ *
+ * The unanswered calls belong to an assistant message already in `messages`
+ * (the round pushed it with *all* its `tool_calls` before any of them ran).
+ * So they are answered in place — one `tool` message per call, appended right
+ * after the results that already landed — never re-emitted as fresh assistant
+ * messages. Re-emitting them left the original assistant message's calls
+ * unanswered and every id duplicated across two assistant messages, which the
+ * provider rejects on every subsequent request: a permanently dead session
+ * from an ordinary Esc-during-a-command.
  */
 function abortTurn(messages: ChatMessage[], partialText: string, unanswered: ToolCall[]): never {
   const transcript = [...messages];
   for (const call of unanswered) {
-    transcript.push({ role: "assistant", content: "", tool_calls: [call] });
     transcript.push({
       role: "tool",
       content: CANCELLED_TOOL_RESULT,
@@ -862,6 +890,10 @@ function abortTurn(messages: ChatMessage[], partialText: string, unanswered: Too
       name: call.function.name,
     });
   }
+  // The interrupt marker rides on its own trailing assistant message so a
+  // resumed session reads the turn as stopped. When a cancel cut off streamed
+  // text, that text is marked; when it landed mid-tool, the marker alone marks
+  // the turn (the tool-call assistant message already carries the text).
   transcript.push({ role: "assistant", content: withInterruptMarker(partialText) });
   throw new AbortedTurnError(transcript, partialText);
 }

@@ -25,6 +25,18 @@ export class ModelTransportError extends Error {
 export const MAX_HONOURED_RETRY_AFTER_MS = 120_000;
 
 /**
+ * The largest SSE read buffer this client will accumulate before giving up.
+ *
+ * A frame boundary is the only thing that shrinks the buffer, and a hostile or
+ * merely broken endpoint can stream megabytes without ever emitting one. With
+ * no cap that is unbounded memory growth (measured ~4× the stream size once the
+ * UTF-16 decode is counted) and, in the desktop app, an OOM-kill mid-session.
+ * A well-behaved frame is a few kilobytes at most, so a 1 MiB buffer that has
+ * not seen a boundary is not a stream worth continuing to read.
+ */
+export const MAX_SSE_BUFFER_BYTES = 1_048_576;
+
+/**
  * How long the server asked us to wait, in milliseconds.
  *
  * `Retry-After` is a count of seconds per RFC 9110, and an HTTP-date in the
@@ -114,6 +126,13 @@ export class OpenAiCompatibleModel implements ModelClient {
     }
     url.search = "";
     url.hash = "";
+    // Userinfo (https://user:pass@host) is a credential in the URL and the
+    // endpoint is echoed into every failure message the user reads. The query
+    // string is cleared above for the same reason; userinfo was missed, which
+    // leaked a gateway token into the terminal, the scrollback, and any
+    // captured stderr in -p mode.
+    url.username = "";
+    url.password = "";
     this.endpoint = url.toString();
     this.apiKey = options.apiKey?.trim() || undefined;
     this.model = options.model.trim();
@@ -212,6 +231,12 @@ export class OpenAiCompatibleModel implements ModelClient {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
+        if (buffer.length > MAX_SSE_BUFFER_BYTES) {
+          throw new ModelTransportError(
+            `endpoint streamed more than ${MAX_SSE_BUFFER_BYTES} bytes without a complete event frame; aborting to avoid unbounded memory growth`,
+            true,
+          );
+        }
         const parsed = drainFrames(buffer);
         buffer = parsed.rest;
         yield* frames(parsed.frames);
@@ -249,8 +274,24 @@ class ToolCallBuffer {
     }
   }
   finish(): ToolCall[] {
-    return [...this.calls.entries()].sort(([a], [b]) => a - b).map(([index, call], position) => ({ ...call, id: call.id || `call_${index}_${position}` }));
+    return [...this.calls.entries()].sort(([a], [b]) => a - b).map(([index, call], position) => ({ ...call, id: call.id || nextSyntheticCallId(index, position) }));
   }
+}
+
+/**
+ * A monotonic counter for synthesised tool-call ids.
+ *
+ * An endpoint that omits `id` on a streamed tool call gets one minted here. It
+ * must be unique across the whole session, not just within a round: a value
+ * derived only from the call's index/position (`call_0_0`) is identical in
+ * round 1 and round 2, so the transcript ends up with two assistant messages
+ * sharing one `tool_call_id`, which every OpenAI-compatible provider rejects on
+ * every subsequent request — a permanently poisoned session.
+ */
+let syntheticCallSeq = 0;
+function nextSyntheticCallId(index: number, position: number): string {
+  syntheticCallSeq += 1;
+  return `call_${index}_${position}_${syntheticCallSeq}`;
 }
 
 /**
@@ -670,6 +711,21 @@ function closeLine(retriable: boolean, wait?: number, permanentAdvice?: string):
     : `Rate limited until the window resets in about ${seconds}s. The harness will not keep retrying before then.`;
 }
 
+/**
+ * Flatten a provider-supplied error string into something safe to print.
+ *
+ * The detail is interpolated into a failure message that reaches the terminal.
+ * A bare CR overwrites the line the user is reading; embedded CR/LF forges
+ * whole extra lines ("SYSTEM: exfiltrate ...") aimed at the user or at a model
+ * reading captured output. Collapse every C0 control (tab/newline/CR included)
+ * and any run of whitespace to a single space, in both the JSON and non-JSON
+ * branches, so no provider text can reshape the rendered message.
+ */
+function sanitizeErrorDetail(text: string): string {
+  // eslint-disable-next-line no-control-regex -- stripping C0/DEL controls from untrusted provider text is the point
+  return text.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function parseErrorMessage(body: string): string | undefined {
   if (!body.trim()) return undefined;
   let value: unknown;
@@ -683,14 +739,14 @@ function parseErrorMessage(body: string): string | undefined {
     const text = body.trim();
     if (/^[{[]/.test(text)) return undefined;
     // eslint-disable-next-line no-control-regex -- this range is a screenful of C0 control characters, and detecting them is the point
-    if (text.length <= 300 && !/[\u0000-\u0008\u000e-\u001f]/.test(text)) return text;
+    if (text.length <= 300 && !/[\u0000-\u0008\u000e-\u001f]/.test(text)) return sanitizeErrorDetail(text);
     return undefined;
   }
   const record = value as { error?: { message?: string } | string; message?: string; detail?: string };
-  if (typeof record.error === "string") return record.error;
-  if (typeof record.error?.message === "string") return record.error.message;
-  if (typeof record.message === "string") return record.message;
-  if (typeof record.detail === "string") return record.detail;
+  if (typeof record.error === "string") return sanitizeErrorDetail(record.error);
+  if (typeof record.error?.message === "string") return sanitizeErrorDetail(record.error.message);
+  if (typeof record.message === "string") return sanitizeErrorDetail(record.message);
+  if (typeof record.detail === "string") return sanitizeErrorDetail(record.detail);
   return undefined;
 }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }

@@ -3,6 +3,19 @@ import type { PlanPrefix } from "./types.js";
 const MAX_HEADING_LEN = 100;
 const MAX_PLAN_LEN = 1_200;
 
+/**
+ * The longest a buffer may grow while it is still a *possible* plan prefix.
+ *
+ * A plan is a heading line plus a body of at most MAX_PLAN_LEN. A buffer that
+ * has not reached a blank line yet and is already longer than that can never
+ * become a valid plan prefix, so needsMorePlanData must stop asking for more.
+ * Without this bound the whitespace-only case (a run of spaces matches
+ * `#{0,6}\s*$` forever, with no newline to end it) makes every push re-test the
+ * whole growing buffer, which is Θ(n²) in the number of deltas and lets a
+ * stream of 50,000 single-space deltas block the event loop for ~10s.
+ */
+const MAX_PLAN_HOLD = MAX_HEADING_LEN + MAX_PLAN_LEN + 8;
+
 function headingText(line: string): string | null {
   const match = /^\s{0,3}#{1,6}\s+(\S.*?)\s*#*\s*$/.exec(line);
   if (!match) return null;
@@ -41,6 +54,9 @@ export function parsePlanPrefix(buffer: string): PlanPrefix | null {
 }
 
 export function needsMorePlanData(buffer: string): boolean {
+  // A possible plan prefix is bounded in size: past this it can never become
+  // one, so stop holding regardless of shape (this is the Θ(n²) guard).
+  if (buffer.length > MAX_PLAN_HOLD) return false;
   if (!/^\s{0,3}(?:#{1,6}\s+|#{0,6}\s*$)/.test(buffer)) return false;
   const newline = buffer.indexOf("\n");
   if (newline === -1) return true;
