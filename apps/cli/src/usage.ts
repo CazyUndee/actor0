@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Usage, TurnAudit } from "@actor0/harness";
 import { dataDir } from "./paths.js";
@@ -27,6 +27,20 @@ export type UsageEntry = {
 
 const usageFile = (): string => join(dataDir(), "usage.jsonl");
 
+/**
+ * Append a line to a JSONL log with the file created 0o600.
+ *
+ * `appendFileSync` creates the file with the default umask (commonly 0644), so a
+ * usage/audit log was world-readable on a shared host. Create it 0o600 on first
+ * write and chmod an existing one down, so the log is the user's alone. POSIX
+ * honours the mode; Windows ignores it (the parent ACL governs).
+ */
+function appendPrivate(file: string, line: string): void {
+  mkdirSync(dataDir(), { recursive: true, mode: 0o700 });
+  appendFileSync(file, line, { encoding: "utf8", mode: 0o600 });
+  try { chmodSync(file, 0o600); } catch { /* Windows no-op; POSIX tightens an existing file */ }
+}
+
 /** Append one turn's token counts. */
 export function recordUsage(model: string, usage: Usage): void {
   const entry: UsageEntry = {
@@ -37,7 +51,7 @@ export function recordUsage(model: string, usage: Usage): void {
     total: usage.total_tokens ?? 0,
   };
   mkdirSync(dataDir(), { recursive: true });
-  appendFileSync(usageFile(), `${JSON.stringify(entry)}\n`, "utf8");
+  appendPrivate(usageFile(), `${JSON.stringify(entry)}\n`);
 }
 
 /** Every recorded turn, oldest first. */
@@ -99,7 +113,7 @@ export function recordAudit(model: string, audit: TurnAudit): void {
     totalTokens: audit.totalTokens,
   };
   mkdirSync(dataDir(), { recursive: true });
-  appendFileSync(auditFile(), `${JSON.stringify(entry)}\n`, "utf8");
+  appendPrivate(auditFile(), `${JSON.stringify(entry)}\n`);
 }
 
 /** Every recorded audit, oldest first. */

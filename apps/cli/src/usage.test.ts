@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, rmSync, appendFileSync } from "node:fs";
+import { mkdtempSync, rmSync, appendFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -46,6 +46,15 @@ test("a turn's counts round-trip through the log", () => {
     assert.equal(entry!.prompt, 100);
     assert.equal(entry!.model, "m");
     assert.ok(entry!.t > 0);
+  });
+});
+
+test("the usage log is owner-only, not world-readable (C-4)", () => {
+  withDataDir(() => {
+    recordUsage("m", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 });
+    if (process.platform === "win32") return; // POSIX modes are not meaningful on Windows.
+    const mode = statSync(join(process.env.ACTOR0_DATA_DIR!, "usage.jsonl")).mode & 0o777;
+    assert.equal(mode, 0o600, `usage log mode is ${mode.toString(8)}, expected 600`);
   });
 });
 

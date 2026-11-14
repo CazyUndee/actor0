@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, readdirSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatMessage } from "@actor0/harness";
@@ -86,6 +86,22 @@ test("a save leaves no staging file behind", () => {
   });
   const after = readdirSync(join(process.env.ACTOR0_DATA_DIR!, "sessions")).filter((f) => f.includes(".tmp"));
   assert.deepEqual(after, before, "a temp file that outlives its rename becomes litter");
+});
+
+test("a saved session is owner-only, not world-readable (C-4)", () => {
+  // A transcript carries file contents and tool output; on a shared POSIX host
+  // it must not be readable by other local accounts. saveSession writes it
+  // 0o600.
+  saveSession({
+    id: "private-perms",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    model: "m",
+    messages: conversation(1),
+  });
+  if (process.platform === "win32") return; // POSIX modes are not meaningful on Windows.
+  const mode = statSync(sessionFile("private-perms")).mode & 0o777;
+  assert.equal(mode, 0o600, `session file mode is ${mode.toString(8)}, expected 600`);
 });
 
 test("an id that climbs out of the sessions directory is refused", () => {

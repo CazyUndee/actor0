@@ -1,5 +1,5 @@
 import type { ChatMessage } from "@actor0/harness";
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { compactHistory, compactHistoryPerMessage, repairHistory, SESSION_KEEP_RECENT } from "./history.js";
 import { sessionsDir } from "./paths.js";
@@ -62,7 +62,12 @@ function assertSessionId(id: string): void {
 
 export function saveSession(session: StoredSession): void {
   assertSessionId(session.id);
-  mkdirSync(sessionsDir(), { recursive: true });
+  // The data dir and the sessions dir are the user's private state — a full
+  // transcript, including file contents the model read and tool output. Create
+  // them 0o700 so no other local account can list or read them; on POSIX the
+  // mode is honoured, and on Windows it is a no-op the ACL of the parent governs
+  // (see saveConfig).
+  mkdirSync(sessionsDir(), { recursive: true, mode: 0o700 });
   // The per-message pass runs first: it bounds a single turn's tool-result
   // burst whatever the age of the results, and the global pass then clears
   // remaining stale results oldest-first. Both are clear-only — see history.ts.
@@ -95,7 +100,13 @@ export function saveSession(session: StoredSession): void {
   // thing a user cannot reconstruct.
   const staging = `${target}.${process.pid}.tmp`;
   try {
-    const handle = openSync(staging, "w"); try { writeFileSync(handle, `${JSON.stringify(payload, null, 2)}\n`, "utf8"); fsyncSync(handle); } finally { closeSync(handle); }
+    // 0o600 on the staging file so the transcript is never world-readable — the
+    // rename preserves the mode, so a chmod after would be too late for a reader
+    // that raced the write. POSIX honours it; Windows ignores it (ACL-governed).
+    const handle = openSync(staging, "w", 0o600); try { writeFileSync(handle, `${JSON.stringify(payload, null, 2)}\n`, "utf8"); fsyncSync(handle); } finally { closeSync(handle); }
+    // Belt and braces on POSIX for an umask that would strip the bits: an existing
+    // staging file keeps its old mode, so set it explicitly before the rename.
+    try { chmodSync(staging, 0o600); } catch { /* best effort; Windows has no-op'd this */ }
     renameSync(staging, target);
   } catch (error) {
     // Never leave a staging file behind for `listSessions` to trip over.
