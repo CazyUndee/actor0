@@ -33,6 +33,13 @@ export type ProviderConfig = {
   auth?: ProviderAuth;
   /** The credential; `${NAME}` reads from the environment. */
   apiKey?: string;
+  /**
+   * Environment variables this provider's `${NAME}` expansions may read —
+   * the C-3 gate, shared with the CLI. A variable outside `ACTOR0_*` must be
+   * named here to resolve; a config file is not authority over the user's
+   * environment.
+   */
+  envAllow?: string[];
   /** OAuth tokens, when `auth` is "oauth". */
   oauth?: OAuthTokens;
   /** Reasoning effort for models that support it. */
@@ -172,6 +179,7 @@ function parseProviders(value: unknown): NamedProvider[] {
       ...(isTransport(entry.transport) ? { transport: entry.transport } : {}),
       ...(isAuth(entry.auth) ? { auth: entry.auth } : {}),
       ...(nonEmptyString(entry.apiKey) ? { apiKey: nonEmptyString(entry.apiKey)! } : {}),
+      ...(stringList(entry.envAllow).length ? { envAllow: stringList(entry.envAllow) } : {}),
       ...(oauth ? { oauth } : {}),
       ...(isEffort(entry.reasoningEffort) ? { reasoningEffort: entry.reasoningEffort } : {}),
       ...(stringMap(entry.headers) ? { headers: stringMap(entry.headers)! } : {}),
@@ -267,12 +275,20 @@ export function saveConfig(config: DesktopConfig): void {
  * string would authenticate as nobody and surface as a 401 that reads like a
  * wrong model — a genuinely hard thing to diagnose from the outside.
  */
-function expandEnv(value: string, field: string): string {
+function expandEnv(value: string, field: string, allowed: ReadonlySet<string>): string {
   return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => {
-    const found = process.env[name];
-    if (found === undefined) {
+    if (!allowed.has(name) && !name.startsWith("ACTOR0_")) {
       throw new ConfigError(
-        `${field} refers to \${${name}}, but ${name} is not set in the environment.`,
+        `${field} refers to \${${name}}, but that variable is not in this provider's "envAllow" list. ` +
+          `Add "${name}" to the provider's "envAllow" array, or use an "ACTOR0_"-prefixed variable. ` +
+          `This is a guard against a config file that names secrets it was never given.`,
+      );
+    }
+    const found = process.env[name];
+    if (!found) {
+      throw new ConfigError(
+        `${field} refers to \${${name}}, and that environment variable is not set. ` +
+          `Set it, or put the value in config.json directly.`,
       );
     }
     return found;
@@ -318,7 +334,10 @@ export function resolveProvider(config: DesktopConfig): ResolvedProvider {
   const auth: ProviderAuth = stored?.auth ?? "api-key";
   const envKey = process.env.ACTOR0_API_KEY?.trim();
   const rawKey = envKey || stored?.apiKey;
-  const apiKey = rawKey ? expandEnv(rawKey, "apiKey") : undefined;
+  // The environment gate for `${NAME}` expansions: the `ACTOR0_*` namespace
+  // plus whatever `envAllow` lists on the resolved provider.
+  const envAllowed = new Set<string>(stored?.envAllow ?? []);
+  const apiKey = rawKey ? expandEnv(rawKey, "apiKey", envAllowed) : undefined;
   const oauth = stored?.oauth;
   if (auth === "oauth" && !oauth?.accessToken) {
     throw new ConfigError(
@@ -327,7 +346,7 @@ export function resolveProvider(config: DesktopConfig): ResolvedProvider {
   }
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(stored?.headers ?? {})) {
-    headers[name] = expandEnv(value, `headers.${name}`);
+    headers[name] = expandEnv(value, `headers.${name}`, envAllowed);
   }
 
   return {

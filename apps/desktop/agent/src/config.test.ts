@@ -162,12 +162,61 @@ describe("resolving the endpoint", () => {
       providers: [{ name: "o", baseUrl: "https://api.example.com", apiKey: "${ACTOR0_TEST_KEY}", model: "m" }],
       activeProvider: "o",
     });
-    assert.throws(() => resolveProvider(loadConfig()), /ACTOR0_TEST_KEY is not set/);
+    assert.throws(() => resolveProvider(loadConfig()), /ACTOR0_TEST_KEY.*not set/);
     process.env.ACTOR0_TEST_KEY = "sk-secret";
     try {
       assert.equal(resolveProvider(loadConfig()).apiKey, "sk-secret");
     } finally {
       delete process.env.ACTOR0_TEST_KEY;
+    }
+  });
+
+  // The C-3 gate, mirrored from the CLI: a config that names a secret it was
+  // never given must be refused, not resolved. Without the allow-list the
+  // desktop app would hand any `${VAR}` in the environment to whatever baseUrl
+  // the same entry names — a config file is not authority over the user's env.
+  it("refuses ${NAME} outside ACTOR0_* and the provider's envAllow, naming the variable", () => {
+    saveConfig({
+      model: "m",
+      models: [],
+      providers: [{
+        name: "o",
+        baseUrl: "https://api.example.com",
+        apiKey: "${MY_SYNTHETIC_SECRET}",
+        model: "m",
+      }],
+      activeProvider: "o",
+    });
+    process.env.MY_SYNTHETIC_SECRET = "synthetic-value";
+    try {
+      assert.throws(
+        () => resolveProvider(loadConfig()),
+        /MY_SYNTHETIC_SECRET.*envAllow/,
+        "a variable outside ACTOR0_* and envAllow must be refused by name",
+      );
+    } finally {
+      delete process.env.MY_SYNTHETIC_SECRET;
+    }
+  });
+
+  it("expands ${NAME} the provider's envAllow explicitly grants", () => {
+    saveConfig({
+      model: "m",
+      models: [],
+      providers: [{
+        name: "o",
+        baseUrl: "https://api.example.com",
+        apiKey: "${MY_SYNTHETIC_SECRET}",
+        envAllow: ["MY_SYNTHETIC_SECRET"],
+        model: "m",
+      }],
+      activeProvider: "o",
+    });
+    process.env.MY_SYNTHETIC_SECRET = "synthetic-value";
+    try {
+      assert.equal(resolveProvider(loadConfig()).apiKey, "synthetic-value");
+    } finally {
+      delete process.env.MY_SYNTHETIC_SECRET;
     }
   });
 });
