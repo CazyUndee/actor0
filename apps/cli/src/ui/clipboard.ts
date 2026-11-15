@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { closeSync, openSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,15 +44,48 @@ export function copyToClipboard(text: string): boolean {
   return false;
 }
 
-function copyViaPowerShellFile(text: string): boolean {
-  const file = join(tmpdir(), `actor0-clip-${process.pid}-${Date.now()}.txt`);
+/**
+ * Create the UTF-8 temp file the PowerShell clipboard hop reads, or undefined
+ * when the path could not be claimed.
+ *
+ * Exported for the regression test that pins the symlink rule. The name is
+ * unpredictable (`randomBytes`) *and* the open is `wx`, and both halves matter:
+ * the randomness makes a guess useless, while `wx` means that even a correct
+ * guess — a hostile local process that pre-created the path as a symlink — is
+ * refused instead of written through. A predictable name opened with plain `w`
+ * is the classic shared-temp symlink attack: verified to truncate a file
+ * outside any directory the agent was given.
+ */
+export function createClipTempFile(text: string): { file: string; remove: () => void } | undefined {
+  const file = join(tmpdir(), `actor0-clip-${process.pid}-${randomBytes(16).toString("hex")}.txt`);
+  let handle: number;
+  try {
+    handle = openSync(file, "wx", 0o600);
+  } catch {
+    return undefined;
+  }
+  const remove = (): void => {
+    try { unlinkSync(file); } catch { /* best effort */ }
+  };
   try {
     // Write with a UTF-8 BOM so PowerShell's Get-Content auto-detects UTF-8
     // regardless of the system's default encoding.
-    writeFileSync(file, "﻿" + text, "utf8");
+    writeFileSync(handle, "\uFEFF" + text, "utf8");
+    closeSync(handle);
   } catch {
-    return false;
+    try { closeSync(handle); } catch { /* the failure already closed it */ }
+    remove();
+    return undefined;
   }
+  return { file, remove };
+}
+
+function copyViaPowerShellFile(text: string): boolean {
+  // The temp file is created, not merely named — see createClipTempFile for
+  // why that distinction is the security property.
+  const created = createClipTempFile(text);
+  if (!created) return false;
+  const { file, remove } = created;
   const script =
     "$t = Get-Content -LiteralPath $env:ACTOR0_CLIP_FILE -Raw -Encoding UTF8; " +
     "Set-Clipboard -Value $t";
@@ -61,14 +95,17 @@ function copyViaPowerShellFile(text: string): boolean {
       ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
       { stdio: "ignore", windowsHide: true, env: { ...process.env, ACTOR0_CLIP_FILE: file } },
     );
-    child.on("error", () => {});
-    // Clean up once the process exits.
-    child.on("exit", () => {
-      try { unlinkSync(file); } catch { /* best effort */ }
+    child.on("error", () => {
+      // The child never started, so nothing will read the file and no `exit`
+      // is coming: unlink here, or the transcript text the user copied sits in
+      // the shared temp dir indefinitely.
+      remove();
     });
+    // Clean up once the process exits.
+    child.on("exit", remove);
     return true;
   } catch {
-    try { unlinkSync(file); } catch { /* best effort */ }
+    remove();
     return false;
   }
 }
