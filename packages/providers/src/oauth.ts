@@ -348,16 +348,30 @@ export function planFromIdToken(idToken: string): string | undefined {
   return typeof plan === "string" && plan ? plan : undefined;
 }
 
+/**
+ * The command that opens a URL on this platform, as (`file`, [argv]) —
+ * exported for the regression test that pins the no-cmd rule. On Windows the
+ * URL must not pass through cmd.exe at all: `cmd /c start "" <url>` splits
+ * an unquoted argument on `&`, and every authorize URL is full of them —
+ * the browser opened `?state=...` and stopped, the rest of the query
+ * (client_id, code_challenge, everything) was parsed as *commands* and
+ * executed (verified: `&calc` in a test URL launched Calculator). rundll32
+ * url.dll,FileProtocolHandler is a direct execFile with the URL as one
+ * literal argument — no cmd, no quoting rules, and verified to deliver the
+ * full query string to the browser. Kept in lockstep with the copy in the
+ * CLI; fix both or neither.
+ */
+export function browserCommand(url: string): { file: string; args: string[] } {
+  if (process.platform === "win32") return { file: "rundll32", args: ["url.dll,FileProtocolHandler", url] };
+  if (process.platform === "darwin") return { file: "open", args: [url] };
+  return { file: "xdg-open", args: [url] };
+}
+
 /** Open a URL in the user's default browser, best-effort per platform. */
 export function openBrowser(url: string): void {
-  // An argv array, never a shell string: the URL is a distinct argument, so a
-  // `"` or `&` in it cannot become shell syntax. On Windows `start` is a cmd
-  // builtin, so it runs through `cmd /c` with the URL still a separate argv (the
-  // empty string is `start`'s window-title slot).
   const swallow = (): void => {};
-  if (process.platform === "win32") execFile("cmd", ["/c", "start", "", url], swallow);
-  else if (process.platform === "darwin") execFile("open", [url], swallow);
-  else execFile("xdg-open", [url], swallow);
+  const { file, args } = browserCommand(url);
+  execFile(file, args, swallow);
   // A machine with no browser, or a headless one, must not crash the sign-in:
   // the caller prints the URL, so the flow still completes by hand.
 }

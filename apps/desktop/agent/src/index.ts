@@ -22,7 +22,7 @@ import { startServer } from "./server.js";
  *   NL_TOKEN            the shell's access token, for the native API
  */
 
-const VERSION = "0.5.7";
+const VERSION = "0.5.8";
 
 async function main(): Promise<void> {
   const log = (line: string): void => {
