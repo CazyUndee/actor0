@@ -208,7 +208,7 @@ export function stdioTransport(
     }
   });
   return {
-    send: (message, _signal) => {
+    send: (message) => {
       // The subprocess itself is the request's lifetime: close() kills it, and
       // a per-request abort has nothing additional to stop.
       child.stdin?.write(`${JSON.stringify(message)}\n`);

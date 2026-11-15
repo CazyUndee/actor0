@@ -16,7 +16,7 @@ import { McpHttpClient } from "./mcp-http.js";
  */
 let url: string;
 let server: ReturnType<typeof createServer>;
-let sockets = new Set<IncomingMessage>();
+const sockets = new Set<IncomingMessage>();
 
 before(async () => {
   server = createServer((request, response) => {
