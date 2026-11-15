@@ -1,7 +1,7 @@
 {
   "applicationId": "com.actor0.desktop",
   "version": "0.5.7",
-  "defaultMode": "chrome",
+  "defaultMode": "window",
   "url": "/",
   "documentRoot": "/resources/app",
   "enableServer": true,
@@ -20,10 +20,16 @@
     "events.*",
     "debug.*",
     "window.*",
-    "app.*"
+    "app.*",
+    "resources.*",
+    "os.getPath",
+    "os.getEnvs",
+    "os.showFolderDialog",
+    "os.showMessageBox"
   ],
   "commandAllowList": [
-    "node"
+    "node",
+    "node.exe"
   ],
   "logging": {
     "enabled": true,
@@ -53,7 +59,9 @@
   },
   "cli": {
     "binaryVersion": "6.10.0",
-    "clientVersion": "6.10.0"
+    "clientVersion": "6.10.0",
+    "resourcesPath": "resources",
+    "binaryName": "actor0-desktop"
   },
   "injectClientLibrary": true
 }

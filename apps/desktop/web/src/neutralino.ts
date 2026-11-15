@@ -23,6 +23,8 @@ export type NeutralinoApi = {
     showNotification?(title: string, content: string, icon?: string): Promise<void>;
     /** Native folder picker — the "browse…" affordance of a new conversation. */
     showFolderDialog?(title: string): Promise<string>;
+    /** Known platform folder ("data", "temp", ...). */
+    getPath?(name: string): Promise<string>;
   };
   filesystem?: {
     readFile(path: string): Promise<string>;
@@ -30,6 +32,10 @@ export type NeutralinoApi = {
     createDirectory(path: string): Promise<void>;
   };
   events?: { on(name: string, handler: (event: NeutralinoEvent) => void): Promise<void> };
+  resources?: {
+    /** Extract a directory bundled in resources.neu to a real path on disk. */
+    extractDirectory(path: string, destination: string): Promise<string[]>;
+  };
   app?: {
     exit(code?: number): Promise<void>;
   };

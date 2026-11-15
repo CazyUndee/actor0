@@ -14,10 +14,11 @@ import { startServer } from "./server.js";
  * Configuration is environment-first, because the shell is the thing that
  * knows where the app lives:
  *
- *   ACTOR0_AGENT_PORT   the port to listen on (default: any free port)
- *   ACTOR0_AGENT_TOKEN  the shared secret a client must present
- *   ACTOR0_AGENT_CWD    the working directory the tools are confined to
- *   NL_PATH             the shell's app directory (locates the native API)
+ *   ACTOR0_AGENT_PORT       the port to listen on (default: any free port)
+ *   ACTOR0_AGENT_TOKEN      the shared secret a client must present
+ *   ACTOR0_AGENT_PORT_FILE  where to write `{port}` once listening
+ *   ACTOR0_AGENT_CWD        the working directory the tools are confined to
+ *   NL_PATH                 the shell's app directory (locates the native API)
  *   NL_TOKEN            the shell's access token, for the native API
  */
 
@@ -33,12 +34,24 @@ async function main(): Promise<void> {
 
   const agent = new Agent({ cwd, bridge, version: VERSION });
 
+  // Env-first, argv as the fallback: the packaged desktop app spawns this
+  // process through Neutralino's `os.spawnProcess`, which silently fails
+  // (pid 0, no process) whenever `envs` is passed — measured, not assumed.
+  // So the shell passes --token/--port-file as plain arguments, and both
+  // routes end at the same values.
+  const args = new Map(process.argv.slice(2).map((a, i, all) => [a, all[i + 1]]));
+  const argValue = (flag: string): string | undefined => {
+    const indexed = args.get(flag)?.replace(/^"|"$/g, "");
+    return indexed && indexed.trim() ? indexed.trim() : undefined;
+  };
   const port = Number(process.env.ACTOR0_AGENT_PORT ?? "0") || 0;
-  const token = process.env.ACTOR0_AGENT_TOKEN?.trim() || undefined;
+  const token = process.env.ACTOR0_AGENT_TOKEN?.trim() || argValue("--token");
+  const portFile = process.env.ACTOR0_AGENT_PORT_FILE?.trim() || argValue("--port-file");
   const server = await startServer({
     agent,
     port,
     ...(token ? { token } : {}),
+    ...(portFile ? { portFile } : {}),
     onLog: log,
   });
 

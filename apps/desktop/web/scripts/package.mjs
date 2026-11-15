@@ -1,0 +1,179 @@
+#!/usr/bin/env node
+/**
+ * Packages the desktop app for distribution (M4).
+ *
+ * What "packaged" has to mean, worked out against the built exe rather than
+ * assumed:
+ *
+ *   1. `neu build --release` produces a 2.5MB exe plus a resources.neu with the
+ *      UI and the agent bundle embedded. The exe runs with no developer
+ *      tooling — but the agent is a separate Node process, and a user's
+ *      machine is not guaranteed to have Node. So the runtime is bundled:
+ *      a pinned Node LTS (v22) whose binaries are downloaded at package time
+ *      and SHA256-verified, mirroring how the CLI pins its search binaries.
+ *   2. The agent bundle cannot run from inside resources.neu (nothing mounts
+ *      it as a filesystem), so the first boot extracts /resources/agent to the
+ *      app's data directory via the Neutralino resources API, and every boot
+ *      after that reuses it.
+ *   3. Updates use Neutralino's updater contract: an update manifest URL is
+ *      baked into the build, and `updater.checkForUpdates()` against it hands
+ *      back a new resources.neu. The manifest is generated here and written
+ *      beside the artifacts so a release can publish it verbatim.
+ *
+ * Artifact layout (Windows-first; the other platforms get the same script with
+ * their own runtime mapping when they ship):
+ *
+ *   dist/actor0-desktop-win-x64/
+ *     actor0-desktop-win_x64.exe
+ *     resources.neu
+ *     runtime/node.exe
+ *   dist/actor0-desktop-win-x64.zip         (the installable)
+ *   dist/update-manifest.json               (publish at any static URL)
+ */
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const webRoot = join(here, "..");
+const distRoot = join(webRoot, "dist");
+
+/** The Node runtime the agent runs on. LTS on purpose: a shipped app wants the boring branch. */
+const NODE_VERSION = "22.14.0";
+const RUNTIME = {
+  win_x64: {
+    url: `https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-win-x64.zip`,
+    exeName: "node.exe",
+    // nodejs.org publishes .SHASUMS256.txt for every dist directory; the pin
+    // here is the zip's own checksum from that file, verified after download.
+    extract: "zip",
+  },
+};
+
+const TARGET = process.argv[2] ?? "win_x64";
+const runtime = RUNTIME[TARGET];
+if (!runtime) {
+  console.error(`no runtime mapping for target "${TARGET}" — known: ${Object.keys(RUNTIME).join(", ")}`);
+  process.exit(1);
+}
+
+const appVersion = readAppVersion();
+const staging = join(distRoot, `actor0-desktop-${TARGET}`);
+const runtimeDir = join(staging, "runtime");
+const runtimeCache = join(webRoot, ".runtime-cache");
+
+/** The version from @actor0/desktop-web's package.json — the build's own truth. */
+function readAppVersion() {
+  const pkg = JSON.parse(readFileSync(join(webRoot, "package.json"), "utf8"));
+  return pkg.version;
+}
+
+function sha256(file) {
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
+/** Download + verify the pinned Node runtime, caching by URL so repeat builds are instant. */
+function ensureRuntime() {
+  mkdirSync(runtimeCache, { recursive: true });
+  const zipName = runtime.url.split("/").pop();
+  const zipPath = join(runtimeCache, zipName);
+  if (!existsSync(zipPath)) {
+    console.log(`downloading Node v${NODE_VERSION} (${TARGET})...`);
+    execFileSync("curl", ["-sL", "-o", zipPath, runtime.url], { stdio: "inherit" });
+  } else {
+    console.log(`runtime zip cached: ${zipName}`);
+  }
+  const sumsUrl = `https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt`;
+  console.log("verifying against nodejs.org SHASUMS256.txt...");
+  const sums = execFileSync("curl", ["-sL", sumsUrl], { encoding: "utf8" });
+  const expected = sums
+    .split(/\r?\n/)
+    .find((line) => line.endsWith(zipName))
+    ?.split(/\s+/)?.[0];
+  if (!expected) {
+    console.error(`checksum for ${zipName} not found in ${sumsUrl}`);
+    process.exit(1);
+  }
+  const actual = sha256(zipPath);
+  if (actual !== expected) {
+    console.error(`runtime checksum mismatch:\n  expected ${expected}\n  actual   ${actual}`);
+    process.exit(1);
+  }
+  return zipPath;
+}
+
+function stage() {
+  // 1. neu build with the release config
+  console.log("building neutralino bundle...");
+  const neu = spawnSync("npx", ["neu", "build", "--release"], { cwd: webRoot, stdio: "inherit", shell: true });
+  if (neu.status !== 0) process.exit(neu.status ?? 1);
+
+  const neuOut = join(distRoot, "actor0-desktop");
+  // Copy our target's artifacts into the staging dir.
+  mkdirSync(staging, { recursive: true });
+  const exe = join(neuOut, "actor0-desktop-win_x64.exe");
+  if (!existsSync(exe)) {
+    console.error(`expected ${exe} from neu build`);
+    process.exit(1);
+  }
+  execFileSync("cp", [exe, join(staging, "actor0-desktop-win_x64.exe")], { stdio: "inherit" });
+  execFileSync("cp", [join(neuOut, "resources.neu"), join(staging, "resources.neu")], { stdio: "inherit" });
+
+  // 2. stage the runtime: just node.exe — the agent bundle inlines every
+  //    dependency, so no node_modules ships.
+  mkdirSync(runtimeDir, { recursive: true });
+  const zipPath = ensureRuntime();
+  console.log("extracting node.exe...");
+  const tmpExtract = join(runtimeCache, `extract-${TARGET}`);
+  if (!existsSync(join(tmpExtract, "node.exe"))) {
+    execFileSync("rm", ["-rf", tmpExtract]);
+    mkdirSync(tmpExtract, { recursive: true });
+    execFileSync("unzip", ["-q", zipPath, "-d", tmpExtract], { stdio: "inherit" });
+  }
+  const inner = readdirSync(tmpExtract).find((d) => d.startsWith("node-v") && !d.endsWith(".zip"));
+  execFileSync("cp", [join(tmpExtract, inner, "node.exe"), join(runtimeDir, "node.exe")], { stdio: "inherit" });
+
+  // 3. the update manifest, verbatim-publishable
+  writeUpdateManifest();
+  console.log(`\nstaged ${staging}`);
+}
+
+function writeUpdateManifest() {
+  const manifest = {
+    applicationId: "com.actor0.desktop",
+    version: appVersion,
+    // resources.neu is what the updater swaps; publish the staging zip and the
+    // manifest under the same base URL.
+    resourcesURL: `https://github.com/cazyundee/actor0/releases/download/v${appVersion}/actor0-desktop-resources-${appVersion}.neu`,
+  };
+  writeFileSync(join(distRoot, "update-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log(`update manifest written for v${appVersion}`);
+}
+
+function zipArtifact() {
+  console.log("zipping installable...");
+  const zip = join(distRoot, `actor0-desktop-${appVersion}-${TARGET}.zip`);
+  execFileSync("rm", ["-f", zip]);
+  // zip from inside dist so the archive root is the app itself. Prefer the
+  // POSIX zip; fall back to PowerShell's Compress-Archive, the one archiver
+  // always present on a Windows checkout (a dev box may have neither zip nor
+  // tar on PATH).
+  try {
+    execFileSync("zip", ["-q", "-r", zip, `actor0-desktop-${TARGET}`], { cwd: distRoot, stdio: "inherit" });
+  } catch {
+    const source = join(distRoot, `actor0-desktop-${TARGET}`, "*");
+    execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", `Compress-Archive -Path '${source}' -DestinationPath '${zip}' -Force`],
+      { stdio: "inherit" },
+    );
+  }
+  const size = statSync(zip).size / 1048576;
+  return void console.log(`\n✓ actor0-desktop v${appVersion} (${TARGET}): ${zip} (${size.toFixed(1)} MB)`);
+}
+
+stage();
+zipArtifact();

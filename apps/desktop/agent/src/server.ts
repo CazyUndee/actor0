@@ -1,3 +1,5 @@
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { Agent } from "./agent.js";
 import { isWireRequest, type AgentNotification, type WireResponse } from "./protocol.js";
@@ -24,6 +26,17 @@ export type ServerOptions = {
   /** Shared secret the client must present; when set, a mismatch is refused. */
   token?: string;
   onLog?: (line: string) => void;
+  /**
+   * Where to write `{port}` once listening, in addition to the stdout line.
+   *
+   * The packaged desktop app spawns this process through Neutralino's
+   * `os.spawnProcess`, and in the packaged window mode the `spawnedProcess`
+   * stdout events do not reliably reach the page (verified live: the same
+   * spawn delivers events when driven from an attached console, and nothing
+   * at boot). A file is a transport with no such failure mode — the page
+   * polls for it with the native filesystem API.
+   */
+  portFile?: string;
 };
 
 export type RunningServer = {
@@ -107,6 +120,20 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
       // this process and has to learn where to connect, and parsing a log
       // message is how that handshake goes wrong.
       process.stdout.write(`${JSON.stringify({ actor0: "listening", port })}\n`);
+      // And, when asked, to a file — the transport that works everywhere (see
+      // ServerOptions.portFile). Best-effort: a read-only location must not
+      // take the agent down with it.
+      if (options.portFile) {
+        try {
+          const target = options.portFile;
+          mkdirSync(dirname(target), { recursive: true });
+          const staging = `${target}.${process.pid}.tmp`;
+          writeFileSync(staging, `${JSON.stringify({ port, pid: process.pid })}\n`, "utf8");
+          renameSync(staging, target);
+        } catch {
+          process.stderr.write("[agent] could not write the port file\n");
+        }
+      }
       resolve({
         port,
         close: () =>
