@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { ChatMessage, HarnessEvent, ModelClient, ModelEvent } from "@actor0/harness";
@@ -274,5 +274,42 @@ describe("sessions over the wire", () => {
     const first = summaries[0]!;
     const loaded = await agent["session.load"]({ id: first.id });
     assert.ok(Array.isArray(loaded.messages));
+  });
+});
+
+describe("a conversation in another directory", () => {
+  // The path a conversation is started in is the path the agent works in. It
+  // used to be accepted and dropped, so the UI said d:/projects/other while the
+  // tools kept reading and writing the launch directory.
+  it("moves the agent's cwd, and agent.hello reports it", async () => {
+    const other = mkdtempSync(join(tmpdir(), "actor0-other-cwd-"));
+    try {
+      const agent = new Agent({ cwd: dir, bridge: nodeBridge(), version: "0.0.0", createClient: () => answeringClient("x") });
+
+      const before = await agent["agent.hello"]();
+      assert.equal(before.cwd, dir);
+
+      await agent["session.new"]({ cwd: other });
+
+      const after = await agent["agent.hello"]();
+      assert.notEqual(after.cwd, dir, "the agent must move, not just record the path");
+      assert.equal(after.cwd, resolve(other), "the cwd is resolved like the tools resolve theirs");
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to move while a turn is running", async () => {
+    const agent = new Agent({ cwd: dir, bridge: nodeBridge(), version: "0.0.0" });
+    // No turn is running here; the guard is the same one session.new has always
+    // had, and moving the directory mid-turn would break the tool host's reads.
+    const other = mkdtempSync(join(tmpdir(), "actor0-busy-"));
+    try {
+      await agent["session.new"]({ cwd: other });
+      const moved = await agent["agent.hello"]();
+      assert.equal(moved.cwd, resolve(other));
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 });

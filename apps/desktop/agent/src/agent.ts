@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { ChatMessage, ModelClient } from "@actor0/harness";
 import {
   CHATGPT_OAUTH,
@@ -120,7 +121,10 @@ export class Agent implements AgentMethods {
   private controller: AbortController | undefined;
   private running = false;
   private bridge: FileBridge;
-  private readonly cwd: string;
+  /** The directory the agent answers from. Mutable: a conversation started in
+   *  another path moves it, so the tools, the system prompt and agent.hello all
+   *  report where the agent is actually operating. */
+  private cwd: string;
   private readonly version: string;
   private notify: (notification: AgentNotification) => void;
   private readonly createClient: (provider: ResolvedProvider) => ModelClient;
@@ -380,9 +384,23 @@ export class Agent implements AgentMethods {
   /** `cwd` is accepted but not applied: the working directory is fixed when the
    * agent process starts, so a conversation in another directory means launching
    * the agent there. The UI sends it for forward-compatibility only. */
-  async "session.new"(_params?: { cwd?: string }): Promise<{ ok: true }> {
-    void _params;
+  /**
+   * Start a new conversation, optionally in another directory.
+   *
+   * The path is applied to the agent itself, not just recorded: the tool host,
+   * the system prompt's project context and agent.hello all read `this.cwd`, so
+   * a conversation started in d:/projects/other actually reads and writes there.
+   * (It used to accept the path and drop it, so the UI said one thing and the
+   * agent kept operating in its launch directory.)
+   */
+  async "session.new"(params?: { cwd?: string }): Promise<{ ok: true }> {
     if (this.running) throw new Error("cannot start a new conversation while a turn is running");
+    const next = params?.cwd?.trim();
+    if (next && next !== this.cwd) {
+      // Resolve it the way the tools do, so a relative path or a symlink is the
+      // same directory the tool host will use.
+      this.cwd = resolve(next);
+    }
     this.messages = [];
     this.session = { id: newSessionId(), createdAt: new Date().toISOString() };
     this.sessionTitle = undefined;

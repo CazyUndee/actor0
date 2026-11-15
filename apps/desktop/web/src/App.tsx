@@ -633,6 +633,13 @@ export function App() {
                     setConversation(initialConversation());
                     setBlocked(false);
                     void refreshSessions();
+                    // The agent moved its working directory, so the header's
+                    // cwd label has to be re-read rather than left showing the
+                    // launch directory.
+                    try {
+                      const info = await clientRef.current?.call("agent.hello");
+                      if (info) setAgentInfo(info);
+                    } catch { /* the banner already reports a dead agent */ }
                     const current = await clientRef.current?.call("conversation.get");
                     setSessionId(current?.sessionId ?? null);
                     setSessionTitle(undefined);
@@ -730,12 +737,14 @@ export function App() {
             </div>
           ) : null}
           {conversation.live.text ? (
-            <div className="entry assistant">
-              <div className="assistant-box streaming">
-                <pre className="stream-text">{conversation.live.text}</pre>
-              </div>
-            </div>
-          ) : null}
+            // Streaming text renders *without* the answer card. A card drawn
+            // around text that is still arriving reads as an empty outlined box
+      // sitting under the transcript (and then becomes the answer, which is
+      // the "weird border that stays until the answer block"). The card is the
+      // committed answer's chrome; the live text is just text, like the CLI's
+      // live region.
+      <div className="stream-text-live">{conversation.live.text}</div>
+    ) : null}
         </div>
 
         <Composer
