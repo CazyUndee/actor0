@@ -18,10 +18,38 @@
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+/**
+ * The most one response body may contribute to memory before the read stops.
+ * Same cap and reasoning as the CLI's transport (`MAX_SSE_BUFFER_BYTES`) and
+ * the harness's: a hostile endpoint with an endless body otherwise buffers
+ * without bound, and a 60 s default timeout only stops *waiting* for it.
+ */
+const MAX_BODY_BYTES = 1_048_576;
 
 export type McpToolResult = { text: string; isError: boolean };
 
 type JsonRpcError = { code: number; message: string; data?: unknown };
+
+/** Read at most MAX_BODY_BYTES of a response body; a hostile endpoint cannot
+ * make this read an unbounded allocation. (parseStream caps per-frame, but the
+ * string it parses from is read whole first — this is the whole read's cap.) */
+async function readBounded(body: ReadableStream<Uint8Array> | null): Promise<string> {
+  if (!body) return "";
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (received + value.byteLength > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      return Buffer.concat(chunks).toString("utf8");
+    }
+    chunks.push(value);
+    received += value.byteLength;
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 export class McpHttpClient {
   private sessionId: string | undefined;
@@ -64,7 +92,7 @@ export class McpHttpClient {
         throw new Error(`MCP server answered ${response.status} ${response.statusText}`);
       }
       const contentType = response.headers.get("content-type") ?? "";
-      const body = await response.text();
+      const body = await readBounded(response.body);
 
       if (contentType.includes("text/event-stream")) {
         return this.parseStream(body, id);

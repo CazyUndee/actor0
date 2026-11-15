@@ -85,7 +85,14 @@ export type McpToolResult = { text: string; isError: boolean };
 
 /** A bidirectional JSON-RPC channel to a server. */
 export type McpTransport = {
-  send(message: JsonRpcMessage): void;
+  /**
+   * Send one message. The signal, when present, is this *request's* own
+   * lifetime: the transport should wire it into whatever carries the message
+   * so that a request that times out or is cancelled also stops consuming
+   * resources (a fetch left running keeps buffering a hostile response long
+   * after the caller has given up). Fire-and-forget sends may ignore it.
+   */
+  send(message: JsonRpcMessage, signal?: AbortSignal): void;
   /** Subscribe to inbound messages; returns an unsubscribe. */
   onMessage(handler: (message: JsonRpcMessage) => void): () => void;
   /**
@@ -146,8 +153,7 @@ export function stdioTransport(
   args: string[] = [],
   options: { env?: Record<string, string>; cwd?: string } = {},
 ): McpTransport {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
+  const env: NodeJS.ProcessEnv = {};  for (const [key, value] of Object.entries(process.env)) {
     if (key.startsWith("ACTOR0_")) continue;
     env[key] = value;
   }
@@ -202,7 +208,9 @@ export function stdioTransport(
     }
   });
   return {
-    send: (message) => {
+    send: (message, _signal) => {
+      // The subprocess itself is the request's lifetime: close() kills it, and
+      // a per-request abort has nothing additional to stop.
       child.stdin?.write(`${JSON.stringify(message)}\n`);
     },
     onMessage: (handler) => {
@@ -314,11 +322,45 @@ export function httpTransport(url: string, options: { headers?: Record<string, s
     }
   };
 
+  /**
+   * Read at most `MAX_SSE_BUFFER_BYTES` of a response body. A hostile or
+   * broken endpoint can send a body with no end; `response.text()` buffers
+   * all of it, so the read is capped the same way the SSE stream is. The
+   * JSON-RPC diagnostic/error path keeps only 300 chars anyway, so nothing
+   * legitimate is lost at a megabyte.
+   */
+  const readBody = async (body: ReadableStream<Uint8Array> | null): Promise<string> => {
+    if (!body) return "";
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (received + value.byteLength > MAX_SSE_BUFFER_BYTES) {
+        await reader.cancel().catch(() => {});
+        return Buffer.concat(chunks).toString("utf8");
+      }
+      chunks.push(value);
+      received += value.byteLength;
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  };
+
   return {
-    send: (message): void => {
+    send: (message, requestSignal): void => {
       if (closed) return;
       const controller = new AbortController();
       inFlight.add(controller);
+      // The request's own lifetime ends the fetch too: a timeout or cancel
+      // settles the caller's promise, and without this wiring the fetch keeps
+      // running — and keeps buffering whatever the endpoint sends — long after
+      // every promise about it has been settled.
+      const onRequestAbort = () => controller.abort(new Error("request cancelled"));
+      if (requestSignal) {
+        if (requestSignal.aborted) onRequestAbort();
+        else requestSignal.addEventListener("abort", onRequestAbort, { once: true });
+      }
       const headers: Record<string, string> = { ...baseHeaders };
       if (sessionId) headers["Mcp-Session-Id"] = sessionId;
 
@@ -331,7 +373,7 @@ export function httpTransport(url: string, options: { headers?: Record<string, s
             // Reject this request with what the server actually said. A refusal
             // left to time out tells the reader nothing, and the status line is
             // usually the whole diagnosis (401, 429, a body naming the limit).
-            const detail = (await response.text().catch(() => "")).trim().slice(0, 300);
+            const detail = (await readBody(response.body).catch(() => "")).trim().slice(0, 300);
             if ("id" in message) {
               deliver({
                 jsonrpc: "2.0",
@@ -348,7 +390,7 @@ export function httpTransport(url: string, options: { headers?: Record<string, s
           const type = response.headers.get("content-type") ?? "";
           if (type.includes("text/event-stream")) return readEvents(response.body);
 
-          const text = await response.text();
+          const text = await readBody(response.body);
           if (!text.trim()) return; // 202 Accepted — a notification, answered with nothing.
           try {
             const parsed = JSON.parse(text) as JsonRpcMessage | JsonRpcMessage[];
@@ -527,11 +569,16 @@ export class McpClient {
     const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     return new Promise<unknown>((resolve, reject) => {
       let settled = false;
+      // The request's abort signal: timeout and caller cancel both fire it,
+      // and the transport subscribes to it so the fetch underneath dies with
+      // the promise rather than outliving it.
+      const perRequest = new AbortController();
       const settle = (fn: () => void): void => {
         if (settled) return;
         settled = true;
         this.pending.delete(id);
         if (timer) clearTimeout(timer);
+        perRequest.abort(new Error(`MCP "${method}" settled`));
         fn();
       };
       const timer = setTimeout(
@@ -547,12 +594,15 @@ export class McpClient {
         if (signal.aborted) onAbort();
         else signal.addEventListener("abort", onAbort, { once: true });
       }
-      this.options.transport.send({
-        jsonrpc: "2.0",
-        id,
-        method,
-        ...(params !== undefined ? { params } : {}),
-      });
+      this.options.transport.send(
+        {
+          jsonrpc: "2.0",
+          id,
+          method,
+          ...(params !== undefined ? { params } : {}),
+        },
+        perRequest.signal,
+      );
     });
   }
 
