@@ -29,6 +29,14 @@ export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
+/**
+ * The most an SSE frame buffer may accumulate before the connection is
+ * dropped — the same cap and reasoning as the harness's `MAX_SSE_BUFFER_BYTES`
+ * (an endpoint that streams without ever emitting a blank line otherwise
+ * grows the buffer without bound).
+ */
+const MAX_SSE_BUFFER_BYTES = 1_048_576;
+
 // --- JSON-RPC 2.0 ---------------------------------------------------------
 
 export type JsonRpcRequest = { jsonrpc: "2.0"; id: number; method: string; params?: unknown };
@@ -40,6 +48,17 @@ export type JsonRpcMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotificat
 
 const isResponse = (message: JsonRpcMessage): message is JsonRpcResponse =>
   "id" in message && ("result" in message || "error" in message);
+
+/**
+ * A `JSON.parse` result belongs in the conversation only if it is an object:
+ * the peer is untrusted, and `"id" in message` on a primitive (`5`, `null`)
+ * throws a TypeError that — from inside a stream data handler or a floating
+ * promise — takes the whole process with it. Anything that is not an object is
+ * dropped the same way a non-JSON line is: the connection must survive a peer
+ * that logs or misbehaves.
+ */
+const isMessage = (parsed: unknown): parsed is JsonRpcMessage =>
+  typeof parsed === "object" && parsed !== null;
 
 // --- MCP types ------------------------------------------------------------
 
@@ -69,6 +88,13 @@ export type McpTransport = {
   send(message: JsonRpcMessage): void;
   /** Subscribe to inbound messages; returns an unsubscribe. */
   onMessage(handler: (message: JsonRpcMessage) => void): () => void;
+  /**
+   * Subscribe to transport death, with the reason. The client rejects
+   * everything still pending with it, so a dead peer fails fast instead of
+   * each request timing out on its own clock. Transports that cannot die
+   * mid-conversation (an in-process pipe) may omit it.
+   */
+  onClose?(handler: (reason: Error) => void): () => void;
   close(): void | Promise<void>;
 };
 
@@ -107,25 +133,61 @@ function createPipe(): { a: McpTransport; b: McpTransport } {
  * Content-Length. A partial line is buffered until its newline arrives, and a
  * line that is not valid JSON is dropped rather than thrown: a server that
  * logs to stdout would otherwise kill the connection.
+ *
+ * The child is spawned with the agent's own `ACTOR0_*` namespace stripped from
+ * its environment — a spawned MCP server is a third party, and the provider
+ * credential that arrives via `ACTOR0_API_KEY` must not be handed to every
+ * server the user connects (the same rule the `shell` tool's environment
+ * follows). Its stderr is drained and discarded: piped-but-unread fills the OS
+ * pipe buffer and blocks the child, which reads as the server hanging.
  */
 export function stdioTransport(
   command: string,
   args: string[] = [],
   options: { env?: Record<string, string>; cwd?: string } = {},
 ): McpTransport {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("ACTOR0_")) continue;
+    env[key] = value;
+  }
+  for (const [key, value] of Object.entries(options.env ?? {})) env[key] = value;
   const child: ChildProcess = spawn(command, args, {
-    env: { ...process.env, ...options.env },
+    env,
     ...(options.cwd ? { cwd: options.cwd } : {}),
+    // inherit: false with explicit pipes keeps the child's stdio off this
+    // process's own terminal — stderr is captured, not splashed onto the tty.
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
   const handlers = new Set<(m: JsonRpcMessage) => void>();
+  const closeHandlers = new Set<(reason: Error) => void>();
+  let failed = false;
+  const fail = (reason: Error): void => {
+    if (failed) return;
+    failed = true;
+    for (const handler of closeHandlers) handler(reason);
+  };
+  // A spawn that cannot happen at all (ENOENT: a command that is not on PATH)
+  // still fails every request; without this listener it is an unhandled 'error'
+  // event that kills the CLI. Never spawned ≠ never closed.
+  child.on("error", (error) => fail(error instanceof Error ? error : new Error(String(error))));
+  child.on("exit", (code, signal) => {
+    if (!failed) fail(new Error(`MCP server exited (code ${code ?? "null"}${signal ? `, signal ${signal}` : ""})`));
+  });
+  child.stderr?.on("data", () => {
+    // Drained and dropped. The child keeps its own log in a buffer it can reuse.
+  });
   let buffer = "";
   const emit = (line: string): void => {
     if (!line.trim()) return;
     try {
-      const message = JSON.parse(line) as JsonRpcMessage;
-      for (const handler of handlers) handler(message);
+      const parsed: unknown = JSON.parse(line);
+      // A primitive or array (`5`, `null`, anything not JSON-RPC) is to this
+      // protocol what a non-JSON log line is: dropped, not thrown — the
+      // throw here would escape the data handler and kill the process.
+      if (!isMessage(parsed)) return;
+      for (const handler of handlers) handler(parsed);
     } catch {
       // Not ours (a stray log line on stdout); drop it rather than crash.
     }
@@ -147,8 +209,14 @@ export function stdioTransport(
       handlers.add(handler);
       return () => handlers.delete(handler);
     },
+    onClose: (handler) => {
+      closeHandlers.add(handler);
+      return () => closeHandlers.delete(handler);
+    },
     close: () => {
       handlers.clear();
+      closeHandlers.clear();
+      fail(new Error("connection closed"));
       if (!child.killed) child.kill();
     },
   };
@@ -172,6 +240,7 @@ export function stdioTransport(
  */
 export function httpTransport(url: string, options: { headers?: Record<string, string> } = {}): McpTransport {
   const handlers = new Set<(m: JsonRpcMessage) => void>();
+  const closeHandlers = new Set<(reason: Error) => void>();
   const inFlight = new Set<AbortController>();
   let sessionId: string | undefined;
   let closed = false;
@@ -201,23 +270,48 @@ export function httpTransport(url: string, options: { headers?: Record<string, s
     }
   };
 
-  /** Read an event stream to its end, delivering each complete frame as it lands. */
+  /**
+   * Read an event stream to its end, delivering each complete frame as it
+   * lands. A stream that never frames (megabytes with no blank line) would
+   * grow the buffer without bound — the same failure the harness caps with
+   * `MAX_SSE_BUFFER_BYTES` — so past the cap the reader stops and the transport
+   * reports itself closed: the pending requests reject with a reason instead
+   * of the process dying of memory.
+   */
   const readEvents = async (body: ReadableStream<Uint8Array> | null): Promise<void> => {
     if (!body) return;
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      // Normalise both endings: the spec allows either, and a server that uses
-      // LF alone would otherwise never form a frame.
-      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop() ?? "";
-      for (const frame of frames) deliverFrame(frame);
+    const failing = (reason: string): Error => {
+      const error = new Error(reason);
+      for (const handler of closeHandlers) handler(error);
+      return error;
+    };
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        // Normalise both endings: the spec allows either, and a server that
+        // uses LF alone would otherwise never form a frame.
+        buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
+        if (buffer.length > MAX_SSE_BUFFER_BYTES) {
+          failing(
+            `MCP endpoint streamed more than ${MAX_SSE_BUFFER_BYTES} bytes without a complete SSE frame; aborting`,
+          );
+          await reader.cancel().catch(() => {});
+          return;
+        }
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) deliverFrame(frame);
+      }
+      if (buffer.trim()) deliverFrame(buffer);
+    } catch {
+      // A network error mid-stream ends the response stream of that one
+      // request; it is not a transport-level death, and the caller's own
+      // timeout handles a request that never completes.
     }
-    if (buffer.trim()) deliverFrame(buffer);
   };
 
   return {
@@ -273,6 +367,10 @@ export function httpTransport(url: string, options: { headers?: Record<string, s
       handlers.add(handler);
       return () => handlers.delete(handler);
     },
+    onClose: (handler): (() => void) => {
+      closeHandlers.add(handler);
+      return () => closeHandlers.delete(handler);
+    },
     close: (): void => {
       closed = true;
       handlers.clear();
@@ -309,6 +407,10 @@ export class McpServer {
 
   /** Handle one inbound message; return a response for a request, nothing for a notification. */
   async handle(message: JsonRpcMessage): Promise<JsonRpcResponse | undefined> {
+    // The peer is untrusted and `"id" in message` throws on a primitive, so a
+    // non-object line is dropped here too — one bad line (a client that logs a
+    // bare number to the shared stdout) must not take the server down.
+    if (!isMessage(message)) return undefined;
     if (!("id" in message) || !("method" in message)) return undefined;
     const request = message as JsonRpcRequest;
     try {
@@ -386,10 +488,24 @@ export class McpClient {
     { resolve: (response: JsonRpcResponse) => void; reject: (error: Error) => void }
   >();
   private unsubscribe: () => void;
+  private unsubscribeClose: (() => void) | undefined;
+  private closed = false;
   private info: McpServerInfo | undefined;
 
   constructor(private readonly options: McpClientOptions) {
     this.unsubscribe = options.transport.onMessage((message) => this.receive(message));
+    // A transport that dies mid-request (the subprocess crashes, the HTTP
+    // frame buffer overflows) rejects everything still pending with the
+    // reason, so the caller learns `spawn enoent` in milliseconds instead of
+    // the request timing out a minute later with no diagnosis at all.
+    if (options.transport.onClose) {
+      this.unsubscribeClose = options.transport.onClose((reason) => {
+        if (this.closed) return;
+        for (const pending of this.pending.values())
+          pending.reject(new Error(`MCP connection closed: ${reason.message}`));
+        this.pending.clear();
+      });
+    }
   }
 
   /** The server's own name and version, once `initialize` has run. */
@@ -475,7 +591,9 @@ export class McpClient {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     this.unsubscribe();
+    this.unsubscribeClose?.();
     for (const pending of this.pending.values()) pending.reject(new Error("connection closed"));
     this.pending.clear();
     await this.options.transport.close();
@@ -519,7 +637,15 @@ export async function connectMcp(options: ConnectOptions): Promise<McpClient> {
     ...(options.clientInfo ? { clientInfo: options.clientInfo } : {}),
     ...(options.requestTimeoutMs ? { requestTimeoutMs: options.requestTimeoutMs } : {}),
   });
-  await client.initialize();
+  // A failed handshake must not leave its own transport behind: the child
+  // spawned for it would outlive the caller (an open pipe keeps the spawned
+  // process — and the caller's own exit — alive with no client to close).
+  try {
+    await client.initialize();
+  } catch (error) {
+    await client.close();
+    throw error;
+  }
   return client;
 }
 

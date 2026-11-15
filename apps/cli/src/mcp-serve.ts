@@ -98,6 +98,9 @@ export type ServeStdioOptions = {
  * anything other than JSON-RPC is not the protocol, and the connection must
  * stay up for the next well-formed request — the same rule `stdioTransport`
  * in `mcp.ts` applies to the other direction of this same conversation.
+ * A line that parses to a primitive (`5`, `null`) is dropped the same way:
+ * `McpServer.handle` refuses it, and a refusal is a fine answer to a peer
+ * that never sent a message.
  *
  * The caller must keep whatever it logs on stderr; stdout is the wire.
  * Resolves when the input stream ends.

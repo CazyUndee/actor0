@@ -149,3 +149,25 @@ test("serveStdio answers initialize, tools/list and tools/call on the injected w
   assert.equal(byId.get(5)!.error?.code, -32603);
   assert.match(byId.get(5)!.error!.message, /method not found/);
 });
+
+// --- a hostile wire must not take the process down ------------------------
+
+test("serveStdio survives a line that parses to a primitive", { timeout: 10_000 }, async () => {
+  // `JSON.parse("5")` is 5; the shape check in McpServer.handle used to throw a
+  // TypeError that escaped through `void …then()` as an unhandled rejection
+  // and killed the process. The line must be dropped and the server kept up,
+  // exactly like a non-JSON line.
+  const { host } = fakeHost([definition("read", "read")], { data: "ok", text: "ok" });
+  const server = hostMcpServer(host, { name: "actor0" });
+  const linesOut: string[] = [];
+  const stdout = new Writable({ write(chunk, _e, cb) { linesOut.push(chunk.toString()); cb(); } });
+  const lines = ["5", "null", "true", JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" })];
+  const stdin = Readable.from(lines.map((line) => `${line}\n`));
+  const drained = serveStdio(server, { input: stdin, output: stdout });
+  // Only the ping has an id, so exactly one response.
+  const deadline = Date.now() + 5_000;
+  while (linesOut.length < 1 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(linesOut.length, 1);
+  assert.match(linesOut[0]!, /"result":\{\}/);
+  await drained; // Readable.from ends itself once every line is consumed
+});

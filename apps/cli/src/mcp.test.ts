@@ -124,3 +124,63 @@ test("a real subprocess over stdio answers initialize, tools/list and tools/call
   const result = await client.callTool("add", { a: 2, b: 3 }, signal);
   assert.equal(result.text, "5");
 });
+
+// --- hostile and dead transports must not kill this process ---------------
+
+test("a command that cannot spawn rejects the handshake, not the process", { timeout: 10_000 }, async () => {
+  // Before the fix this was an unhandled 'error' event on the ChildProcess:
+  // the process died with spawn ENOENT before the request timeout could fire.
+  await assert.rejects(
+    () => connectMcp({ command: "actor0-no-such-command-zq9", requestTimeoutMs: 2_000 }),
+    /ENOENT/,
+  );
+});
+
+test("a server that exits mid-handshake rejects with its death, not a timeout", { timeout: 10_000 }, async () => {
+  // The request used to wait out its full 60 s default with no diagnosis; the
+  // transport now reports the exit and everything pending rejects immediately.
+  const started = Date.now();
+  await assert.rejects(
+    () => connectMcp({ command: process.execPath, args: ["-e", "process.exit(0)"], requestTimeoutMs: 30_000 }),
+    /MCP server exited/,
+  );
+  assert.ok(Date.now() - started < 10_000, "the exit should reject fast, not time out");
+});
+
+test("a valid-JSON line of the wrong shape is dropped, connection survives", { timeout: 10_000 }, async () => {
+  // `"id" in message` throws on a primitive; the emitted message must be an
+  // object, and a peer logging `5` to shared stdout must not crash the client.
+  // The child stays alive (stdin resumed), so the handshake can only fail
+  // by its own request timeout — proving the bad shape neither crashed this
+  // process nor closed the connection early.
+  await assert.rejects(
+    () => connectMcp({
+      command: process.execPath,
+      args: ["-e", 'process.stdout.write("5\n"); process.stdin.resume()'],
+      requestTimeoutMs: 500,
+    }),
+    /timed out|exited/,
+  );
+});
+
+test("a spawned MCP server does not inherit the ACTOR0_ namespace", { timeout: 10_000 }, async () => {
+  // Third-party servers get the environment minus the agent's own credential
+  // namespace — the same rule the shell tool's childEnv enforces.
+  const probe = [
+    'process.stdin.on("data", () => {});',
+    'process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32603,',
+    '  message: "probe:" + (process.env.ACTOR0_TEST_SECRET ?? "ABSENT") } }) + String.fromCharCode(10));',
+    'process.stdin.resume();',
+  ].join("");
+  const before = process.env.ACTOR0_TEST_SECRET;
+  process.env.ACTOR0_TEST_SECRET = "synthetic-leak";
+  try {
+    await assert.rejects(
+      () => connectMcp({ command: process.execPath, args: ["-e", probe], requestTimeoutMs: 5_000 }),
+      /probe:ABSENT/,
+    );
+  } finally {
+    if (before === undefined) delete process.env.ACTOR0_TEST_SECRET;
+    else process.env.ACTOR0_TEST_SECRET = before;
+  }
+});
