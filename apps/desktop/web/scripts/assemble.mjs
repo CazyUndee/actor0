@@ -58,7 +58,10 @@ console.log("resources/ ready: app/ (UI) + agent/agent.mjs (agent core)");
 
 // The window/taskbar icon (the mascot) is generated, not checked in: vite
 // empties resources/app, so anything copied by hand vanishes on every build.
+// Both the PNG (window/favicon source) and the multi-size ICO (the exe's
+// embedded resource, via rcedit in package.mjs) are regenerated here.
 import("./gen-icon.mjs");
+import("./gen-ico.mjs");
 
 function readTokenSecurity() {
   const config = JSON.parse(readFileSync(join(webRoot, "neutralino.config.json"), "utf8"));

@@ -8,3 +8,5 @@ bin/
 .vite/
 *.log
 .runtime-cache/
+.tools/
+dist/

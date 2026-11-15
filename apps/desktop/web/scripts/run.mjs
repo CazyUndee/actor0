@@ -79,6 +79,20 @@ async function startAgent() {
  *
  * Resize is in-page (invisible edge handles) because the native frame is gone.
  */
+/**
+ * Make the window frameless and rounded.
+ *
+ * Two Windows behaviours the app cannot reach from CSS:
+ *
+ *  1. WS_THICKFRAME is a real non-client area: the client rect shrinks by 7px
+ *     on every side and DWM paints that band (the light strip that used to run
+ *     along the top). Removing the style makes the client area the whole
+ *     window, so the CSS hairline is the only border.
+ *  2. DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND gives the silhouette its
+ *     curve, composited with alpha. No clip region: DWM rounds the window
+ *     itself, so nothing is cut and nothing is drawn outside the curve but the
+ *     desktop. (A region can give any radius but a stair-stepped edge.)
+ */
 function stripNativeFrame() {
   const ps = `
 Add-Type -TypeDefinition @'
@@ -87,6 +101,7 @@ using System.Runtime.InteropServices;
 public class StripFrame {
   [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
   [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int i, int v);
+  [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);
 }
 '@
 $deadline = (Get-Date).AddSeconds(20)
@@ -100,6 +115,8 @@ while ((Get-Date) -lt $deadline) {
     if (($style -band $WS_THICKFRAME) -ne 0) {
       [StripFrame]::SetWindowLong($h, $GWL_STYLE, $style -band (-bnot $WS_THICKFRAME)) | Out-Null
     }
+    $pref = 2   # DWMWCP_ROUND
+    [StripFrame]::DwmSetWindowAttribute($h, 33, [ref]$pref, 4) | Out-Null
     exit 0
   }
   Start-Sleep -Milliseconds 250

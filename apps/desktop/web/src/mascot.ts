@@ -6,7 +6,6 @@ export function platform(): "mac" | "windows" | "linux" | "other" {
   if (os === "Darwin") return "mac";
   if (os === "Windows") return "windows";
   if (os === "Linux") return "linux";
-  // Fallback for browser/dev without Neutralino globals.
   if (typeof navigator !== "undefined") {
     const p = navigator.platform.toLowerCase();
     if (p.includes("mac")) return "mac";
@@ -17,29 +16,58 @@ export function platform(): "mac" | "windows" | "linux" | "other" {
 }
 
 const FACE_COLOR: Record<Face, string> = {
-  idle: "#c97a7a",
-  normal: "#c97a7a",
-  thinking: "#c97a7a",
-  confused: "#c97a7a",
-  suffering: "#c46b6b",
-  dead: "#c46b6b",
-  happy: "#6bc47a",
+  idle: "#e89090",
+  normal: "#e89090",
+  thinking: "#e89090",
+  confused: "#e89090",
+  suffering: "#e07070",
+  dead: "#e07070",
+  happy: "#7ee08f",
 };
+
+/**
+ * The face as vector shapes, in a 64x64 box.
+ *
+ * Drawn, not typeset. A font glyph (`-_-` in Consolas at 30/64 units) does not
+ * survive being scaled to a 16px taskbar icon: the underscores sit on the
+  // baseline, the scale drops them below the tile, and what is left reads as a
+ * lone dash. Rects and arcs scale exactly, at every size, and match the
+ * in-app status mascot glyph for glyph.
+ */
+function faceShapes(face: Face): string {
+  const c = FACE_COLOR[face];
+  const dash = (x: number, y: number, w = 14, h = 6): string =>
+    `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="${c}"/>`;
+  const ring = (cx: number, cy: number, r = 7): string =>
+    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${c}" stroke-width="5"/>`;
+  const cross = (cx: number, cy: number, s = 6): string =>
+    `<path d="M${cx - s} ${cy - s}L${cx + s} ${cy + s}M${cx + s} ${cy - s}L${cx - s} ${cy + s}" stroke="${c}" stroke-width="5" stroke-linecap="round"/>`;
+  const happyEye = (cx: number, cy: number): string =>
+    `<path d="M${cx - 8} ${cy + 3}a8 8 0 0 1 16 0" fill="none" stroke="${c}" stroke-width="5" stroke-linecap="round"/>`;
+
+  switch (face) {
+    case "idle":
+      // -_-  : two dashes at mid height, one low between them
+      return dash(9, 26) + dash(25, 42) + dash(41, 26);
+    case "suffering":
+    case "dead":
+      return cross(19, 32) + cross(45, 32);
+    case "happy":
+      return happyEye(19, 34) + happyEye(45, 34);
+    default:
+      // o_o : normal, thinking, confused
+      return ring(19, 32) + ring(45, 32);
+  }
+}
 
 /** An SVG data URI of the mascot face, suitable for a favicon or an <img>. */
 export function mascotDataUri(face: Face): string {
-  const char = FACE_CHAR[face];
-  const color = FACE_COLOR[face];
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#1a1a1a"/>
-  <rect x="3" y="3" width="58" height="58" rx="11" fill="none" stroke="rgba(125,124,121,0.5)" stroke-width="3"/>
-  <text x="32" y="40" text-anchor="middle" dominant-baseline="middle" font-size="22" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="${color}">${escapeXml(char)}</text>
-</svg>`;
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
-}
-
-function escapeXml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+    + '<rect width="64" height="64" rx="14" fill="#1a1a1a"/>'
+    + '<rect x="3" y="3" width="58" height="58" rx="11" fill="none" stroke="rgba(125,124,121,0.5)" stroke-width="3"/>'
+    + faceShapes(face)
+    + "</svg>";
+  return "data:image/svg+xml," + encodeURIComponent(svg);
 }
 
 /** Keep the document favicon in sync with the mascot's current state. */
@@ -58,13 +86,13 @@ export function setFavicon(face: Face): void {
 
 /** True when the app is running in a frameless window that needs custom controls. */
 export function needsCustomControls(): boolean {
-  // In borderless window mode we draw our own. In chrome mode the native
-  // browser chrome provides controls (and we can't remove it), so custom
-  // controls would be redundant/confusing — but the title bar layout still
-  // applies. We only show custom control buttons when borderless.
   if (typeof window === "undefined") return false;
-  // Neutralino window mode: check if we're in window mode (not chrome/browser).
   const mode = (window as { NL_MODE?: string }).NL_MODE;
   if (mode === "window") return true;
   return false;
+}
+
+/** The glyph text for a face, kept for anything that still wants the characters. */
+export function faceText(face: Face): string {
+  return FACE_CHAR[face];
 }

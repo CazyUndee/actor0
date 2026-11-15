@@ -507,10 +507,24 @@ export function App() {
 
   // The window's own icon (taskbar, hover preview, alt-tab) is the mascot too.
   // The favicon covers the in-page mark; setIcon covers everything the OS shows.
-  // Re-setting it per face is cheap and keeps the two in sync.
+  // Behind window.setIcon is the OS's own big+small icon pair — one call sets
+  // both. It needs the client connected, so it retries briefly rather than
+  // racing the socket (a silently-dropped call is what left the taskbar on
+  // defaults before).
   useEffect(() => {
     if (window.NL_MODE !== "window") return;
-    void window.Neutralino?.window?.setIcon?.({ icon: "/app/icon.png" }).catch(() => undefined);
+    let cancelled = false;
+    const trySet = async (attempt = 0): Promise<void> => {
+      if (cancelled) return;
+      try {
+        await window.Neutralino?.window?.setIcon?.("/icon.png");
+      } catch {
+        if (attempt < 10) setTimeout(() => void trySet(attempt + 1), 500);
+        return;
+      }
+    };
+    void trySet();
+    return () => { cancelled = true; };
   }, []);
 
   const providerLabel = snapshot?.provider?.model ?? snapshot?.config.model ?? "no provider";

@@ -115,7 +115,13 @@ export class AgentClient {
 
   /** Open the connection, discovering the endpoint when none was given. */
   async connect(): Promise<void> {
-    this.resolvedUrl ??= this.options.url
+    // Discovery runs on every *retry*, not only the first attempt: a desktop
+    // relaunch can find a port file left by the previous agent (which died
+    // with the previous window), so the endpoint the first attempt picked can
+    // simply be dead. Re-discovering lets a later attempt pick up the agent
+    // that the new launch spawned — pinning the first URL forever is what
+    // kept the UI retrying a stale port while a live agent sat elsewhere.
+    this.resolvedUrl = this.options.url
       ? { url: this.options.url }
       : await discoverAgentUrl();
     const url = this.resolvedUrl.token

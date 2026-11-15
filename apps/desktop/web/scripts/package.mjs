@@ -61,7 +61,10 @@ if (!runtime) {
 }
 
 const appVersion = readAppVersion();
-const staging = join(distRoot, `actor0-desktop-${TARGET}`);
+// Per-build staging dir: a previous staging can stay locked by a stray
+// process (or a just-closed window), and a fixed name makes every rebuild
+// fail on Windows. The installable zip is still named for the target.
+const staging = join(distRoot, `build-${TARGET}`);
 const runtimeDir = join(staging, "runtime");
 const runtimeCache = join(webRoot, ".runtime-cache");
 
@@ -119,8 +122,28 @@ function stage() {
     console.error(`expected ${exe} from neu build`);
     process.exit(1);
   }
-  execFileSync("cp", [exe, join(staging, "actor0-desktop-win_x64.exe")], { stdio: "inherit" });
+  // Copy the exe in under its version-stamped name straight away: Windows keys
+  // the taskbar icon cache on the exe path+name, and a rebuild at the same
+  // name keeps showing the icon from the *first* launch there — which is how a
+  // correct icon kept reading as the old one after every rebuild. Baking the
+  // version into the name gives each build a fresh cache key.
+  const exeName = exeNameFor(appVersion, TARGET);
+  const stagedExe = join(staging, exeName);
+  execFileSync("cp", [exe, stagedExe], { stdio: "inherit" });
   execFileSync("cp", [join(neuOut, "resources.neu"), join(staging, "resources.neu")], { stdio: "inherit" });
+
+  // 1b. Patch the exe's embedded icon: Windows reads the taskbar and Explorer
+  // icon from the exe's own resource section, and neu build embeds the
+  // Neutralino default. rcedit swaps in our multi-size mascot .ico. Without
+  // this step, window.setIcon changes nothing the taskbar shows.
+  const ico = join(webRoot, "resources", "app", "icon.ico");
+  const rcedit = join(webRoot, ".tools", "rcedit.exe");
+  if (existsSync(ico) && existsSync(rcedit)) {
+    console.log("patching the exe icon...");
+    execFileSync(rcedit, [stagedExe, "--set-icon", ico], { stdio: "inherit" });
+  } else {
+    console.log("icon patch skipped (missing icon.ico or .tools/rcedit.exe) — the exe keeps the Neutralino default");
+  }
 
   // 2. stage the runtime: just node.exe — the agent bundle inlines every
   //    dependency, so no node_modules ships.
@@ -177,3 +200,9 @@ function zipArtifact() {
 
 stage();
 zipArtifact();
+
+/** The exe file name: version-stamped so each build gets a fresh icon-cache key. */
+function exeNameFor(version, target) {
+  const platform = target.replace("win_x64", "win-x64");
+  return `actor0-${version}-${platform}.exe`;
+}

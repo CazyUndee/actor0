@@ -220,13 +220,18 @@ export async function startAgent(options: { cwd?: string; token?: string; timeou
   const deadline = Date.now() + timeoutMs;
   while (port === undefined && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 50));
-    // The port file is the reliable handshake: try it whenever stdout has not
-    // spoken yet.
+    // The port file is the reliable handshake — but only when it was written
+    // by *this* spawn. A previous launch's agent (or a previous boot's child,
+    // dying while this one starts) can leave a file whose pid is not ours,
+    // and accepting it hands the UI a dead port it retries forever — exactly
+    // the "retrying… at ws://…(stale port)" a relaunch could show.
     if (port === undefined && portFile && api.filesystem) {
       try {
         const raw = await api.filesystem.readFile(portFile);
-        const info = JSON.parse(raw) as { port?: number };
-        if (typeof info.port === "number" && info.port > 0) port = info.port;
+        const info = JSON.parse(raw) as { port?: number; pid?: number };
+        if (typeof info.port === "number" && info.port > 0 && info.pid === process.pid) {
+          port = info.port;
+        }
       } catch {
         /* not written yet — this poll's job is to be cheap and quiet */
       }

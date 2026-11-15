@@ -47,7 +47,7 @@ export type NeutralinoApi = {
     isMaximized?(): Promise<boolean>;
     close?(): Promise<void>;
     /** Set the window icon (path inside resources, e.g. /app/icon.png). */
-    setIcon?(params: { icon: string }): Promise<void>;
+    setIcon?(icon: string): Promise<void>;
     setDraggableRegion?(domId: string): Promise<void>;
     unsetDraggableRegion?(domId: string): Promise<void>;
     getPosition?(): Promise<{ x: number; y: number }>;
