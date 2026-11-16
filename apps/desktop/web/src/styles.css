@@ -209,6 +209,18 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .assistant-box.streaming { border-color: rgba(201, 122, 122, 0.35); }
 .assistant-box.partial { border-style: dashed; }
+/* The streaming answer: text only, no card. The card is the committed
+   answer's chrome, and drawing it around text that is still arriving is what
+   made an empty outlined box sit under the transcript until the answer landed. */
+.stream-text-live {
+  width: min(820px, 86vw);
+  margin: 0;
+  padding: 12px 16px;
+  color: var(--text);
+  font-size: 14.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .stream-text { margin: 0; white-space: pre-wrap; font: inherit; }
 .partial-note { margin-top: 6px; font-size: 12px; color: var(--warning); }
 

@@ -87,3 +87,15 @@ test("config contract — neutralino.config.json keeps the security the loader i
     "with one-time the page must NOT load the client — that is the shipped NE_CL_IVCTOKN",
   );
 });
+
+test("the one-time race is a measured fact, not a hypothetical (cycle 9's audit)", () => {
+  // Under one-time, the served token goes to exactly the first fetch; a local
+  // process racing the webview demonstrably takes it (reproduced live: a curl
+  // mid-boot left the webview tokenless — no library, no agent, dead app).
+  // "none" was chosen deliberately: the same local attacker can read
+  // NL_PATH/.tmp/auth_info.json anyway, so one-time buys ~no security while a
+  // lost race breaks the whole desktop. This pin keeps the choice reversible
+  // as a decision with evidence, not an accident.
+  assert.equal(decideClientLoad({}, "none"), "globals-then-library", "none: the page must connect");
+  assert.equal(decideClientLoad({}, "one-time"), "nothing", "one-time: connect nothing over HTTP");
+});
