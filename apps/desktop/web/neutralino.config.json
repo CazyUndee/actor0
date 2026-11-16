@@ -14,7 +14,6 @@
     "os.spawnProcess",
     "os.updateSpawnedProcess",
     "os.getSpawnedProcesses",
-    "os.getEnv",
     "os.open",
     "os.showNotification",
     "events.*",
@@ -23,7 +22,6 @@
     "app.*",
     "resources.*",
     "os.getPath",
-    "os.getEnvs",
     "os.showFolderDialog",
     "os.showMessageBox"
   ],

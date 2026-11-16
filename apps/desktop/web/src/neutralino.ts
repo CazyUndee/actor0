@@ -16,8 +16,6 @@ export type NeutralinoEvent = { detail: { id: string; action: string; data?: str
 export type NeutralinoApi = {
   os?: {
     spawnProcess(command: string, options?: { cwd?: string; envs?: Record<string, string> }): Promise<NeutralinoSpawnedProcess>;
-    updateSpawnedProcess?(id: number, event: string, data?: unknown): Promise<void>;
-    getEnv(key: string): Promise<string>;
     /** Open a URL in the user's default browser — the desktop equivalent of `xdg-open`. */
     open(url: string): Promise<void>;
     showNotification?(title: string, content: string, icon?: string): Promise<void>;
