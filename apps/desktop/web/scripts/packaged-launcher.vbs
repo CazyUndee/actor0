@@ -74,9 +74,21 @@ If fso.FileExists(portFile) Then
 End If
 
 If Not launched Then
-  cmd = """" & agentExe & """ """ & agentBundle & """ --port-file """ & portFile & """"
-  sh.Run cmd, 0, False
+  ' The shim is the agent's supervisor AND its cleanup: the window runs
+  ' synchronously, and when it closes the agent is killed — a user closing the
+  ' app must not leave a background agent holding a port. sh.Exec exposes the
+  ' PID through ProcessId, and the kill uses taskkill on the PID directly
+  ' (Exec.Terminate proved unreliable against a detached node child).
+  Dim agentProc
+  Set agentProc = sh.Exec("""" & agentExe & """ """ & agentBundle & """ --port-file """ & portFile & """")
   WScript.Sleep 400
+  sh.Run """" & appExe & """", 1, True
+  ' The window is gone: kill the agent by its process id, tree-fell so any
+  ' background shell children of the agent die with it.
+  On Error Resume Next
+  sh.Run "taskkill /pid " & agentProc.ProcessId & " /T /F", 0, True
+  On Error GoTo 0
+Else
+  ' Second instance: just focus a new window on the existing agent.
+  sh.Run """" & appExe & """", 1, False
 End If
-
-sh.Run """" & appExe & """", 1, False
