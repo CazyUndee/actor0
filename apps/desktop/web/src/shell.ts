@@ -202,11 +202,25 @@ export async function startAgent(options: { cwd?: string; token?: string; timeou
   // either, so the page polls the file and the stdout listener is the fast
   // path for wherever it does work (dev).
   const portFile = packaged ? `${packaged.bundle.slice(0, packaged.bundle.lastIndexOf("/"))}/port.json` : undefined;
+  // The shell's own coordinates, so the agent can reach the Neutralino native
+  // API: NL_* are *page globals* in the webview, never process env vars, so a
+  // spawned agent never inherits them — and without them the agent's file
+  // bridge silently falls back to direct node:fs and the shell's filesystem
+  // scopes (the security boundary neutralino.config.json declares) are
+  // enforced on nothing. Passed as argv like the rest of the handshake
+  // (spawnProcess cannot carry envs in the packaged window mode).
+  const w = (typeof window !== "undefined" ? window : {}) as { NL_PATH?: string; NL_PORT?: string; NL_TOKEN?: string };
   const argString = [
     ...(options.token ? ["--token", options.token] : []),
     ...(portFile ? ["--port-file", portFile] : []),
+    ...(w.NL_PATH ? ["--nl-path", w.NL_PATH] : []),
+    ...(w.NL_PORT ? ["--nl-port", w.NL_PORT] : []),
+    ...(w.NL_TOKEN ? ["--nl-token", w.NL_TOKEN] : []),
   ];
-  const fullCommand = argString.length > 0 ? `${command} ${argString.map((a) => (a.includes("/") ? `"${a}"` : a)).join(" ")}` : command;
+  const fullCommand =
+    argString.length > 0
+      ? `${command} ${argString.map((a) => (String(a).includes("/") ? `"${a}"` : String(a))).join(" ")}`
+      : command;
 
   let process: NeutralinoSpawnedProcess | undefined;
   try {

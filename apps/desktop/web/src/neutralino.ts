@@ -65,6 +65,8 @@ declare global {
     NL_PATH?: string;
     /** The shell's own port. */
     NL_PORT?: string;
+    /** The shell's access token (present with tokenSecurity "none"). */
+    NL_TOKEN?: string;
     /** The host OS as Neutralino reports it (e.g. Windows, Linux, Darwin). */
     NL_OS?: string;
     /** The shell mode (window, chrome, browser, cloud). */

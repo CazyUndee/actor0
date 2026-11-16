@@ -110,6 +110,13 @@ export function neutralinoAuthFile(): string | undefined {
 
 type AuthInfo = { port: number | string; accessToken: string };
 
+type AuthFile = Partial<AuthInfo> & {
+  /** What Neutralino actually writes in .tmp/auth_info.json (v6.10): */
+  nlPort?: number | string;
+  nlToken?: string;
+  nlConnectToken?: string;
+};
+
 /** Read the auth file the shell exports, if one exists. */
 export function readNeutralinoAuth(): AuthInfo | undefined {
   const envPort = process.env.NL_WS_PORT?.trim() || process.env.NL_PORT?.trim();
@@ -118,9 +125,17 @@ export function readNeutralinoAuth(): AuthInfo | undefined {
   const file = neutralinoAuthFile();
   if (!file) return undefined;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<AuthInfo>;
-    if (parsed.port === undefined || !parsed.accessToken) return undefined;
-    return { port: parsed.port, accessToken: parsed.accessToken };
+    // The file's fields are named nlPort/nlToken (nlConnectToken is the
+    // after-the-dot half of nlToken). This reader used to look for
+    // port/accessToken — names that do not exist in the file — so auth never
+    // resolved, the bridge silently fell back to node:fs, and the shell's
+    // filesystem scopes were enforced on nothing. The aliases are kept for
+    // a hypothetical file that does use the short names.
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as AuthFile;
+    const port = parsed.nlPort ?? parsed.port;
+    const accessToken = parsed.nlToken ?? parsed.accessToken;
+    if (port === undefined || !accessToken) return undefined;
+    return { port, accessToken };
   } catch {
     return undefined;
   }
@@ -244,15 +259,23 @@ export function neutralinoBridge(client: NeutralinoClient): FileBridge {
 export async function openBridge(log: (line: string) => void = () => {}): Promise<FileBridge> {
   const auth = readNeutralinoAuth();
   if (!auth) return nodeBridge();
-  const client = new NeutralinoClient(auth);
-  try {
-    // One cheap round trip proves the socket works before the tools rely on it.
-    await client.call("app.getConfig");
-    log(`[bridge] using the Neutralino native filesystem API (port ${auth.port})`);
-    return neutralinoBridge(client);
-  } catch (error) {
-    client.close();
-    log(`[bridge] native API unavailable (${(error as Error).message}); falling back to node:fs`);
-    return nodeBridge();
+  // The agent spawns within a second of the shell process: the shell's
+  // WebSocket can still be settling, and a single failed round trip at that
+  // moment silently committed the agent to direct node:fs for its whole life —
+  // the config's filesystem scopes enforced on nothing. Retry: the socket
+  // has never been anything but up a moment later.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const client = new NeutralinoClient(auth);
+    try {
+      // One cheap round trip proves the socket works before the tools rely on it.
+      await client.call("app.getConfig");
+      log(`[bridge] using the Neutralino native filesystem API (port ${auth.port}${attempt ? `, after ${attempt + 1} attempts` : ""})`);
+      return neutralinoBridge(client);
+    } catch {
+      client.close();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
   }
+  log(`[bridge] native API unavailable; falling back to node:fs`);
+  return nodeBridge();
 }

@@ -58,6 +58,17 @@ async function main(): Promise<void> {
   const port = Number(process.env.ACTOR0_AGENT_PORT ?? "0") || 0;
   const token = process.env.ACTOR0_AGENT_TOKEN?.trim() || argValue("--token");
   const portFile = process.env.ACTOR0_AGENT_PORT_FILE?.trim() || argValue("--port-file");
+  // The Neutralino shell's own coordinates, env-first with argv fallback.
+  // NL_PATH is a *page global* in the webview, not a process env var, so a
+  // spawned agent never inherits it: the page passes --nl-path/--nl-token/
+  // --nl-port explicitly, which is what makes the scoped Neutralino bridge
+  // (and the OAuth browser opener) reachable from the packaged app. Dev mode
+  // can export the NL_* env vars instead; both routes end identical.
+  applyShellCoordinates({
+    nlPath: process.env.NL_PATH?.trim() || argValue("--nl-path"),
+    nlPort: process.env.NL_PORT?.trim() || argValue("--nl-port"),
+    nlToken: process.env.NL_TOKEN?.trim() || argValue("--nl-token"),
+  });
   const server = await startServer({
     agent,
     port,
@@ -95,9 +106,14 @@ main().catch((error) => {
 function openShellOs(): { open: (url: string) => Promise<void> } | undefined {
   const auth = readNeutralinoAuth();
   if (!auth) return undefined;
-  const client = new WebSocket(
-    `ws://127.0.0.1:${auth.port}?connectToken=${encodeURIComponent(String(auth.accessToken).split(".")[0] ?? "")}`,
-  );
+  // The connect token is the *second* half of the access token (after the
+  // "."), which is what the .tmp/auth_info.json calls nlConnectToken — the
+  // first half is the token body and gets the handshake refused. The bridge's
+  // own client (native/bridge.ts) uses the same split.
+  const connectToken = auth.accessToken.includes(".")
+    ? auth.accessToken.split(".")[1]!
+    : auth.accessToken;
+  const client = new WebSocket(`ws://127.0.0.1:${auth.port}?connectToken=${encodeURIComponent(connectToken)}`);
   // One round trip proves the socket before sign-in relies on it; if it does
   // not answer, the opener stays undefined and the caller falls back to the URL.
   return {
@@ -121,4 +137,19 @@ function openShellOs(): { open: (url: string) => Promise<void> } | undefined {
       if (!reply?.success) throw new Error("the shell refused to open the browser");
     },
   };
+}
+
+/**
+ * Install the shell's coordinates into process.env, whatever route they came
+ * by. The readers (native/bridge.ts readNeutralinoAuth, oauth.ts's opener) all
+ * consult process.env.NL_*, so one normalization point here keeps every
+ * consumer ignorant of argv-vs-env — the same pattern --token uses.
+ *
+ * A missing token leaves NL_TOKEN unset rather than empty, because
+ * readNeutralinoAuth treats an empty env token as "no shell".
+ */
+function applyShellCoordinates(input: { nlPath?: string; nlPort?: string; nlToken?: string }): void {
+  if (input.nlPath) process.env.NL_PATH = input.nlPath;
+  if (input.nlPort) process.env.NL_PORT = input.nlPort;
+  if (input.nlToken) process.env.NL_TOKEN = input.nlToken;
 }
