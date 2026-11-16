@@ -36,6 +36,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { stageLauncher } from "./stage-launcher.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = join(here, "..");
@@ -154,6 +155,11 @@ function stage() {
   } else {
     console.log("icon patch skipped (missing icon.ico or .tools/rcedit.exe) — the exe keeps the Neutralino default");
   }
+
+  // 1d. The launcher + the agent bundle it starts (see stage-launcher.mjs):
+  //  the packaged page spawns nothing, so os.spawnProcess can leave the
+  //  allowlist — closing cycle 13's cwd-hijack and XSS-RCE PoCs.
+  stageLauncher(staging, webRoot);
 
   // 2. stage the runtime: just node.exe — the agent bundle inlines every
   //    dependency, so no node_modules ships.

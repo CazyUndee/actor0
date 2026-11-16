@@ -11,9 +11,6 @@
   "singlePageServe": true,
   "nativeAllowList": [
     "filesystem.*",
-    "os.spawnProcess",
-    "os.updateSpawnedProcess",
-    "os.getSpawnedProcesses",
     "os.open",
     "os.showNotification",
     "events.*",
@@ -25,10 +22,7 @@
     "os.showFolderDialog",
     "os.showMessageBox"
   ],
-  "commandAllowList": [
-    "node",
-    "node.exe"
-  ],
+  "commandAllowList": [],
   "logging": {
     "enabled": true,
     "writeToLogFile": true

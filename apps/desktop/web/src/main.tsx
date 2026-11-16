@@ -141,12 +141,30 @@ void boot();
  * it throws, stops React from ever mounting).
  */
 async function readLaunchedAgentPort(): Promise<number | null> {
+  // The dev launcher writes agent-port.json inside the served root; the
+  // packaged launcher writes agent/port.json beside the exe (where the page
+  // reaches it through the scoped filesystem API with NL_PATH). The HTTP
+  // fetch is dev-only because the packaged document root is the read-only
+  // resources.neu bundle.
   try {
     const res = await fetch("/agent-port.json", { cache: "no-store" });
-    if (!res.ok) return null;
-    const info = (await res.json()) as { port?: unknown };
-    return typeof info.port === "number" && info.port > 0 ? info.port : null;
+    if (res.ok) {
+      const info = (await res.json()) as { port?: unknown };
+      if (typeof info.port === "number" && info.port > 0) return info.port;
+    }
   } catch {
-    return null;
+    /* dev file absent in the packaged app */
   }
+  const fs = window.Neutralino?.filesystem;
+  const base = window.NL_PATH;
+  if (fs && base) {
+    try {
+      const raw = await fs.readFile(`${base}/agent/port.json`);
+      const info = JSON.parse(raw) as { port?: unknown };
+      if (typeof info.port === "number" && info.port > 0) return info.port;
+    } catch {
+      /* the launcher has not run or its agent is gone; boot falls back */
+    }
+  }
+  return null;
 }

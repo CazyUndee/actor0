@@ -95,6 +95,20 @@ export async function discoverAgentUrl(): Promise<{ url: string; token?: string 
     // Not served by a launcher.
   }
 
+  // The packaged launcher writes agent/port.json beside the exe (the served
+  // root is the read-only resources bundle), so the page reaches it with the
+  // scoped filesystem API rather than a fetch.
+  const fsapi = Neutralino?.filesystem;
+  if (fsapi && base) {
+    try {
+      const raw = await fsapi.readFile(`${base}/agent/port.json`);
+      const info = JSON.parse(raw) as { port?: number };
+      if (typeof info.port === "number" && info.port > 0) return { url: `ws://127.0.0.1:${info.port}` };
+    } catch {
+      /* no launcher record */
+    }
+  }
+
   const envPort = typeof import.meta !== "undefined" ? import.meta.env?.VITE_AGENT_PORT : undefined;
   const port = envPort ? Number(envPort) : DEV_DEFAULT_PORT;
   return { url: `ws://127.0.0.1:${port}` };
