@@ -124,6 +124,18 @@ export async function startLoopback(options: { port?: number; path?: string } = 
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
     const error = url.searchParams.get("error");
+    // A state that does not match is not this sign-in's redirect — a local
+    // process can hit the callback port with a fabricated pair at any time
+    // (loopback is localhost-shared), and answering "Signed in" to it would
+    // both leak that a flow is pending and, worse, make a *later* mismatched
+    // capture settle and kill the real flow when the legitimate redirect is
+    // seconds behind. Respond "not found" and keep listening: only `error`
+    // (a decline) and a matching state can settle anything.
+    if (!error && code && expectedState !== null && state !== expectedState) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(successPage(Boolean(error) || !code));
     // A decline is remembered even if no one is waiting yet, so the later
