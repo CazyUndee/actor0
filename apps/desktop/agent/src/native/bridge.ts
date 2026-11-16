@@ -219,24 +219,30 @@ class NeutralinoClient {
 
 /** A `FileBridge` that performs its work in the Neutralino shell. */
 export function neutralinoBridge(client: NeutralinoClient): FileBridge {
+  // Neutralino's IPC eats backslashes (a Windows path sent as D:\\… arrives as
+  // D:… and NE_FS_NOPATHE — measured live against the running shell), so the
+  // bridge normalises every path to forward slashes. Tools hand out OS-native
+  // paths (within() resolves to backslashes on Windows); the shell accepts
+  // forward slashes for all of its filesystem calls.
+  const toShellPath = (path: string): string => path.replace(/\\/g, "/");
   return {
     kind: "neutralino",
-    readFile: (path, options = {}) => client.call<string>("filesystem.readFile", { path, ...options }),
-    writeFile: (path, data) => client.call<void>("filesystem.writeFile", { path, data }),
+    readFile: (path, options = {}) => client.call<string>("filesystem.readFile", { path: toShellPath(path), ...options }),
+    writeFile: (path, data) => client.call<void>("filesystem.writeFile", { path: toShellPath(path), data }),
     async createDirectory(path) {
-      await client.call("filesystem.createDirectory", { path });
+      await client.call("filesystem.createDirectory", { path: toShellPath(path) });
     },
     async remove(path) {
-      await client.call("filesystem.remove", { path });
+      await client.call("filesystem.remove", { path: toShellPath(path) });
     },
     async readDirectory(path, options = {}) {
-      const entries = await client.call<{ entry: string; type: string }[]>("filesystem.readDirectory", { path, ...options });
+      const entries = await client.call<{ entry: string; type: string }[]>("filesystem.readDirectory", { path: toShellPath(path), ...options });
       return entries.map((entry) => ({ name: entry.entry, isDirectory: entry.type === "DIRECTORY" }));
     },
     async getStats(path) {
       const stats = await client.call<{ size: number; isFile: boolean; isDirectory: boolean; modifiedAt?: number }>(
         "filesystem.getStats",
-        { path },
+        { path: toShellPath(path) },
       );
       return { size: stats.size, isFile: stats.isFile, isDirectory: stats.isDirectory, ...(stats.modifiedAt !== undefined ? { modifiedAt: stats.modifiedAt } : {}) };
     },
