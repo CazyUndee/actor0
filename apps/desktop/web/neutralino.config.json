@@ -10,7 +10,12 @@
   "exportAuthInfo": true,
   "singlePageServe": true,
   "nativeAllowList": [
-    "filesystem.*",
+    "filesystem.readFile",
+    "filesystem.writeFile",
+    "filesystem.createDirectory",
+    "filesystem.remove",
+    "filesystem.readDirectory",
+    "filesystem.getStats",
     "os.open",
     "os.getPath",
     "os.showFolderDialog",

@@ -64,15 +64,54 @@ If fso.FileExists(portFile) Then
     Set m = re.Execute(line)
     If m.Count > 0 Then port = CLng(m(0).SubMatches(0))
   End If
+  ' Also capture the pid the agent wrote, so a stale port file left by a dead
+  ' agent can be detected instead of trusted blindly.
+  Dim pidRe, pm
+  Set pidRe = New RegExp
+  pidRe.Pattern = """pid"":\s*(\d+)"
+  Set pm = pidRe.Execute(line)
+  Dim pid
+  pid = 0
+  If pm.Count > 0 Then pid = CLng(pm(0).SubMatches(0))
   ts.Close
   On Error GoTo 0
   If port > 0 Then
-    ' A stale port file reads the same way; the page shows its connect-fail
-    ' banner for a dead agent and the next launch respawns. Accepted rather
-    ' than probing sockets from vbs (no such primitive).
-    launched = True
+    Dim alive
+    alive = False
+    If pid > 0 Then
+      On Error Resume Next
+      Dim execCheck
+      Set execCheck = sh.Exec("tasklist /FI ""PID eq " & pid & """ /NH")
+      Dim out
+      out = execCheck.StdOut.ReadAll()
+      On Error GoTo 0
+      If InStr(out, CStr(pid)) > 0 Then alive = True
+    End If
+    If alive Or pid = 0 Then
+      launched = True
+    Else
+      ' Stale port file: remove it so this launch spawns a fresh agent.
+      On Error Resume Next
+      fso.DeleteFile portFile, True
+      On Error GoTo 0
+      launched = False
+    End If
   End If
 End If
+
+' --- generate a per-launch token for the agent's WebSocket -------------------
+' The agent's socket exposes config.get (provider credentials) and turn.send (the
+' whole tool set), so it must never listen unauthenticated (D-1). The token is
+' minted here, passed as --token, and the agent writes it into port.json for the
+' page to present. It lives only for this launch.
+
+Randomize
+Dim tokenChars, i, token
+tokenChars = "0123456789abcdef"
+token = ""
+For i = 1 To 64
+  token = token & Mid(tokenChars, Int(Rnd() * 16) + 1, 1)
+Next
 
 ' --- first instance: supervise + cleanup ----------------------------------
 ' The window runs synchronously; when it closes the agent is killed by its
@@ -87,7 +126,7 @@ If Not launched Then
   ' browser opener. Only the stable path can be passed now (the launcher
   ' starts the agent before the shell exists, so the auth details do not
   ' exist yet — openBridge's retry loop covers the shell's boot delay).
-  Set agentProc = sh.Exec("""" & agentExe & """ """ & agentBundle & """ --port-file """ & portFile & """ --nl-path """ & here & """")
+  Set agentProc = sh.Exec("""" & agentExe & """ """ & agentBundle & """ --port-file """ & portFile & """ --token """ & token & """ --nl-path """ & here & """")
   WScript.Sleep 400
   sh.Run """" & appExe & """", 1, True
   On Error Resume Next

@@ -1,5 +1,7 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { execFileSync } from "node:child_process";
+import { userInfo } from "node:os";
 import type { OAuthTokens, ProviderAuth, ProviderTransport, ResolvedProvider } from "@actor0/providers";
 import { configFile } from "./paths.js";
 
@@ -266,6 +268,21 @@ export function saveConfig(config: DesktopConfig): void {
   const toWrite = config.providers ? { ...config, provider: undefined } : config;
   writeFileSync(file, `${JSON.stringify(toWrite, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   chmodSync(file, 0o600);
+  // On Windows, chmod only toggles the read-only attribute and does not set an
+  // owner-only ACL. Apply a real ACL so only the current user (and SYSTEM) can
+  // read the file, which carries API keys and OAuth tokens.
+  if (process.platform === "win32") {
+    try {
+      const user = userInfo().username || process.env.USERNAME || process.env.USER;
+      execFileSync("icacls", [file, "/inheritance:r"], { stdio: "ignore" });
+      if (user) {
+        execFileSync("icacls", [file, "/grant:r", `${user}:F`], { stdio: "ignore" });
+      }
+      execFileSync("icacls", [file, "/grant:r", "SYSTEM:F"], { stdio: "ignore" });
+    } catch {
+      /* best-effort: never fail a save because the ACL tool is unavailable */
+    }
+  }
 }
 
 /**

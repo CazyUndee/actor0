@@ -136,11 +136,24 @@ export class McpHttpClient {
     });
     this.initialized = true;
     // A notification has no id and no response; it is fire-and-forget by design.
-    await fetch(this.url, {
-      method: "POST",
-      headers: this.baseHeaders(),
-      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-    }).catch(() => undefined);
+    // It still needs a timeout and a bounded body read, otherwise a hostile MCP
+    // server can hang the agent on this call or return an unbounded body.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(this.url, {
+        method: "POST",
+        headers: this.baseHeaders(),
+        body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+        signal: controller.signal,
+      });
+      // Drain and discard the body without buffering it.
+      await response.body?.cancel().catch(() => undefined);
+    } catch {
+      /* best-effort notification */
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Call a tool and flatten its content blocks to text. */

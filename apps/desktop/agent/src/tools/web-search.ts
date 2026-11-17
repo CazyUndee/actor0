@@ -1,4 +1,5 @@
 import { McpHttpClient } from "./mcp-http.js";
+import { isPublicHttpUrl } from "../url-safety.js";
 
 /**
  * Web search and page fetch, through Parallel's hosted MCP server.
@@ -97,6 +98,7 @@ export function createWebSearchClient(
   }
 
   async function openUrl(url: string, options: { signal?: AbortSignal } = {}): Promise<string> {
+    if (!isPublicHttpUrl(url)) throw new Error("that URL points at a private or local address, which is not allowed");
     const mcp = await client();
     const result = await mcp.callTool(
       "web_fetch",

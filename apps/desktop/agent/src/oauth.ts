@@ -107,6 +107,16 @@ export function setShellOpener(os: ShellOs | undefined): void {
  * caller turns into "here is the URL, open it yourself".
  */
 export function openBrowserInShell(url: string): boolean {
+  // Only http(s) URLs may be handed to the shell's `os.open`: on Windows it
+  // honours arbitrary protocol handlers (ms-msdt:, file:, ...) and there is no
+  // scheme check anywhere else.
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   const Neutralino = (globalThis as { Neutralino?: { os?: ShellOs } }).Neutralino;
   const os = shellOs ?? Neutralino?.os;
   if (typeof os?.open === "function") {

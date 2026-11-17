@@ -73,7 +73,8 @@ export async function discoverAgentUrl(): Promise<{ url: string; token?: string 
       const raw = await Neutralino.filesystem.readFile(`${base}/${AGENT_INFO_FILE}`);
       const info = JSON.parse(raw) as { port?: number; token?: string };
       if (typeof info.port === "number" && info.port > 0) {
-        return { url: `ws://127.0.0.1:${info.port}`, ...(info.token ? { token: info.token } : {}) };
+        const token = info.token || (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("actor0.agentToken") ?? undefined : undefined);
+        return { url: `ws://127.0.0.1:${info.port}`, ...(token ? { token } : {}) };
       }
     } catch {
       // No shell record: try the other sources.
@@ -97,13 +98,18 @@ export async function discoverAgentUrl(): Promise<{ url: string; token?: string 
 
   // The packaged launcher writes agent/port.json beside the exe (the served
   // root is the read-only resources bundle), so the page reaches it with the
-  // scoped filesystem API rather than a fetch.
+  // scoped filesystem API rather than a fetch. It now carries the per-launch
+  // token too (D-1); sessionStorage keeps it across a reload (D-2).
   const fsapi = Neutralino?.filesystem;
   if (fsapi && base) {
     try {
       const raw = await fsapi.readFile(`${base}/agent/port.json`);
-      const info = JSON.parse(raw) as { port?: number };
-      if (typeof info.port === "number" && info.port > 0) return { url: `ws://127.0.0.1:${info.port}` };
+      const info = JSON.parse(raw) as { port?: number; token?: string };
+      if (typeof info.port === "number" && info.port > 0) {
+        const token = info.token || (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("actor0.agentToken") ?? undefined : undefined);
+        if (token && typeof sessionStorage !== "undefined") sessionStorage.setItem("actor0.agentToken", token);
+        return { url: `ws://127.0.0.1:${info.port}`, ...(token ? { token } : {}) };
+      }
     } catch {
       /* no launcher record */
     }

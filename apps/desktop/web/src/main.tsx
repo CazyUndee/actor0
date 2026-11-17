@@ -115,9 +115,12 @@ async function boot(): Promise<void> {
     // The error goes where the user can see it and where the log file catches
     // it for a report.
     console.error("actor0: boot failed", error);
-    document.body.innerHTML = `<pre style="padding:2rem;color:#c46b6b;font:13px/1.5 ui-monospace,monospace">actor0 failed to start:\n${
-      error instanceof Error ? error.stack ?? error.message : String(error)
-    }</pre>`;
+    const pre = document.createElement("pre");
+    pre.style.padding = "2rem";
+    pre.style.color = "#c46b6b";
+    pre.style.font = "13px/1.5 ui-monospace,monospace";
+    pre.textContent = `actor0 failed to start:\n${error instanceof Error ? error.stack ?? error.message : String(error)}`;
+    document.body.replaceChildren(pre);
   }
 }
 

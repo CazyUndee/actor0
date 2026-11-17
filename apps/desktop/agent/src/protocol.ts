@@ -27,6 +27,8 @@ export type AgentInfo = {
   cwd: string;
   /** Which filesystem backend the tools are using: the shell's native API, or node:fs. */
   bridge: "neutralino" | "node";
+  /** Whether the filesystem backend enforces the shell's scopes (false = unrestricted node:fs). */
+  scoped: boolean;
   /** What `shell` will run, in one clause. */
   shell: string;
   platform: NodeJS.Platform;
@@ -44,7 +46,8 @@ export type ProviderInfo = {
 };
 
 export type ConfigSnapshot = {
-  config: DesktopConfig;
+  /** Raw config is intentionally NOT returned (D-8): it carries secrets. Use provider for safe data. */
+  config?: DesktopConfig;
   /** The endpoint in play, or undefined when the config cannot resolve one. */
   provider?: ProviderInfo;
   /** The error that stopped it resolving, when there is one. */

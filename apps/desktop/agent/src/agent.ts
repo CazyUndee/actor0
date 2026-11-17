@@ -1,4 +1,6 @@
 import { resolve } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { isPublicHttpUrl } from "./url-safety.js";
 import type { ChatMessage, ModelClient } from "@actor0/harness";
 import {
   CHATGPT_OAUTH,
@@ -158,6 +160,7 @@ export class Agent implements AgentMethods {
       version: this.version,
       cwd: this.cwd,
       bridge: this.bridge.kind,
+      scoped: this.bridge.kind === "neutralino",
       shell: resolveShell().label,
       platform: process.platform,
     };
@@ -170,7 +173,6 @@ export class Agent implements AgentMethods {
   private snapshot(): ConfigSnapshot {
     const providers = namedProviders(this.config);
     const base: ConfigSnapshot = {
-      config: this.config,
       providers,
       models: this.modelsForActive(),
       ...(this.config.activeProvider ? { activeProvider: this.config.activeProvider } : {}),
@@ -237,6 +239,9 @@ export class Agent implements AgentMethods {
       resolved = resolveProvider(config);
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+    if (!isPublicHttpUrl(resolved.baseUrl)) {
+      return { ok: false, message: "that base URL points at a private or local address, which is not allowed" };
     }
     try {
       // A real request, not a configuration check: the only thing that proves
@@ -343,6 +348,9 @@ export class Agent implements AgentMethods {
     if (!/^https?:\/\//i.test(baseUrl)) {
       throw new ConfigError("a base URL starting with http:// or https:// is required");
     }
+    if (!isPublicHttpUrl(baseUrl)) {
+      throw new ConfigError("that base URL points at a private or local address, which is not allowed");
+    }
     return listModels({ baseUrl, transport: "openai", ...(params.apiKey?.trim() ? { apiKey: params.apiKey.trim() } : {}) });
   }
 
@@ -397,9 +405,17 @@ export class Agent implements AgentMethods {
     if (this.running) throw new Error("cannot start a new conversation while a turn is running");
     const next = params?.cwd?.trim();
     if (next && next !== this.cwd) {
-      // Resolve it the way the tools do, so a relative path or a symlink is the
-      // same directory the tool host will use.
-      this.cwd = resolve(next);
+      const resolved = resolve(next);
+      // Refuse paths that are not an existing directory, or that are a filesystem
+      // root (which would erase write containment).
+      if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+        throw new Error(`"${next}" is not an existing directory`);
+      }
+      const normalized = resolved.replace(/\\/g, "/");
+      if (normalized === "/" || /^[A-Za-z]:\/?$/.test(normalized)) {
+        throw new Error(`refusing to re-root the agent at a filesystem root`);
+      }
+      this.cwd = resolved;
     }
     this.messages = [];
     this.session = { id: newSessionId(), createdAt: new Date().toISOString() };
@@ -727,6 +743,7 @@ export class Agent implements AgentMethods {
  */
 async function listModels(resolved: { baseUrl: string; transport?: string; apiKey?: string; headers?: Record<string, string> }): Promise<ModelInfo[]> {
   if ((resolved.transport ?? "openai") !== "openai") return [];
+  if (!isPublicHttpUrl(resolved.baseUrl)) return [];
   const base = resolved.baseUrl.replace(/\/+$/, "");
   const url = `${base}/models`;
   try {

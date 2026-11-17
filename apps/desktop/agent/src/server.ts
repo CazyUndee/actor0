@@ -48,15 +48,25 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
   const host = options.host ?? "127.0.0.1";
   const log = options.onLog ?? (() => {});
   const sockets = new Set<WebSocket>();
+  const MAX_CONNECTIONS = 8;
+
+  const isAllowedOrigin = (origin: string | undefined): boolean => {
+    if (!origin || origin === "null") return true;
+    return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(origin);
+  };
 
   const server = new WebSocketServer({
     host,
     port: options.port ?? 0,
     verifyClient: options.token
-      ? (info: { req: { url?: string } }) => {
+      ? (info: { req: { url?: string; headers?: { origin?: string } } }) => {
           const url = info.req.url ?? "";
           const presented = new URLSearchParams(url.split("?")[1] ?? "").get("token");
-          return presented === options.token;
+          if (presented !== options.token) return false;
+          const origin = info.req.headers?.origin;
+          if (!isAllowedOrigin(origin)) return false;
+          if (sockets.size >= MAX_CONNECTIONS) return false;
+          return true;
         }
       : undefined,
   });
@@ -73,6 +83,10 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
   options.agent.setNotifier(broadcast);
 
   server.on("connection", (socket) => {
+    if (sockets.size >= MAX_CONNECTIONS) {
+      socket.close(1013, "too many connections");
+      return;
+    }
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
     socket.on("error", (error) => log(`[server] socket error: ${error.message}`));
@@ -128,7 +142,9 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
           const target = options.portFile;
           mkdirSync(dirname(target), { recursive: true });
           const staging = `${target}.${process.pid}.tmp`;
-          writeFileSync(staging, `${JSON.stringify({ port, pid: process.pid })}\n`, "utf8");
+          const portPayload: { port: number; pid: number; token?: string } = { port, pid: process.pid };
+          if (options.token) portPayload.token = options.token;
+          writeFileSync(staging, `${JSON.stringify(portPayload)}\n`, "utf8");
           renameSync(staging, target);
         } catch {
           process.stderr.write("[agent] could not write the port file\n");

@@ -262,17 +262,25 @@ export async function startAgent(options: { cwd?: string; token?: string; timeou
     throw new Error(`the agent did not report a port in time (command: ${command}; stdout seen: ${seen.join(" | ") || "none"})`);
   }
 
-  // Record it where `discoverAgentUrl` can read it back on reconnect. The
-  // token is stored alongside the port so a reconnecting UI presents the same
-  // secret the agent requires — without it the socket is refused.
+  // Record the port where `discoverAgentUrl` can read it back on reconnect. The
+  // token is deliberately NOT persisted to disk (D-2): it is kept in
+  // sessionStorage for this tab instead, so a local process that can read the
+  // app directory cannot recover it.
   if (api.filesystem) {
     await api.filesystem.createDirectory(`${base}/.tmp`).catch(() => undefined);
     await api.filesystem
       .writeFile(
         `${base}/${AGENT_INFO_PATH}`,
-        JSON.stringify({ port, pid: process.pid, ...(options.token ? { token: options.token } : {}) }),
+        JSON.stringify({ port, pid: process.pid }),
       )
       .catch(() => undefined);
+  }
+  if (options.token && typeof sessionStorage !== "undefined") {
+    try {
+      sessionStorage.setItem("actor0.agentToken", options.token);
+    } catch {
+      /* sessionStorage may be unavailable; the in-memory discoveredToken covers this boot */
+    }
   }
 
   return port;

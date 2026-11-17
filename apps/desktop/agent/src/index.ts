@@ -51,9 +51,9 @@ async function main(): Promise<void> {
     nlToken: process.env.NL_TOKEN?.trim() || argValue("--nl-token"),
   });
 
+  const authBeforeBridge = readNeutralinoAuth();
   const bridge = await openBridge(log);
-
-  // OAuth sign-in opens the browser through the shell's `os.open`, which is the
+  const bridgeFellBack = bridge.kind === "node" && !!authBeforeBridge;
   // only native opener a headless Node process has. The bridge already knows how
   // to reach the shell (its auth file, its WebSocket), so the opener is wired
   // from the same connection: without this, openBrowserInShell fell back to
@@ -74,6 +74,10 @@ async function main(): Promise<void> {
     ...(portFile ? { portFile } : {}),
     onLog: log,
   });
+
+  if (bridgeFellBack) {
+    (agent as unknown as { notify?: (n: unknown) => void }).notify?.({ type: "notice", tone: "warn", text: "native API unavailable; falling back to unrestricted node:fs" });
+  }
 
   log(`[agent] actor0 ${VERSION} ready — cwd=${cwd} bridge=${bridge.kind} shell=${(await agent["agent.hello"]()).shell}`);
 
