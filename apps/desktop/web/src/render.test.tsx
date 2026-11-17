@@ -6,6 +6,7 @@ import { EntryView, ToolEntry } from "./components/Entry";
 import { Markdown } from "./components/Markdown";
 import { Composer } from "./components/Composer";
 import { Panel } from "./components/Panels";
+import { BarDropdown } from "./components/BarDropdown";
 import { SessionDropdown } from "./components/SessionDropdown";
 
 /**
@@ -226,5 +227,52 @@ describe("rendering the conversation picker", () => {
     );
     assert.ok(html.includes("new conversation"));
     assert.ok(html.includes("delete conversations"));
+  });
+});
+
+describe("the top-bar menus", () => {
+  // The picker used to own its open state, so nothing could close it when a
+  // panel opened — it sat open underneath the overlay and was still there when
+  // the panel closed. It now takes the caller's state, and these pin that the
+  // caller's state is what decides.
+  const picker = (props: { open?: boolean; initiallyOpen?: boolean }) => (
+    <SessionDropdown
+      sessions={[]}
+      currentId={null}
+      busy={false}
+      stopped={new Set()}
+      onLoad={() => {}}
+      onNew={() => {}}
+      onDelete={() => {}}
+      onPickFolder={async () => undefined}
+      {...props}
+    />
+  );
+
+  it("renders the picker closed when the caller says closed, even if it starts open", () => {
+    const html = markup(picker({ open: false, initiallyOpen: true }));
+    assert.ok(!html.includes("session-menu"), "a caller-closed picker must not render its menu");
+  });
+
+  it("renders the picker open when the caller says open", () => {
+    const html = markup(picker({ open: true }));
+    assert.ok(html.includes("session-menu"), "a caller-opened picker must render its menu");
+  });
+
+  it("renders a bar menu's items only while it is open", () => {
+    const closed = markup(
+      <BarDropdown label="built-in" title="Provider" open={false} onOpenChange={() => {}}>
+        <div className="session-empty">no saved providers</div>
+      </BarDropdown>,
+    );
+    assert.ok(closed.includes("built-in"), "the trigger carries the current value");
+    assert.ok(!closed.includes("no saved providers"), "a closed menu renders no items");
+
+    const open = markup(
+      <BarDropdown label="built-in" title="Provider" open onOpenChange={() => {}}>
+        <div className="session-empty">no saved providers</div>
+      </BarDropdown>,
+    );
+    assert.ok(open.includes("no saved providers"), "an open menu renders its items");
   });
 });

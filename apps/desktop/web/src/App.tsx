@@ -25,9 +25,9 @@ type ResizeState = {
   startY: number;
   origin?: { x: number; y: number; width: number; height: number };
 };
+import { BarDropdown } from "./components/BarDropdown";
 import { Composer } from "./components/Composer";
 import { SessionDropdown } from "./components/SessionDropdown";
-import { Caret } from "./components/Caret";
 import { EntryView } from "./components/Entry";
 import { McpPanel, ModelPanel, NoticeBar, ProviderPanel, SessionPanel, ThinkingPanel, UsagePanel } from "./components/Panels";
 
@@ -44,6 +44,8 @@ import { McpPanel, ModelPanel, NoticeBar, ProviderPanel, SessionPanel, ThinkingP
  */
 
 type Mode = "chat" | "provider" | "model" | "thinking" | "session" | "usage" | "mcp";
+/** Which top-bar menu is open. At most one — a panel is separate and modal. */
+type BarMenu = "session" | "provider" | "model";
 
 export function App() {
   const [connection, setConnection] = useState<ConnectionState>("connecting");
@@ -52,6 +54,7 @@ export function App() {
   const [conversation, setConversation] = useState<ConversationState>(initialConversation);
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState<Mode>("chat");
+  const [openMenu, setOpenMenu] = useState<BarMenu | null>(null);
   const [notice, setNotice] = useState<{ tone: "info" | "warn" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState(false);
@@ -114,6 +117,37 @@ export function App() {
       /* a session list that cannot be read is not worth a banner */
     }
   }, []);
+
+  /**
+   * Open one top-bar menu, closing the others. The `next` flag is honoured
+   * rather than treated as a toggle: a menu that reads it as "flip" opens
+   * itself when something above it asked it to close.
+   */
+  const setBarMenu = useCallback((menu: BarMenu, next: boolean) => {
+    setOpenMenu(next ? menu : null);
+    // A bar menu and a modal panel never coexist; opening the menu dismisses
+    // the panel instead of leaving it behind the overlay.
+    if (next) setMode("chat");
+  }, []);
+
+  // Opening a panel closes any bar menu. Without this the session picker stayed
+  // open behind the overlay and was still there when the panel closed.
+  useEffect(() => {
+    if (mode !== "chat") setOpenMenu(null);
+  }, [mode]);
+
+  // A click outside every top-bar menu closes it. The picker used to close only
+  // when an item was chosen, so it sat open over the transcript.
+  useEffect(() => {
+    if (openMenu === null) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".session-dd")) return;
+      setOpenMenu(null);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [openMenu]);
 
   useEffect(() => {
     const client = new AgentClient({
@@ -471,6 +505,10 @@ export function App() {
   // way, so Ctrl+C never both copies and interrupts.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && openMenu !== null) {
+        setOpenMenu(null);
+        return;
+      }
       if (event.key === "Escape" && mode !== "chat") {
         setMode("chat");
         return;
@@ -489,7 +527,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, cancel, mode]);
+  }, [busy, cancel, mode, openMenu]);
 
   // --- derived -------------------------------------------------------------
 
@@ -529,6 +567,29 @@ export function App() {
 
   const providerLabel = snapshot?.provider?.model ?? snapshot?.config.model ?? "no provider";
   const providerName = snapshot?.activeProvider ?? "built-in";
+  const providerOptions = snapshot?.providers ?? [];
+  const modelOptions = snapshot?.models ?? [];
+
+  /** Switch the active provider from the bar menu, closing the menu either way. */
+  const activateProvider = useCallback(async (name: string) => {
+    setOpenMenu(null);
+    try {
+      setSnapshot(await clientRef.current!.call("provider.activate", { name }));
+    } catch (error) {
+      setNotice({ tone: "error", text: (error as Error).message });
+    }
+  }, []);
+
+  /** Switch the model from the bar menu, closing the menu either way. */
+  const chooseModel = useCallback(async (model: string) => {
+    setOpenMenu(null);
+    try {
+      setSnapshot(await clientRef.current!.call("model.set", { model }));
+    } catch (error) {
+      setNotice({ tone: "error", text: (error as Error).message });
+    }
+  }, []);
+
   const bridgeLabel = agentInfo ? `${agentInfo.bridge} · ${agentInfo.shell}` : "";
 
   const statusLine = useMemo(() => {
@@ -608,6 +669,8 @@ export function App() {
           <div className="top-bar">
             <div className="selector-group">
               <SessionDropdown
+                open={openMenu === "session"}
+                onOpenChange={(next) => setBarMenu("session", next)}
                 title={sessionTitle}
                 sessions={sessions}
                 currentId={sessionId}
@@ -660,19 +723,76 @@ export function App() {
                     : undefined;
                 }}
               />
-              <button
-                type="button"
-                className="dropdown-trigger"
-                onClick={() => setMode("provider")}
+              <BarDropdown
+                label={providerName}
                 title={snapshot?.provider?.endpoint ?? "no endpoint configured"}
+                open={openMenu === "provider"}
+                onOpenChange={(next) => setBarMenu("provider", next)}
               >
-                <span className="dropdown-value">{providerName}</span>
-                <span className="dropdown-caret"><Caret /></span>
-              </button>
-              <button type="button" className="dropdown-trigger" onClick={() => setMode("model")}>
-                <span className="dropdown-value">{providerLabel}</span>
-                <span className="dropdown-caret"><Caret /></span>
-              </button>
+                {providerOptions.length === 0 ? <div className="session-empty">no saved providers</div> : null}
+                {providerOptions.map((provider) => (
+                  <button
+                    type="button"
+                    key={provider.name}
+                    role="menuitem"
+                    className="session-item"
+                    onClick={() => void activateProvider(provider.name)}
+                  >
+                    <span className="session-item-status">
+                      {provider.name === snapshot?.activeProvider ? <span className="tick" title="active">✓</span> : <span className="tick-spacer" />}
+                    </span>
+                    <span className="session-item-title">{provider.name}</span>
+                  </button>
+                ))}
+                <div className="session-menu-actions">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="session-action"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      setMode("provider");
+                    }}
+                  >
+                    manage providers…
+                  </button>
+                </div>
+              </BarDropdown>
+              <BarDropdown
+                label={providerLabel}
+                title="Model"
+                open={openMenu === "model"}
+                onOpenChange={(next) => setBarMenu("model", next)}
+              >
+                {modelOptions.length === 0 ? <div className="session-empty">the endpoint listed no models</div> : null}
+                {modelOptions.map((model) => (
+                  <button
+                    type="button"
+                    key={model}
+                    role="menuitem"
+                    className="session-item"
+                    onClick={() => void chooseModel(model)}
+                  >
+                    <span className="session-item-status">
+                      {model === providerLabel ? <span className="tick" title="current">✓</span> : <span className="tick-spacer" />}
+                    </span>
+                    <span className="session-item-title">{model}</span>
+                  </button>
+                ))}
+                <div className="session-menu-actions">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="session-action"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      setMode("model");
+                    }}
+                  >
+                    search &amp; discover…
+                  </button>
+                </div>
+              </BarDropdown>
             </div>
             <span className="status-meta" title={bridgeLabel}>
               {agentInfo?.cwd ?? ""}

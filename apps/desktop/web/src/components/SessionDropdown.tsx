@@ -39,10 +39,25 @@ export function SessionDropdown(props: {
   onDelete: (ids: string[]) => void;
   /** Opens the system folder picker; resolves the picked directory or undefined. */
   onPickFolder: () => Promise<string | undefined>;
-  /** Test affordance: render the menu open (state does not survive SSR). */
+  /**
+   * Controlled open state, for a caller that has to close this menu when
+   * another one opens. Omitted, the dropdown owns the state itself.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Test affordance: start open when uncontrolled (state does not survive SSR). */
   initiallyOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(props.initiallyOpen ?? false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(props.initiallyOpen ?? false);
+  const open = props.open ?? uncontrolledOpen;
+  // One setter for both modes: an uncontrolled dropdown keeps the value, a
+  // controlled one is told instead. Nothing else may write `uncontrolledOpen`,
+  // or the two modes drift and a menu stops closing.
+  const setOpen = (next: boolean | ((value: boolean) => boolean)) => {
+    const value = typeof next === "function" ? next(open) : next;
+    if (props.open === undefined) setUncontrolledOpen(value);
+    props.onOpenChange?.(value);
+  };
   const [mode, setMode] = useState<"list" | "new" | "delete">("list");
   const [newPath, setNewPath] = useState("");
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -84,6 +99,8 @@ export function SessionDropdown(props: {
         className={`dropdown-trigger session-trigger ${props.busy ? "streaming" : ""}`}
         onClick={() => setOpen((value) => !value)}
         title="Conversations"
+        aria-haspopup="menu"
+        aria-expanded={open}
       >
         <span className="dropdown-value">session: {label}</span>
         <span className="dropdown-caret"><Caret open={open} /></span>
@@ -153,7 +170,14 @@ export function SessionDropdown(props: {
                       props.onNew(newPath.trim() || undefined);
                       setOpen(false);
                     }
-                    if (event.key === "Escape") setMode("list");
+                    if (event.key === "Escape") {
+                      // Consumed here: stepping back to the list must not also
+                      // reach the app's Escape handler, which closes the whole
+                      // menu and would take the typed path with it.
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setMode("list");
+                    }
                   }}
                 />
                 <button
