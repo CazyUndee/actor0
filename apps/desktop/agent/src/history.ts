@@ -21,11 +21,33 @@ const PAYLOAD_CHARS = 4_000;
 /** How many of the newest tool results are always kept intact. */
 export const KEEP_RECENT = 6;
 
+/**
+ * A single tool result above this is cleared even inside the protected window.
+ *
+ * The protection for recent results exists so the model can still reason about
+ * output it just saw. Tools cap what they return (MAX_OUTPUT_BYTES), so a
+ * result far beyond the tools' own ceiling can only come from a hand-edited
+ * session file — and the sessions directory is shared local state a malicious
+ * or curious process can write. Unprotected, a multi-megabyte payload keeps
+ * every future turn of the conversation serializing and re-parsing it (the
+ * provider rejects the request, but the cost is ours, on every attempt), and
+ * the keepRecent window would otherwise shield it forever. The desktop agent
+ * mirrors the CLI's absolute-budget rule this way: recent, but outsized, is
+ * still cleared.
+ */
+const PROTECTED_MAX_CHARS = 60_000;
+
 /** True when `value` has the minimum shape of a chat message. */
+const MESSAGE_ROLES = new Set(["system", "user", "assistant", "tool"]);
+
 export function isChatMessage(value: unknown): value is ChatMessage {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const message = value as { role?: unknown; content?: unknown };
-  return typeof message.role === "string" && typeof message.content === "string";
+  // The role must be one the wire protocol has: a hand-edited session can
+  // carry any string, and an unknown role loads silently here only to fail at
+  // the provider on every future turn of the resumed session. Rejecting here
+  // makes loadSession drop it (the same treatment a torn message gets).
+  return typeof message.role === "string" && MESSAGE_ROLES.has(message.role) && typeof message.content === "string";
 }
 
 /** The ids of tool calls that appear on some assistant message. */
@@ -99,7 +121,14 @@ export function compactHistory(messages: ChatMessage[], options: { keepRecent?: 
   for (let i = 0; i < toolIndexes.length; i += 1) {
     const index = toolIndexes[i]!;
     const content = messages[index]!.content;
-    if (i >= protectedFrom) continue;
+    if (i >= protectedFrom) {
+      // Inside the protected window a result is kept — unless it is outsized:
+      // a real tool result cannot be (tools cap at MAX_OUTPUT_BYTES), so an
+      // oversized recent result is a hand-edited file, and the recency shield
+      // must not license it to ride every future turn.
+      if (typeof content === "string" && content.length > PROTECTED_MAX_CHARS) toClear.add(index);
+      continue;
+    }
     if (typeof content === "string" && content.length > PAYLOAD_CHARS) toClear.add(index);
   }
   if (toClear.size === 0) return messages;

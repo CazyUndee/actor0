@@ -202,3 +202,35 @@ describe("M3 — session sharing with the CLI", () => {
     assert.equal(cli.messageCount, 2);
   });
 });
+
+describe("the message shape a session file may carry", () => {
+  it("drops messages with a role the wire protocol does not have", async () => {
+    // loadSession accepted any string as a role, so a hand-edited session with
+    // role "coauthor" loaded silently and failed at the provider on every turn
+    // of the resumed session. Unknown roles are dropped at load like any other
+    // unparseable message.
+    const id = "2026-06-06T00-00-00-000Z";
+    writeFileSync(
+      join(sessionsDir(), `${id}.json`),
+      JSON.stringify({
+        id,
+        createdAt: "",
+        updatedAt: "",
+        model: "m",
+        messages: [
+          { role: "user", content: "kept" },
+          { role: "coauthor", content: "dropped" },
+          { role: "assistant", content: "kept too" },
+        ],
+      }),
+      "utf8",
+    );
+    const loaded = loadSession(id);
+    assert.ok(loaded);
+    assert.deepEqual(
+      loaded.messages.map((m) => m.role),
+      ["user", "assistant"],
+      "only wire roles survive the load",
+    );
+  });
+});

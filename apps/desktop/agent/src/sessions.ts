@@ -49,8 +49,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const MESSAGE_ROLES = new Set(["system", "user", "assistant", "tool"]);
+
 function isChatMessage(value: unknown): value is ChatMessage {
-  return isRecord(value) && typeof value.role === "string" && typeof value.content === "string";
+  // Role-gated like history.ts's isChatMessage: a hand-edited session can carry
+  // any string, and an unknown role previously loaded silently only to fail at
+  // the provider on every future turn of the resumed session.
+  return isRecord(value) && typeof value.role === "string" && MESSAGE_ROLES.has(value.role) && typeof value.content === "string";
 }
 
 export function newSessionId(now = new Date()): string {

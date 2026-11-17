@@ -100,3 +100,44 @@ describe("isChatMessage", () => {
     assert.equal(isChatMessage([]), false);
   });
 });
+
+it("an oversized tool result clears even inside the protected window", async () => {
+  // The recency shield must not protect a payload no real tool could produce:
+  // tools cap their own output, so a multi-megabyte 'recent' result can only
+  // come from a hand-edited session file — shared local state. Without the
+  // ceiling it rides every future turn (serialized + parsed per request).
+  // Mirror of the CLI's absolute-budget compaction rule.
+  const big = "B".repeat(100_000); // above PROTECTED_MAX_CHARS, below nothing else
+  const transcript: ChatMessage[] = [
+    { role: "user", content: "q" },
+    { role: "assistant", content: "", tool_calls: [{ id: "t1", type: "function", function: { name: "shell", arguments: "{}" } }] },
+    { role: "tool", content: big, tool_call_id: "t1", name: "shell" },
+  ];
+  const after = compactHistory(transcript, { keepRecent: 6 });
+  const result = after[2]!;
+  assert.equal(after.length, 3, "no message is ever dropped");
+  assert.ok(result.content.length <= 100, `oversized recent result must be cleared, got ${result.content.length}`);
+  assert.match(result.content, /cleared/);
+});
+
+it("a normal recent tool result still survives the protected window", async () => {
+  const transcript: ChatMessage[] = [
+    { role: "user", content: "q" },
+    { role: "assistant", content: "", tool_calls: [{ id: "t1", type: "function", function: { name: "shell", arguments: "{}" } }] },
+    { role: "tool", content: "reasonable output", tool_call_id: "t1", name: "shell" },
+  ];
+  const after = compactHistory(transcript, { keepRecent: 6 });
+  assert.equal(after[2]!.content, "reasonable output", "recent, in-budget results stay intact");
+});
+
+it("drops a message with a role the wire protocol does not have", () => {
+  // Same file, same companion gap: any string passed for role before, so a
+  // hand-edited session with role "coauthor" loaded silently and failed only at
+  // the provider — on every turn of the resumed session. Unknown roles are now
+  // torn-treated: dropped on load, like any other unparseable message.
+  assert.equal(isChatMessage({ role: "coauthor", content: "x" }), false);
+  assert.equal(isChatMessage({ role: "user", content: "x" }), true);
+  assert.equal(isChatMessage({ role: "tool", content: "x" }), true);
+  assert.equal(isChatMessage({ role: "assistant", content: "x" }), true);
+  assert.equal(isChatMessage({ role: "system", content: "x" }), true);
+});
