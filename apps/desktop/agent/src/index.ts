@@ -32,6 +32,25 @@ async function main(): Promise<void> {
   };
 
   const cwd = resolve(process.env.ACTOR0_AGENT_CWD?.trim() || process.cwd());
+
+  // Env-first, argv as the fallback, parsed ONCE before anything that reads
+  // then: the bridge and the OAuth opener both consume NL_* value
+  // coordinates, and openBridge() used to run before applyShellCoordinates —
+  // so the bridge decision never saw the values the page passed and always
+  // fell back to node:fs (the one engagement earlier in the loop came from a
+  // stale auth file the retry could still read). argv/env parse, then
+  // coordinates install, THEN the bridge.
+  const args = new Map(process.argv.slice(2).map((a, i, all) => [a, all[i + 1]]));
+  const argValue = (flag: string): string | undefined => {
+    const indexed = args.get(flag)?.replace(/^"|"$/g, "");
+    return indexed && indexed.trim() ? indexed.trim() : undefined;
+  };
+  applyShellCoordinates({
+    nlPath: process.env.NL_PATH?.trim() || argValue("--nl-path"),
+    nlPort: process.env.NL_PORT?.trim() || argValue("--nl-port"),
+    nlToken: process.env.NL_TOKEN?.trim() || argValue("--nl-token"),
+  });
+
   const bridge = await openBridge(log);
 
   // OAuth sign-in opens the browser through the shell's `os.open`, which is the
@@ -45,30 +64,9 @@ async function main(): Promise<void> {
 
   const agent = new Agent({ cwd, bridge, version: VERSION });
 
-  // Env-first, argv as the fallback: the packaged desktop app spawns this
-  // process through Neutralino's `os.spawnProcess`, which silently fails
-  // (pid 0, no process) whenever `envs` is passed — measured, not assumed.
-  // So the shell passes --token/--port-file as plain arguments, and both
-  // routes end at the same values.
-  const args = new Map(process.argv.slice(2).map((a, i, all) => [a, all[i + 1]]));
-  const argValue = (flag: string): string | undefined => {
-    const indexed = args.get(flag)?.replace(/^"|"$/g, "");
-    return indexed && indexed.trim() ? indexed.trim() : undefined;
-  };
   const port = Number(process.env.ACTOR0_AGENT_PORT ?? "0") || 0;
   const token = process.env.ACTOR0_AGENT_TOKEN?.trim() || argValue("--token");
   const portFile = process.env.ACTOR0_AGENT_PORT_FILE?.trim() || argValue("--port-file");
-  // The Neutralino shell's own coordinates, env-first with argv fallback.
-  // NL_PATH is a *page global* in the webview, not a process env var, so a
-  // spawned agent never inherits it: the page passes --nl-path/--nl-token/
-  // --nl-port explicitly, which is what makes the scoped Neutralino bridge
-  // (and the OAuth browser opener) reachable from the packaged app. Dev mode
-  // can export the NL_* env vars instead; both routes end identical.
-  applyShellCoordinates({
-    nlPath: process.env.NL_PATH?.trim() || argValue("--nl-path"),
-    nlPort: process.env.NL_PORT?.trim() || argValue("--nl-port"),
-    nlToken: process.env.NL_TOKEN?.trim() || argValue("--nl-token"),
-  });
   const server = await startServer({
     agent,
     port,

@@ -273,8 +273,13 @@ export async function openBridge(log: (line: string) => void = () => {}): Promis
   for (let attempt = 0; attempt < 5; attempt++) {
     const client = new NeutralinoClient(auth);
     try {
-      // One cheap round trip proves the socket works before the tools rely on it.
-      await client.call("app.getConfig");
+      // One cheap round trip proves the socket works before the tools rely on
+      // it. os.getPath because it is in the narrowed nativeAllowList — the
+      // health check must probe with a permission the client actually holds
+      // (openBridge's original app.getConfig probe was refused by build
+      // 110's caller-audit and every bridge silently fell back to node:fs,
+      // exactly the dead-control state this loop already fought once).
+      await client.call("os.getPath", { name: "temp" });
       log(`[bridge] using the Neutralino native filesystem API (port ${auth.port}${attempt ? `, after ${attempt + 1} attempts` : ""})`);
       return neutralinoBridge(client);
     } catch {
