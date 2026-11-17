@@ -135,3 +135,23 @@ test("a corrupt audit line is skipped, not fatal", () => {
     assert.deepEqual(readAudit().map((e) => e.rounds), [1, 2], "the torn line drops, the good ones survive");
   });
 });
+
+test("hostile usage values drop like torn lines (build 115's mirror)", () => {
+  withDataDir(() => {
+    appendFileSync(
+      join(process.env.ACTOR0_DATA_DIR!, "usage.jsonl"),
+      [
+        '{"t":1e999,"model":"m","prompt":1,"completion":1,"total":1e999}',
+        '{"t":-5,"model":"neg","prompt":-1,"completion":-1,"total":-7}',
+        JSON.stringify({ t: 1, model: "M".repeat(10_000), prompt: 1, completion: 1, total: 1 }),
+        "{ torn",
+        JSON.stringify({ t: 1, model: "honest", prompt: 1, completion: 1, total: 9 }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const entries = readUsage();
+    assert.equal(entries.length, 1, "only the honest line survives");
+    assert.equal(entries[0]!.model, "honest");
+    assert.equal(entries[0]!.total, 9);
+  });
+});

@@ -27,6 +27,12 @@ export type UsageEntry = {
 
 const usageFile = (): string => join(dataDir(), "usage.jsonl");
 
+/** No real turn reports more tokens than this; above it the line is hostile, not torn. */
+const MAX_RECORDED_TOKENS = 10_000_000_000;
+
+/** Same ceiling the config's model picker enforces on a model id. */
+const MAX_MODEL_CHARS = 500;
+
 /**
  * Append a line to a JSONL log with the file created 0o600.
  *
@@ -67,7 +73,17 @@ export function readUsage(): UsageEntry[] {
     if (!line.trim()) continue;
     try {
       const entry = JSON.parse(line) as UsageEntry;
-      if (typeof entry.t === "number" && typeof entry.total === "number") out.push(entry);
+      // The corrupt-line contract, extended to the values — mirrored from the
+      // desktop agent (its cycle diary records why): `typeof x === "number"`
+      // alone passes Infinity (nonsense rendering), negatives (silently
+      // subtract from the meter), and an unbounded model string. Hostile
+      // values drop the line like any unparseable one.
+      if (
+        typeof entry.t !== "number" || !Number.isFinite(entry.t) || entry.t < 0 ||
+        typeof entry.total !== "number" || !Number.isFinite(entry.total) || entry.total < 0 || entry.total > MAX_RECORDED_TOKENS ||
+        typeof entry.model !== "string" || entry.model.length > MAX_MODEL_CHARS
+      ) continue;
+      out.push(entry);
     } catch {
       // A torn or corrupt line is one dropped turn, not a broken /usage.
     }

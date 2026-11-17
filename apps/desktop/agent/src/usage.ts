@@ -24,6 +24,12 @@ export type UsageEntry = {
 
 const usageFile = (): string => join(dataDir(), "usage.jsonl");
 
+/** No real turn reports more tokens than this; above it the line is hostile, not torn. */
+const MAX_RECORDED_TOKENS = 10_000_000_000;
+
+/** Same ceiling the config's model picker enforces on a model id. */
+const MAX_MODEL_CHARS = 500;
+
 /** Append one turn's token counts. */
 export function recordUsage(model: string, usage: Usage): void {
   const entry: UsageEntry = {
@@ -50,7 +56,19 @@ export function readUsage(): UsageEntry[] {
     if (!line.trim()) continue;
     try {
       const entry = JSON.parse(line) as UsageEntry;
-      if (typeof entry.t === "number" && typeof entry.total === "number") out.push(entry);
+      // The corrupt-line contract, extended to the values. usage.jsonl is
+      // local state any process can write, and `typeof x === "number"` alone
+      // passes NaN, Infinity, negatives and values a real turn never produced
+      // (a negative total silently subtracts from the meter; Infinity renders
+      // nonsense; an unbounded model string rides the wire into the UI).
+      // Non-finite, negative, or oversized values drop the line like any
+      // unparseable one.
+      if (
+        typeof entry.t !== "number" || !Number.isFinite(entry.t) || entry.t < 0 ||
+        typeof entry.total !== "number" || !Number.isFinite(entry.total) || entry.total < 0 || entry.total > MAX_RECORDED_TOKENS ||
+        typeof entry.model !== "string" || entry.model.length > MAX_MODEL_CHARS
+      ) continue;
+      out.push(entry);
     } catch {
       // A torn or corrupt line is one dropped turn, not a broken read.
     }
