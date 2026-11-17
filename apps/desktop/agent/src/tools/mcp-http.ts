@@ -132,7 +132,7 @@ export class McpHttpClient {
     await this.request("initialize", {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: { tools: {} },
-      clientInfo: { name: "actor0-desktop", version: "0.5.8" },
+      clientInfo: { name: "actor0-desktop", version: "0.5.7" },
     });
     this.initialized = true;
     // A notification has no id and no response; it is fire-and-forget by design.

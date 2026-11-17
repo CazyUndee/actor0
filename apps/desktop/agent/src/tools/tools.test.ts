@@ -171,6 +171,56 @@ describe("containment", () => {
       rmSync(outer, { recursive: true, force: true });
     }
   });
+
+  it("refuses a write whose path PREFIX is a directory link pointing outside", async () => {
+    // The reverse of the dangling case: the link exists, is a DIRECTORY, and
+    // sits as a prefix of the requested path (link/newfile). The OS resolves
+    // the directory before the file is created, so a lexical check on the
+    // full path would pass; the containment must resolve the prefix too.
+    // Verified by PoC before pinning; within() refuses.
+    const outer = mkdtempSync(join(tmpdir(), "actor0-dirlink-"));
+    const root = join(outer, "root");
+    const victim = join(outer, "victim");
+    try {
+      mkdirSync(root);
+      mkdirSync(victim);
+      try {
+        symlinkSync(victim, join(root, "link"), "dir");
+      } catch {
+        return; // No symlink permission on this host.
+      }
+      await assert.rejects(() => within(root, join("link", "planted.txt"), true), /outside the working directory/);
+      assert.equal(existsSync(join(victim, "planted.txt")), false, "nothing was written through the directory link");
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a write through a CHAIN of directory links ending outside", async () => {
+    // link->link->outside: each hop is individually a directory link, and the
+    // chain is only caught if the resolution follows every hop. The deepest
+    // existing ancestor of l1/l2/planted.txt is the root, so the tail includes
+    // two link components — the tail re-application must follow both.
+    const outer = mkdtempSync(join(tmpdir(), "actor0-chain-"));
+    const root = join(outer, "root");
+    const mid = join(outer, "mid");
+    const victim = join(outer, "victim");
+    try {
+      mkdirSync(root);
+      mkdirSync(mid);
+      mkdirSync(victim);
+      try {
+        symlinkSync(victim, join(mid, "l2"), "dir");
+        symlinkSync(mid, join(root, "l1"), "dir");
+      } catch {
+        return; // No symlink permission on this host.
+      }
+      await assert.rejects(() => within(root, join("l1", "l2", "planted.txt"), true), /outside the working directory/);
+      assert.equal(existsSync(join(victim, "planted.txt")), false, "nothing was written through the link chain");
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("bundled ripgrep resolution", () => {

@@ -24,7 +24,7 @@ import WebSocket from "ws";
  *   NL_TOKEN            the shell's access token, for the native API
  */
 
-const VERSION = "0.5.8";
+const VERSION = "0.5.7";
 
 async function main(): Promise<void> {
   const log = (line: string): void => {
