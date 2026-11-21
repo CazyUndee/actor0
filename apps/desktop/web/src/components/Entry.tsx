@@ -71,7 +71,8 @@ export function EntryView({ entry }: { entry: Entry }) {
           <div className="user-bubble">{entry.text}</div>
         </div>
       );
-    case "assistant":
+    case "assistant": {
+      if (!entry.text.trim() && !entry.partial) return null;
       return (
         <div className={`entry assistant ${entry.partial ? "has-partial" : ""}`}>
           <div className={`assistant-box ${entry.partial ? "partial" : ""}`}>
@@ -84,6 +85,7 @@ export function EntryView({ entry }: { entry: Entry }) {
           <CopyButton text={entry.text} title="Copy the answer" className="entry-copy" />
         </div>
       );
+    }
     case "reasoning":
       return <ReasoningEntry entry={entry} />;
     case "tool":

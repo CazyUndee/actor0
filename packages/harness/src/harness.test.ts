@@ -215,6 +215,24 @@ test("feeds tool results into a bounded second round", async () => {
   assert.ok(observed.some((event) => event.type === "tool_result"));
 });
 
+test("persists each round's reasoning on its assistant message", async () => {
+  const call: ToolCall = { id: "c1", type: "function", function: { name: "inspect", arguments: "{}" } };
+  const model = scriptedModel([
+    await events({ type: "reasoning", delta: "Inspect the file first." }, { type: "tool_call", tool_calls: [call] }, { type: "done" }),
+    await events({ type: "reasoning", delta: "Now summarize the result." }, { type: "token", delta: "Finished" }, { type: "done" }),
+  ]);
+  const result = await runAgentTurn({
+    model,
+    messages: [],
+    input: "inspect it",
+    toolHost: { definitions: () => [], execute: async () => ({ data: "observed" }) },
+    signal: new AbortController().signal,
+    config: fastConfig,
+  });
+  const assistants = result.messages.filter((message) => message.role === "assistant");
+  assert.deepEqual(assistants.map((message) => message.reasoning), ["Inspect the file first.", "Now summarize the result."]);
+});
+
 test("a cancel mid-stream hands back the exchange instead of throwing it away", async () => {
   // Streams one token, then blocks forever on the abort the test fires.
   const controller = new AbortController();

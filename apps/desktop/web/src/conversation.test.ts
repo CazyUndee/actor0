@@ -152,6 +152,27 @@ describe("entriesFromMessages", () => {
     assert.equal(entries[2]!.kind === "assistant" && entries[2]!.text, "done");
     assert.equal(entries[2]!.kind === "assistant" && entries[2]!.partial, true);
   });
+
+  it("restores reasoning and every tool kind, not just reads", () => {
+    const names = ["read", "shell", "edit", "glob", "rg"];
+    const calls = names.map((name, index) => ({
+      id: `call-${index}`,
+      type: "function" as const,
+      function: { name, arguments: "{}" },
+    }));
+    const entries = entriesFromMessages([
+      { role: "user", content: "update the project" },
+      { role: "assistant", content: "", reasoning: "Inspect first, then edit.", tool_calls: calls },
+      ...calls.map((call) => ({ role: "tool" as const, content: `${call.function.name} done`, tool_call_id: call.id, name: call.function.name })),
+      { role: "assistant", content: "Everything is updated." },
+    ]);
+    assert.deepEqual(entries.map((entry) => entry.kind), ["user", "reasoning", ...names.map(() => "tool"), "assistant"]);
+    assert.deepEqual(entries.flatMap((entry) => entry.kind === "tool" ? [entry.name] : []), names);
+    assert.equal(entries[1]!.kind === "reasoning" && entries[1]!.text, "Inspect first, then edit.");
+    const final = entries.at(-1);
+    assert.ok(final?.kind === "assistant");
+    assert.equal(final.text, "Everything is updated.");
+  });
 });
 
 describe("the face", () => {

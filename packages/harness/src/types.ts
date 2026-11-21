@@ -15,6 +15,8 @@ export type ChatMessage = {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /** Model reasoning retained for local transcript rendering, never sent back to a provider. */
+  reasoning?: string;
 };
 
 export type ToolDefinition = {
@@ -177,6 +179,8 @@ export type RoundResult = {
   /** The endpoint's finish/stop reason, when it named one. */
   truncationReason?: string;
   reasoning: ReasoningSummary;
+  /** Raw reasoning for transcript persistence; `reasoning` remains the short audit summary. */
+  reasoningText: string;
   usage: Usage[];
 };
 

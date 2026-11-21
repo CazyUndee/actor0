@@ -107,6 +107,7 @@ export function entriesFromMessages(messages: ChatMessage[]): Entry[] {
       continue;
     }
     if (message.role !== "assistant") continue;
+    if (message.reasoning?.trim()) entries.push({ kind: "reasoning", text: message.reasoning });
     const content = typeof message.content === "string" ? message.content : "";
     const partial = /\n\n\[(interrupted|failed|cut off at the output limit)\]$/.test(content);
     const text = content.replace(/\n\n\[(interrupted|failed|cut off at the output limit)\]$/, "").trim();

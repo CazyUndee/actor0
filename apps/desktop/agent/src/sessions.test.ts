@@ -33,7 +33,7 @@ after(() => {
 
 const messages: ChatMessage[] = [
   { role: "user", content: "what is in the readme?" },
-  { role: "assistant", content: "A short answer." },
+  { role: "assistant", content: "A short answer.", reasoning: "Check the readme before answering." },
 ];
 
 describe("saving and loading", () => {

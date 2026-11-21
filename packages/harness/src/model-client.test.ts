@@ -104,6 +104,22 @@ test("calls one configured endpoint and parses SSE frames", async () => {
   assert.ok(events.some((event) => event.type === "done"));
 });
 
+test("keeps persisted reasoning metadata out of provider requests", async () => {
+  let requestMessages: unknown;
+  const model = new OpenAiCompatibleModel({
+    baseUrl: "https://example.test/v1",
+    model: "m",
+    fetchImpl: async (_input, init) => {
+      requestMessages = JSON.parse(String(init?.body)).messages;
+      return new Response("data: [DONE]\\n\\n", { status: 200 });
+    },
+  });
+  for await (const _event of model.stream([{ role: "assistant", content: "done", reasoning: "local only" }], [], new AbortController().signal)) {
+    // Drain the stream so the request and its assertions cover the real path.
+  }
+  assert.deepEqual(requestMessages, [{ role: "assistant", content: "done" }]);
+});
+
 test("reassembles one SSE frame split across network chunks mid-JSON", async () => {
   // The full frame is `data: {"choices":[{"delta":{"content":"split ok"}}]}\n\n`
   // but it arrives in three network chunks: header + prefix, middle, tail.

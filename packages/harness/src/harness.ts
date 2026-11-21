@@ -316,6 +316,7 @@ async function runModelAttempt(
       truncated,
       truncationReason,
       reasoning,
+      reasoningText,
       usage,
     };
   } catch (error) {
@@ -470,6 +471,7 @@ export async function runAgentTurn(options: {
         role: "assistant",
         content: result.text,
         tool_calls: result.toolCalls,
+        ...(result.reasoningText ? { reasoning: result.reasoningText } : {}),
       });
       let failedThisRound = 0;
       for (let index = 0; index < result.toolCalls.length; index += 1) {
@@ -604,7 +606,11 @@ export async function runAgentTurn(options: {
     // is too long for the cap is too long for it twice.
     if (result.truncated && config.recoverTruncatedAnswer && !recoveredTruncation && result.text.trim()) {
       recoveredTruncation = true;
-      messages.push({ role: "assistant", content: result.text });
+      messages.push({
+        role: "assistant",
+        content: result.text,
+        ...(result.reasoningText ? { reasoning: result.reasoningText } : {}),
+      });
       await emit(options.observer, {
         type: "status",
         status: "Answer cut off at the model\u2019s output limit \u2014 continuing\u2026",
@@ -651,6 +657,7 @@ export async function runAgentTurn(options: {
     messages.push({
       role: "assistant",
       content: result.truncated ? withTruncationMarker(result.text) : result.text,
+      ...(result.reasoningText ? { reasoning: result.reasoningText } : {}),
     });
     return {
       messages,

@@ -142,6 +142,13 @@ export class OpenAiCompatibleModel implements ModelClient {
   }
 
   async *stream(messages: ChatMessage[], tools: ToolDefinition[], signal: AbortSignal): AsyncIterable<ModelEvent> {
+    // Reasoning is local display metadata retained in saved sessions. Providers
+    // must receive only the wire schema, not replay a model's private reasoning.
+    const wireMessages = messages.map((message) => {
+      const wire = { ...message };
+      delete wire.reasoning;
+      return wire;
+    });
     let response: Response;
     try {
       response = await this.fetchImpl(this.endpoint, {
@@ -152,7 +159,7 @@ export class OpenAiCompatibleModel implements ModelClient {
           ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
           ...this.headers,
         },
-        body: JSON.stringify({ model: this.model, messages, stream: true, tools, ...(this.reasoningEffort ? { reasoning_effort: this.reasoningEffort } : {}) }),
+        body: JSON.stringify({ model: this.model, messages: wireMessages, stream: true, tools, ...(this.reasoningEffort ? { reasoning_effort: this.reasoningEffort } : {}) }),
         signal,
       });
     } catch (error) {
