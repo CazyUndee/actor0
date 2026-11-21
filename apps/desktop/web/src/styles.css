@@ -598,3 +598,37 @@ button, input, textarea { font: inherit; color: inherit; }
 .session-item.checkable { cursor: pointer; }
 .session-item.checkable.checked { background: var(--surface2); }
 .session-check { width: 16px; flex: none; color: var(--success); }
+
+/* --- the top bar at a narrow window -------------------------------------
+   Measured on the packaged app: the bar's four labels want ~750px of room
+   (session 215 + provider 83 + model 142 + path 211, plus gaps and padding),
+   a 40px mascot and 24px of padding, so at 700px every one of them was
+   already clipped and by 520px the path showed 164 of its 211px and the
+   provider trigger 10 of its 51. Squeezing harder is not a layout.
+
+   Below 820px the bar becomes two rows instead: the selectors on the first,
+   the working directory on the second with the room it needs. The "session: "
+   prefix is dropped there — the picker is the only conversation control on
+   screen, so the word is the one thing that can go without losing meaning.
+   Nothing is removed: every label stays, and every menu still opens. */
+@media (max-width: 820px) {
+  .top-bar { flex-wrap: wrap; row-gap: 4px; }
+  .selector-group { flex-wrap: wrap; row-gap: 4px; }
+  /* The mascot is `align-self: stretch` with a 1:1 aspect ratio, so a two-row
+     bar made it as tall as the bar was — 62px of a 438px bar spent on the face.
+     Pinned to its own size here, where every pixel is spoken for. */
+  .mascot { align-self: center; width: 40px; height: 40px; flex: none; }
+  .status-meta {
+    flex-basis: 100%;
+    max-width: 100%;
+    /* Its own row: the path reads left to right and is no longer competing for
+       a share of the bar, so the RTL trick that kept the path's tail visible
+       while it ellipsised would only right-align it here. */
+    direction: ltr;
+    text-align: left;
+  }
+  .dd-prefix { display: none; }
+  /* The triggers keep a readable stub rather than collapsing to an ellipsis. */
+  .dropdown-trigger .dropdown-value { max-width: none; }
+  .session-trigger .dropdown-value { max-width: none; }
+}
