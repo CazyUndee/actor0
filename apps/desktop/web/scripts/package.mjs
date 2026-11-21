@@ -128,7 +128,22 @@ function stage() {
   const neuOut = join(distRoot, "actor0-desktop");
   // Refuse to package a dirty staging tree: a previous run may have left
   // live credentials here. If the app is open, close it and build again.
-  rmSync(staging, { recursive: true, force: true });
+  try {
+    rmSync(staging, { recursive: true, force: true });
+  } catch (error) {
+    // Windows refuses the removal while the packaged app is still running — it
+    // is the directory the exe and the agent's Node runtime were launched from.
+    // Say that, instead of surfacing EPERM on a path the user never chose.
+    const code = error instanceof Error && "code" in error ? String(error.code) : "";
+    if (code === "EPERM" || code === "EBUSY") {
+      console.error(
+        `cannot clear ${staging} — the packaged app is still running.\n` +
+          "Close the actor0 window (and its agent) and build again.",
+      );
+      process.exit(1);
+    }
+    throw error;
+  }
   mkdirSync(staging, { recursive: true });
   const exe = join(neuOut, "actor0-desktop-win_x64.exe");
   if (!existsSync(exe)) {

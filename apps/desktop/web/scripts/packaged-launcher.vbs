@@ -119,7 +119,6 @@ Next
 ' detached node child), tree-felled so background shell children die too.
 
 If Not launched Then
-  Dim agentProc
   Dim defaultCwd
   defaultCwd = sh.ExpandEnvironmentStrings("%USERPROFILE%")
   If sh.Environment("Process")("ACTOR0_AGENT_CWD") = "" Then
@@ -131,13 +130,59 @@ If Not launched Then
   ' browser opener. Only the stable path can be passed now (the launcher
   ' starts the agent before the shell exists, so the auth details do not
   ' exist yet — openBridge's retry loop covers the shell's boot delay).
-  Set agentProc = sh.Exec("""" & agentExe & """ """ & agentBundle & """ --port-file """ & portFile & """ --token """ & token & """ --nl-path """ & here & """")
-  WScript.Sleep 400
-  sh.Run """" & appExe & """", 1, True
+  '
+  ' The agent is started detached through cmd, with its output appended to
+  ' agent\agent.log — not through sh.Exec. An Exec pipe is a stdout the host
+  ' has to drain, and a packaged app whose agent dies otherwise has nowhere to
+  ' say why; the log is the only surface a user can be pointed at.
+  q = Chr(34)
+  agentLog = here & "\agent\agent.log"
   On Error Resume Next
-  sh.Run "taskkill /pid " & agentProc.ProcessId & " /T /F", 0, True
+  fso.DeleteFile portFile, True
+  On Error GoTo 0
+  startCmd = "cmd /c " & q & q & agentExe & q & " " & q & agentBundle & q & _
+    " --port-file " & q & portFile & q & " --token " & token & _
+    " --nl-path " & q & here & q & " >> " & q & agentLog & q & " 2>&1" & q
+  sh.Run startCmd, 0, False
+
+  ' Wait for the agent to say where it is listening, by polling the file it
+  ' writes, rather than sleeping for a guess. 400ms was that guess, and it
+  ' produced a window whose only possible message was "disconnected".
+  Dim agentPid, waited
+  agentPid = 0
+  For waited = 1 To 150
+    WScript.Sleep 100
+    agentPid = ReadPortPid(portFile)
+    If agentPid > 0 Then Exit For
+  Next
+  If agentPid = 0 Then
+    MsgBox "actor0: the agent did not start. See " & agentLog, 16, "actor0"
+  End If
+
+  sh.Run q & appExe & q, 1, True
+  On Error Resume Next
+  ' Kill the pid the agent *recorded*, not one held by a scripting object: the
+  ' window is gone, so its agent and the shell children it started are what is
+  ' left to clean up.
+  If agentPid > 0 Then sh.Run "taskkill /pid " & agentPid & " /T /F", 0, True
   On Error GoTo 0
 Else
   ' Second instance: just focus a new window on the existing agent.
   sh.Run """" & appExe & """", 1, False
 End If
+
+' The pid the agent wrote into the port file, or 0 when there is none yet.
+Function ReadPortPid(path)
+  ReadPortPid = 0
+  If Not fso.FileExists(path) Then Exit Function
+  On Error Resume Next
+  Dim txt, stream, re3, m3
+  Set stream = fso.OpenTextFile(path, 1)
+  If Not stream.AtEndOfStream Then txt = stream.ReadAll()
+  stream.Close
+  Set re3 = New RegExp
+  re3.Pattern = """pid"":\s*(\d+)"
+  Set m3 = re3.Execute(txt)
+  If m3.Count > 0 Then ReadPortPid = CLng(m3(0).SubMatches(0))
+  On Error GoTo 0
+End Function
