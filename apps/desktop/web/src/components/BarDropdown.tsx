@@ -15,6 +15,11 @@ export function BarDropdown(props: {
   title?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Which trigger edge the menu hangs from. A menu on the right of the bar has
+   * to open inward, or its fixed width runs off the window.
+   */
+  align?: "start" | "end";
   children: ReactNode;
 }) {
   return (
@@ -31,7 +36,7 @@ export function BarDropdown(props: {
         <span className="dropdown-caret"><Caret open={props.open} /></span>
       </button>
       {props.open ? (
-        <div className="session-menu bar-menu" role="menu">
+        <div className={`session-menu bar-menu ${props.align === "end" ? "align-end" : ""}`} role="menu">
           {props.children}
         </div>
       ) : null}

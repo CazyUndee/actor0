@@ -144,22 +144,31 @@ button, input, textarea { font: inherit; color: inherit; }
   min-width: 0;
   display: flex;
   gap: 10px;
-  align-items: center;
+  /* Stretch, not center: the triggers have to fill the bar's height so their
+     hover/open highlight is the control's whole row, and so a menu's `100%` is
+     the bar's edge rather than the text's baseline. */
+  align-items: stretch;
   padding: 9px 12px;
   border: 2px solid var(--border-strong);
   border-radius: 16px;
   background: rgba(20, 20, 20, 0.62);
 }
-.selector-group { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.selector-group { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 8px; }
 .dropdown-trigger {
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
-  padding: 4px 2px; border: none; background: transparent; cursor: pointer;
+  align-self: stretch; padding: 0 8px;
+  border: none; border-radius: var(--radius-sm); background: transparent; cursor: pointer;
   font-family: var(--font-mono); font-size: 12.5px;
+  transition: background 0.12s ease, color 0.12s ease;
 }
-.dropdown-trigger:hover { opacity: 0.85; }
+.dropdown-trigger:hover { background: var(--surface2); }
+/* The open trigger stays lit while its menu is up, so the menu reads as this
+   control's own panel rather than something that floated in over the bar. */
+.dropdown-trigger[aria-expanded="true"] { background: var(--surface3); color: var(--text); }
+.dropdown-trigger[aria-expanded="true"] .dropdown-caret { color: var(--text); }
 .dropdown-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
-.dropdown-caret { color: var(--muted); }
-.status-meta { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; direction: rtl; }
+.dropdown-caret { color: var(--muted); display: inline-flex; }
+.status-meta { align-self: center; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; direction: rtl; }
 .mascot {
   aspect-ratio: 1 / 1; align-self: stretch; flex: none;
   display: flex; align-items: center; justify-content: center;
@@ -486,7 +495,10 @@ button, input, textarea { font: inherit; color: inherit; }
 
 /* --- conversation picker (SessionDropdown) -------------------------------- */
 
-.session-dd { position: relative; }
+/* The trigger stretches to the bar's full inner height, so the menu's `100%` is
+   the bar's bottom edge and not the text baseline — that is what stops the menu
+   hugging the top bar from inside it. */
+.session-dd { position: relative; align-self: stretch; display: flex; align-items: stretch; min-width: 0; }
 .session-trigger .dropdown-value { max-width: 260px; }
 /* The current conversation shimmer: same sweep as the live status line. */
 .session-trigger.streaming .dropdown-value {
@@ -499,12 +511,24 @@ button, input, textarea { font: inherit; color: inherit; }
   animation: shimmer-sweep 1.6s linear infinite;
 }
 .session-menu {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
-  width: min(420px, 70vw); max-height: min(440px, 60vh); overflow: auto;
-  border: 2px solid var(--border-strong); border-radius: var(--radius-lg);
-  background: rgba(17, 17, 17, 0.99); box-shadow: var(--shadow-lg);
+  /* A dropdown, not a popover: it hangs under the bar with a clear 6px of air
+     (17px = the top bar's 9px padding + 2px border + 6px gap) rather than
+     sitting on top of the bar's own border, shares the trigger's left edge, is
+     at least as wide as its trigger, and wears tighter corners with a shorter
+     drop than the floating panels use. */
+  position: absolute; top: calc(100% + 17px); left: 0; z-index: 60;
+  width: min(420px, 70vw); min-width: 100%; max-height: min(440px, 60vh); overflow: auto;
+  border: 2px solid var(--border-strong); border-radius: 10px;
+  background: #121212; box-shadow: var(--shadow-md);
   padding: 6px;
-  animation: spring-down 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: dropdown-in 0.12s ease-out;
+}
+/* The rightmost trigger (the model picker) opens inward, or a 460px menu runs
+   off the window edge. */
+.session-menu.align-end { left: auto; right: 0; }
+@keyframes dropdown-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 /* The provider and model lists carry full ids, so they want more width than the
    session picker's titles. */
