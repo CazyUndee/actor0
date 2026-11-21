@@ -120,6 +120,11 @@ Next
 
 If Not launched Then
   Dim agentProc
+  Dim defaultCwd
+  defaultCwd = sh.ExpandEnvironmentStrings("%USERPROFILE%")
+  If sh.Environment("Process")("ACTOR0_AGENT_CWD") = "" Then
+    sh.Environment("Process")("ACTOR0_AGENT_CWD") = defaultCwd
+  End If
   ' --nl-path hands the agent the shell's app directory: it reads the shell's
   ' .tmp/auth_info.json from there (port + token) once the shell has written
   ' it, which is what engages the scoped Neutralino bridge and the OAuth

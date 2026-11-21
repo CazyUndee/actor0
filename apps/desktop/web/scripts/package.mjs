@@ -32,7 +32,7 @@
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -126,7 +126,9 @@ function stage() {
   if (neu.status !== 0) process.exit(neu.status ?? 1);
 
   const neuOut = join(distRoot, "actor0-desktop");
-  // Copy our target's artifacts into the staging dir.
+  // Refuse to package a dirty staging tree: a previous run may have left
+  // live credentials here. If the app is open, close it and build again.
+  rmSync(staging, { recursive: true, force: true });
   mkdirSync(staging, { recursive: true });
   const exe = join(neuOut, "actor0-desktop-win_x64.exe");
   if (!existsSync(exe)) {
@@ -140,8 +142,8 @@ function stage() {
   // version into the name gives each build a fresh cache key.
   const exeName = exeNameFor(appVersion, TARGET);
   const stagedExe = join(staging, exeName);
-  execFileSync("cp", [exe, stagedExe], { stdio: "inherit" });
-  execFileSync("cp", [join(neuOut, "resources.neu"), join(staging, "resources.neu")], { stdio: "inherit" });
+  cpSync(exe, stagedExe);
+  cpSync(join(neuOut, "resources.neu"), join(staging, "resources.neu"));
 
   // 1b. Patch the exe's embedded icon: Windows reads the taskbar and Explorer
   // icon from the exe's own resource section, and neu build embeds the
@@ -168,12 +170,23 @@ function stage() {
   console.log("extracting node.exe...");
   const tmpExtract = join(runtimeCache, `extract-${TARGET}`);
   if (!existsSync(join(tmpExtract, "node.exe"))) {
-    execFileSync("rm", ["-rf", tmpExtract]);
+    rmSync(tmpExtract, { recursive: true, force: true });
     mkdirSync(tmpExtract, { recursive: true });
-    execFileSync("unzip", ["-q", zipPath, "-d", tmpExtract], { stdio: "inherit" });
+    extractZip(zipPath, tmpExtract);
   }
   const inner = readdirSync(tmpExtract).find((d) => d.startsWith("node-v") && !d.endsWith(".zip"));
-  execFileSync("cp", [join(tmpExtract, inner, "node.exe"), join(runtimeDir, "node.exe")], { stdio: "inherit" });
+  if (!inner) {
+    // A partially-extracted cache (an interrupted Expand-Archive, or a
+    // transient "device is not ready" from the archiver) leaves a directory
+    // with no dist folder inside it. Say so, rather than feeding `undefined`
+    // to join() and reporting a TypeError that names nothing the user can act
+    // on — the fix is to delete the cache and build again.
+    console.error(
+      `the Node runtime did not extract into ${tmpExtract} — delete that directory and build again`,
+    );
+    process.exit(1);
+  }
+  cpSync(join(tmpExtract, inner, "node.exe"), join(runtimeDir, "node.exe"));
 
   // 3. the update manifest, verbatim-publishable
   writeUpdateManifest();
@@ -195,15 +208,16 @@ function writeUpdateManifest() {
 function zipArtifact() {
   console.log("zipping installable...");
   const zip = join(distRoot, `actor0-desktop-${appVersion}-${TARGET}.zip`);
-  execFileSync("rm", ["-f", zip]);
+  rmSync(zip, { force: true });
   // zip from inside dist so the archive root is the app itself. Prefer the
   // POSIX zip; fall back to PowerShell's Compress-Archive, the one archiver
   // always present on a Windows checkout (a dev box may have neither zip nor
   // tar on PATH).
+  const stagingName = `build-${TARGET}`;
   try {
-    execFileSync("zip", ["-q", "-r", zip, `actor0-desktop-${TARGET}`], { cwd: distRoot, stdio: "inherit" });
+    execFileSync("zip", ["-q", "-r", zip, stagingName], { cwd: distRoot, stdio: "inherit" });
   } catch {
-    const source = join(distRoot, `actor0-desktop-${TARGET}`, "*");
+    const source = join(distRoot, stagingName, "*");
     execFileSync(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-Command", `Compress-Archive -Path '${source}' -DestinationPath '${zip}' -Force`],
@@ -216,6 +230,19 @@ function zipArtifact() {
 
 stage();
 zipArtifact();
+
+/** Cross-platform zip extraction. */
+function extractZip(zipPath, dest) {
+  try {
+    execFileSync("unzip", ["-q", zipPath, "-d", dest], { stdio: "inherit" });
+  } catch {
+    execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${dest}' -Force`],
+      { stdio: "inherit" },
+    );
+  }
+}
 
 /** The exe file name: version-stamped so each build gets a fresh icon-cache key. */
 function exeNameFor(version, target) {

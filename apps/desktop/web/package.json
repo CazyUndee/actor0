@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "agent": "npm --workspace @actor0/desktop-agent run build",
     "shell": "npm run build && npm run agent && npm run assemble && neu run",
-    "package:win": "npm run build && npm run agent && npm run assemble && neu build --platform win --arch x64",
+    "package": "npm run agent && npm run build && node scripts/package.mjs win_x64",
+    "package:win": "npm run agent && npm run build && node scripts/package.mjs win_x64",
     "assemble": "node scripts/assemble.mjs",
     "start": "node scripts/run.mjs"
   },
