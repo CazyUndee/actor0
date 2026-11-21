@@ -131,6 +131,13 @@ If Not launched Then
   ' starts the agent before the shell exists, so the auth details do not
   ' exist yet — openBridge's retry loop covers the shell's boot delay).
   '
+  ' The build number is actor0.cmd's own argument, bare: package.mjs derives
+  ' it from
+  ' the commits since the last version tag and hands it to the agent, which puts
+  ' it in agent.hello so the title bar can read "v0.5.7 (build: 125)". It is a
+  ' build counter, never a version — see the repo's AGENTS.md.
+  buildArg = ""
+  If WScript.Arguments.Count > 0 Then buildArg = WScript.Arguments(0)
   ' The agent is started detached through cmd, with its output appended to
   ' agent\agent.log — not through sh.Exec. An Exec pipe is a stdout the host
   ' has to drain, and a packaged app whose agent dies otherwise has nowhere to
@@ -140,9 +147,11 @@ If Not launched Then
   On Error Resume Next
   fso.DeleteFile portFile, True
   On Error GoTo 0
+  buildFlag = ""
+  If IsNumeric(buildArg) Then buildFlag = " --build " & CLng(buildArg)
   startCmd = "cmd /c " & q & q & agentExe & q & " " & q & agentBundle & q & _
     " --port-file " & q & portFile & q & " --token " & token & _
-    " --nl-path " & q & here & q & " >> " & q & agentLog & q & " 2>&1" & q
+    " --nl-path " & q & here & q & buildFlag & " >> " & q & agentLog & q & " 2>&1" & q
   sh.Run startCmd, 0, False
 
   ' Wait for the agent to say where it is listening, by polling the file it

@@ -635,7 +635,11 @@ export function App() {
   // (not for every status line), so the shimmer keys off those two.
   const shimmering = Boolean(conversation.live.reasoning || conversation.live.readingToolOutput);
 
-  const version = `v${agentInfo?.version ?? "—"}`;
+  // "v0.5.7 (build: 125)" — the version is the user's to order, the build is
+  // the number that moves on every commit, and the pair is the only way to tell
+  // two packages built from the same version apart. Without it, a user cannot
+  // know whether the window they are looking at is the build they were sent.
+  const version = `v${agentInfo?.version ?? "—"}${agentInfo?.build === undefined ? "" : ` (build: ${agentInfo.build})`}`;
   const mascotSrc = mascotDataUri(face);
 
   return (

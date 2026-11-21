@@ -28,7 +28,9 @@
  * fallback can only run where the permission is still granted: dev.
  */
 import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
 export function stageLauncher(stagingDir, webRoot) {
   const vbsSource = join(webRoot, "scripts", "packaged-launcher.vbs");
@@ -36,11 +38,47 @@ export function stageLauncher(stagingDir, webRoot) {
   cpSync(vbsSource, join(stagingDir, "start-actor0.vbs"));
 
   // Double-click entry: the exe's name is fixed by the shim's own script body.
-  const cmd = "@echo off\r\nstart \"\" wscript.exe \"%~dp0start-actor0.vbs\"\r\n";
+  // The CRLF pair is built from a char-code join rather than written as an
+  // escape, so nothing that reformats this file can turn it into real newlines.
+  const cmd = ["@echo off", "start \"\" wscript.exe \"%~dp0start-actor0.vbs\" " + buildArgument(), ""].join(String.fromCharCode(13, 10));
   mkdirSync(join(stagingDir, "agent"), { recursive: true });
   cpSync(join(webRoot, "resources", "agent", "agent.mjs"), join(stagingDir, "agent", "agent.mjs"));
   writeCmd(join(stagingDir, "actor0.cmd"), cmd);
   return { launcher: "start-actor0.vbs", entry: "actor0.cmd" };
+}
+
+/**
+ * The build number, as the launcher's first argument.
+ *
+ * `scripts/build-number.sh` counts the commits since the last version tag, which
+ * is exactly what every commit's `(build: N)` records. It is passed at package
+ * time rather than baked into the UI bundle so that the number a window reports
+ * is the one this package was cut from — the two would disagree the moment a
+ * commit landed without a rebuild. A checkout where the count cannot be taken
+ * (no git, no tags) simply omits it, and the title bar then shows the version
+ * alone.
+ *
+ * The script lives at the repository root, which is `../../../../` from
+ * `apps/desktop/web/scripts` — resolved from this file rather than from the
+ * process's working directory, because `npm run package:win` runs it from the
+ * workspace, not from the root.
+ */
+function buildArgument() {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+  try {
+    const count = Number.parseInt(
+      execFileSync("bash", ["scripts/build-number.sh"], { cwd: root, encoding: "utf8" }).trim(),
+      10,
+    );
+    // Just the number. The launcher adds the flag: it is the process that
+    // owns the agent's argv, and a cmd.exe `start` with the flag already
+    // attached drops the argument it cannot parse as a number — which is
+    // exactly how `--build --build` reached the agent and it fell back to no
+    // build at all.
+    return `${count}`;
+  } catch {
+    return "";
+  }
 }
 
 function writeCmd(target, body) {

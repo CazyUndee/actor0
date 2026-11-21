@@ -240,6 +240,22 @@ describe("configuration over the wire", () => {
     assert.ok(info.shell.length > 0);
   });
 
+  it("carries the build number to the title bar, and omits it when unknown", async () => {
+    // The version is the user's to order; the build moves on every commit. A
+    // window has to be able to say which of the two it is, which is what the
+    // title bar's "vX.Y.Z (build: N)" is for.
+    const withBuild = new Agent({
+      cwd: dir,
+      bridge: nodeBridge(),
+      version: "0.5.7",
+      build: 125,
+    });
+    assert.equal((await withBuild["agent.hello"]()).build, 125);
+
+    const withoutBuild = new Agent({ cwd: dir, bridge: nodeBridge(), version: "0.5.7" });
+    assert.equal((await withoutBuild["agent.hello"]()).build, undefined);
+  });
+
   it("summarises usage from the local log", async () => {
     const agent = new Agent({ cwd: dir, bridge: nodeBridge(), version: "0.0.0", createClient: () => answeringClient("x") });
     const usage = await agent["usage.get"]({ period: "all" });

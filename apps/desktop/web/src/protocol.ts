@@ -19,6 +19,8 @@ import type { HarnessEvent, Usage } from "@actor0/harness";
 /** Everything the UI needs to know about the running agent. */
 export type AgentInfo = {
   version: string;
+  /** The build number of the package, when the agent knows it. */
+  build?: number;
   cwd: string;
   bridge: "neutralino" | "node";
   shell: string;

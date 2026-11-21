@@ -24,6 +24,8 @@ import type { DesktopConfig, NamedProvider } from "./config.js";
 /** What the agent answers for `agent.hello`. */
 export type AgentInfo = {
   version: string;
+  /** The build number of the package, when this build knows it. */
+  build?: number;
   cwd: string;
   /** Which filesystem backend the tools are using: the shell's native API, or node:fs. */
   bridge: "neutralino" | "node";

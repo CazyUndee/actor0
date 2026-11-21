@@ -105,6 +105,8 @@ export type AgentOptions = {
   cwd: string;
   bridge: FileBridge;
   version: string;
+  /** The build number this package was cut at, shown as `vX.Y.Z (build: N)`. */
+  build?: number;
   /** Where notifications go. Set by the server; a test passes a collector. */
   notify?: (notification: AgentNotification) => void;
   /** Injected model client factory, for tests. */
@@ -128,6 +130,7 @@ export class Agent implements AgentMethods {
    *  report where the agent is actually operating. */
   private cwd: string;
   private readonly version: string;
+  private readonly build?: number;
   private notify: (notification: AgentNotification) => void;
   private readonly createClient: (provider: ResolvedProvider) => ModelClient;
   /**
@@ -142,6 +145,7 @@ export class Agent implements AgentMethods {
     this.cwd = options.cwd;
     this.bridge = options.bridge;
     this.version = options.version;
+    this.build = options.build;
     this.config = loadConfig();
     this.notify = options.notify ?? (() => {});
     this.createClient = options.createClient ?? ((provider) => createModel(provider));
@@ -158,6 +162,7 @@ export class Agent implements AgentMethods {
   async "agent.hello"(): Promise<AgentInfo> {
     return {
       version: this.version,
+      ...(this.build === undefined ? {} : { build: this.build }),
       cwd: this.cwd,
       bridge: this.bridge.kind,
       scoped: this.bridge.kind === "neutralino",

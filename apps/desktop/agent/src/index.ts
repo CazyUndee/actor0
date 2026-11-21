@@ -20,11 +20,34 @@ import { setShellOpener } from "./oauth.js";
  *   ACTOR0_AGENT_TOKEN      the shared secret a client must present
  *   ACTOR0_AGENT_PORT_FILE  where to write `{port}` once listening
  *   ACTOR0_AGENT_CWD        the working directory the tools are confined to
+ *   ACTOR0_AGENT_BUILD      the build number this package was cut at
  *   NL_PATH                 the shell's app directory (locates the native API)
  *   NL_TOKEN            the shell's access token, for the native API
  */
 
 const VERSION = "0.5.7";
+
+/**
+ * Which build of the app this is — the number `scripts/build-number.sh` derives
+ * from the commits since the last version tag.
+ *
+ * It rides to the page (and into the title bar) through `agent.hello` rather
+ * than being baked into the bundle, because the UI is rebuilt more often than
+ * it is packaged and a number written into the bundle rots the moment a commit
+ * lands. The launcher passes it: it is the process that knows which checkout
+ * this build came out of.
+ */
+const BUILD = (() => {
+  const env = Number.parseInt(process.env.ACTOR0_AGENT_BUILD?.trim() ?? "", 10);
+  return Number.isFinite(env) ? env : argValueBuild();
+})();
+
+function argValueBuild(): number | undefined {
+  const flag = process.argv.indexOf("--build");
+  if (flag === -1) return undefined;
+  const raw = Number.parseInt(process.argv[flag + 1] ?? "", 10);
+  return Number.isFinite(raw) && raw >= 0 ? raw : undefined;
+}
 
 async function main(): Promise<void> {
   const log = (line: string): void => {
@@ -62,7 +85,7 @@ async function main(): Promise<void> {
   const shellOs = openShellOs();
   setShellOpener(shellOs);
 
-  const agent = new Agent({ cwd, bridge, version: VERSION });
+  const agent = new Agent({ cwd, bridge, version: VERSION, build: BUILD });
 
   const port = Number(process.env.ACTOR0_AGENT_PORT ?? "0") || 0;
   const token = process.env.ACTOR0_AGENT_TOKEN?.trim() || argValue("--token");
