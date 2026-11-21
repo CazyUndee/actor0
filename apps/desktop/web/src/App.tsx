@@ -802,7 +802,6 @@ export function App() {
                 title="Model"
                 open={openMenu === "model"}
                 onOpenChange={(next) => setBarMenu("model", next)}
-                align="end"
               >
                 <div className="session-menu-actions">
                   <button
