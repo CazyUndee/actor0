@@ -402,6 +402,12 @@ button, input, textarea { font: inherit; color: inherit; }
 .overlay {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   padding: 24px; background: rgba(10, 10, 10, 0.55); z-index: 10;
+  /* The same glass the slash palette wears. Both are modals — they take the
+     whole window and stop it responding — so both say so the same way. This
+     overlay had drifted without it, which made a panel and the palette look
+     like two different applications. */
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 .panel {
   width: min(720px, 100%); max-height: min(560px, 100%);
@@ -519,7 +525,14 @@ button, input, textarea { font: inherit; color: inherit; }
   position: absolute; top: calc(100% + 17px); left: 0; z-index: 60;
   width: min(420px, 70vw); min-width: 100%; max-height: min(440px, 60vh); overflow: auto;
   border: 2px solid var(--border-strong); border-radius: 10px;
-  background: #121212; box-shadow: var(--shadow-md);
+  /* Glass, not a card: a dropdown is *not* modal, so it must not dim or blur the
+     transcript the way the palette does — you still have to be able to read
+     what you are switching away from. A light blur under its own translucent
+     panel keeps it in the window's material without taking the page hostage. */
+  background: rgba(18, 18, 18, 0.86);
+  backdrop-filter: blur(10px) saturate(1.05);
+  -webkit-backdrop-filter: blur(10px) saturate(1.05);
+  box-shadow: var(--shadow-md);
   padding: 6px;
   animation: dropdown-in 0.12s ease-out;
 }
