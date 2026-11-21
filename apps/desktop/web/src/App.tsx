@@ -12,6 +12,7 @@ import {
   withUserInput,
   FACE_CHAR,
   type ConversationState,
+  type Entry,
 } from "./conversation";
 import { mascotDataUri, needsCustomControls, platform, setFavicon } from "./mascot";
 import { SPINNER_FRAMES } from "./theme";
@@ -224,7 +225,7 @@ export function App() {
         setSessionTitle(currentSummary?.title);
         setSessions(await client.call("session.list"));
         if (Array.isArray(current.messages) && current.messages.length > 0) {
-          setConversation({ entries: entriesFromMessages(current.messages as never), live: initialConversation().live });
+          showConversation(entriesFromMessages(current.messages as never));
         }
       } catch (error) {
         setNotice({ tone: "error", text: `Could not reach the agent: ${(error as Error).message}` });
@@ -400,7 +401,33 @@ export function App() {
     node.scrollTo({ top: node.scrollHeight });
     // A resize re-lands the bottom badly (the width change re-wraps every
     // entry), so re-pin explicitly rather than trusting the browser.
+    //
+    // And land again on the next frame: a freshly mounted transcript reports a
+    // scrollHeight that grows once fonts and code blocks have been laid out, so
+    // the first scroll lands above the real end. One frame is enough — a second
+    // would fight a reader who scrolled during it.
+    const frame = requestAnimationFrame(() => {
+      const settled = transcriptRef.current;
+      if (settled && pinned) settled.scrollTo({ top: settled.scrollHeight });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [conversation, pinned]);
+
+  /**
+   * Show a transcript in place of the current one, at its end.
+   *
+   * Two things have to happen together, which is why this is one function and
+   * not a `setConversation` per call site: the entries are replaced, *and* the
+   * viewport is re-pinned. `pinned` is deliberately sticky while a turn streams
+   * — a reader who scrolled up must not be dragged back down — but it must not
+   * outlive the conversation it was chosen in. Opening a saved session with the
+   * previous one's pin still off landed on the *top* of the transcript, which
+   * reads as "only the first few tool rows came back".
+   */
+  const showConversation = useCallback((entries: Entry[]) => {
+    setPinned(true);
+    setConversation({ entries, live: initialConversation().live });
+  }, []);
 
   // --- commands ------------------------------------------------------------
 
@@ -432,7 +459,7 @@ export function App() {
           case "session":
             if (argument) {
               const loaded = await client.call("session.load", { id: argument });
-              setConversation((state) => ({ ...state, entries: entriesFromMessages(loaded.messages as never), live: initialConversation().live }));
+              showConversation(entriesFromMessages(loaded.messages as never));
               try {
                 const info = await client.call("agent.hello");
                 setAgentInfo(info);
@@ -453,7 +480,7 @@ export function App() {
             return;
           case "clear":
             await client.call("session.new");
-            setConversation(initialConversation());
+            showConversation([]);
             setNotice({ tone: "info", text: "Started a new conversation." });
             return;
           case "quit":
@@ -686,10 +713,10 @@ export function App() {
                     setSessionId(id);
                     setSessionTitle(sessions.find((s) => s.id === id)?.title);
                     setBlocked(false);
-                    setConversation(initialConversation());
+                    showConversation([]);
                     const current = await clientRef.current?.call("conversation.get");
                     if (current && current.messages.length > 0) {
-                      setConversation({ entries: entriesFromMessages(current.messages as never), live: initialConversation().live });
+                      showConversation(entriesFromMessages(current.messages as never));
                     }
                     try {
                       const info = await clientRef.current?.call("agent.hello");
@@ -701,7 +728,7 @@ export function App() {
                 onNew={(cwd) => {
                   void (async () => {
                     await clientRef.current?.call("session.new", cwd ? { cwd } : {});
-                    setConversation(initialConversation());
+                    showConversation([]);
                     setBlocked(false);
                     void refreshSessions();
                     // The agent moved its working directory, so the header's
@@ -951,12 +978,12 @@ export function App() {
             onClose={() => setMode("chat")}
             onNew={async () => {
               await clientRef.current!.call("session.new");
-              setConversation(initialConversation());
+              showConversation([]);
               setMode("chat");
             }}
             onLoad={async (id) => {
               const loaded = await clientRef.current!.call("session.load", { id });
-              setConversation((state) => ({ ...state, entries: entriesFromMessages(loaded.messages as never), live: initialConversation().live }));
+              showConversation(entriesFromMessages(loaded.messages as never));
               try {
                 const info = await clientRef.current?.call("agent.hello");
                 if (info) setAgentInfo(info);
