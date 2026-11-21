@@ -213,34 +213,42 @@ export function ProviderPanel(props: {
         footer={footer}
       >
         <div className="panel-form">
-          {/* Every phase shows what was chosen before it, so the user can see
-              the state of the add rather than remembering it. */}
           {form.baseUrl.trim() && phase !== "url" ? (
             <div className="form-review">{form.baseUrl.trim()}</div>
           ) : null}
 
           {phase === "url" ? (
-            <label className="form-field">
-              <span className="form-label">base URL</span>
-              <input
-                className="form-input"
-                value={form.baseUrl}
-                placeholder="https://api.example.com/v1"
-                onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    submitUrl();
-                  }
-                }}
-                autoFocus
-                spellCheck={false}
-              />
-            </label>
+            <>
+              <Row marker="→" label="Continue" onClick={submitUrl} />
+              {phaseError ? <div className="form-error">{phaseError}</div> : null}
+              <label className="form-field">
+                <span className="form-label">base URL</span>
+                <input
+                  className="form-input"
+                  value={form.baseUrl}
+                  placeholder="https://api.example.com/v1"
+                  onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      submitUrl();
+                    }
+                  }}
+                  autoFocus
+                  spellCheck={false}
+                />
+              </label>
+            </>
           ) : null}
 
           {phase === "key" ? (
             <>
+              <Row
+                marker="↻"
+                label={submitting ? "listing models…" : "Continue — list models"}
+                onClick={() => !submitting && submitKey()}
+              />
+              {phaseError ? <div className="form-error">{phaseError}</div> : null}
               <label className="form-field">
                 <span className="form-label">api key</span>
                 <input
@@ -269,16 +277,28 @@ export function ProviderPanel(props: {
                   spellCheck={false}
                 />
               </label>
-              <Row
-                marker="↻"
-                label={submitting ? "listing models…" : "Continue — list models"}
-                onClick={() => !submitting && submitKey()}
-              />
             </>
           ) : null}
 
           {phase === "models" ? (
             <>
+              <Row
+                marker="+"
+                label="Add this provider"
+                onClick={() => {
+                  if (!form.model.trim()) {
+                    setPhaseError("Name the model this provider should use.");
+                    return;
+                  }
+                  props.onAdd({
+                    baseUrl: form.baseUrl.trim(),
+                    ...(form.name.trim() ? { name: form.name.trim() } : {}),
+                    model: form.model.trim(),
+                    ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
+                  });
+                  setAdding(false);
+                }}
+              />
               {phaseError ? <div className="form-error">{phaseError}</div> : null}
               {discovered.length > 0 ? (
                 discovered.map((model) => (
@@ -318,34 +338,8 @@ export function ProviderPanel(props: {
                   spellCheck={false}
                 />
               </label>
-              <Row
-                marker="+"
-                label="Add this provider"
-                onClick={() => {
-                  if (!form.model.trim()) {
-                    setPhaseError("Name the model this provider should use.");
-                    return;
-                  }
-                  props.onAdd({
-                    baseUrl: form.baseUrl.trim(),
-                    ...(form.name.trim() ? { name: form.name.trim() } : {}),
-                    model: form.model.trim(),
-                    ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
-                  });
-                  setAdding(false);
-                }}
-              />
             </>
           ) : null}
-
-          {phase === "url" ? (
-            <Row
-              marker="→"
-              label="Continue"
-              onClick={submitUrl}
-            />
-          ) : null}
-          {phaseError && phase !== "models" ? <div className="form-error">{phaseError}</div> : null}
         </div>
       </Panel>
     );
@@ -353,6 +347,12 @@ export function ProviderPanel(props: {
 
   return (
     <Panel title="Providers" onClose={props.onClose} footer="Enter to switch · Esc to close">
+      <Row marker="+" label="Add provider" onClick={() => setAdding(true)} />
+      <Row marker="✓" label="Test the active connection" onClick={() => props.onTest()} />
+      {props.snapshot.providers.map((provider) => (
+        <Row key={`remove-${provider.name}`} marker="✗" label={`Remove ${provider.name}`} onClick={() => props.onRemove(provider.name)} />
+      ))}
+      <Divider />
       {props.kinds.length > 0 ? (
         <>
           {props.kinds.map((kind) => (
@@ -416,13 +416,6 @@ export function ProviderPanel(props: {
           onClick={() => props.onActivate(provider.name)}
         />
       ))}
-      <Divider />
-      <Row marker="+" label="Add provider" onClick={() => setAdding(true)} />
-      <Divider />
-      <Row marker="✓" label="Test the active connection" onClick={() => props.onTest()} />
-      {props.snapshot.providers.map((provider) => (
-        <Row key={`remove-${provider.name}`} marker="✗" label={`Remove ${provider.name}`} onClick={() => props.onRemove(provider.name)} />
-      ))}
       {props.snapshot.providerError ? (
         <>
           <Divider />
@@ -454,6 +447,8 @@ export function ModelPanel(props: {
       footer="Enter to select · Esc to close"
       search={{ value: query, onChange: setQuery, placeholder: "search models" }}
     >
+      <Row marker="↻" label="Fetch models from this endpoint" onClick={props.onDiscover} />
+      <Divider />
       {filtered.map((model) => (
         <Row
           key={model}
@@ -464,8 +459,6 @@ export function ModelPanel(props: {
         />
       ))}
       {filtered.length === 0 ? <Row label="no matches" /> : null}
-      <Divider />
-      <Row marker="↻" label="Fetch models from this endpoint" onClick={props.onDiscover} />
     </Panel>
   );
 }

@@ -378,6 +378,14 @@ export class Agent implements AgentMethods {
     const stored = loadSession(params.id);
     if (!stored) throw new Error(`no session named "${params.id}"`);
     if (this.running) throw new Error("cannot switch sessions while a turn is running");
+    if (stored.cwd) {
+      const resolved = resolve(stored.cwd);
+      const normalized = resolved.replace(/\\/g, "/");
+      const isRoot = normalized === "/" || /^[A-Za-z]:\/?$/.test(normalized);
+      if (!isRoot && existsSync(resolved) && statSync(resolved).isDirectory()) {
+        this.cwd = resolved;
+      }
+    }
     this.messages = stored.messages;
     this.session = { id: stored.id, createdAt: stored.createdAt || new Date().toISOString() };
     this.sessionTitle = stored.title;

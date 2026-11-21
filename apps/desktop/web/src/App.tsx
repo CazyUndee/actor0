@@ -433,6 +433,10 @@ export function App() {
             if (argument) {
               const loaded = await client.call("session.load", { id: argument });
               setConversation((state) => ({ ...state, entries: entriesFromMessages(loaded.messages as never), live: initialConversation().live }));
+              try {
+                const info = await client.call("agent.hello");
+                setAgentInfo(info);
+              } catch { /* the banner already reports a dead agent */ }
               setNotice({ tone: "info", text: `resumed ${argument}` });
               return;
             }
@@ -565,7 +569,7 @@ export function App() {
     return () => { cancelled = true; };
   }, []);
 
-  const providerLabel = snapshot?.provider?.model ?? snapshot?.config.model ?? "no provider";
+  const providerLabel = snapshot?.provider?.model ?? snapshot?.config?.model ?? "no provider";
   const providerName = snapshot?.activeProvider ?? "built-in";
   const providerOptions = snapshot?.providers ?? [];
   const modelOptions = snapshot?.models ?? [];
@@ -687,6 +691,10 @@ export function App() {
                     if (current && current.messages.length > 0) {
                       setConversation({ entries: entriesFromMessages(current.messages as never), live: initialConversation().live });
                     }
+                    try {
+                      const info = await clientRef.current?.call("agent.hello");
+                      if (info) setAgentInfo(info);
+                    } catch { /* the banner already reports a dead agent */ }
                     void refreshSessions();
                   })().catch((error) => setNotice({ tone: "error", text: String((error as Error).message) }));
                 }}
@@ -729,6 +737,19 @@ export function App() {
                 open={openMenu === "provider"}
                 onOpenChange={(next) => setBarMenu("provider", next)}
               >
+                <div className="session-menu-actions">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="session-action"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      setMode("provider");
+                    }}
+                  >
+                    manage providers…
+                  </button>
+                </div>
                 {providerOptions.length === 0 ? <div className="session-empty">no saved providers</div> : null}
                 {providerOptions.map((provider) => (
                   <button
@@ -744,19 +765,6 @@ export function App() {
                     <span className="session-item-title">{provider.name}</span>
                   </button>
                 ))}
-                <div className="session-menu-actions">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="session-action"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      setMode("provider");
-                    }}
-                  >
-                    manage providers…
-                  </button>
-                </div>
               </BarDropdown>
               <BarDropdown
                 label={providerLabel}
@@ -764,6 +772,19 @@ export function App() {
                 open={openMenu === "model"}
                 onOpenChange={(next) => setBarMenu("model", next)}
               >
+                <div className="session-menu-actions">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="session-action"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      setMode("model");
+                    }}
+                  >
+                    search &amp; discover…
+                  </button>
+                </div>
                 {modelOptions.length === 0 ? <div className="session-empty">the endpoint listed no models</div> : null}
                 {modelOptions.map((model) => (
                   <button
@@ -779,19 +800,6 @@ export function App() {
                     <span className="session-item-title">{model}</span>
                   </button>
                 ))}
-                <div className="session-menu-actions">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="session-action"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      setMode("model");
-                    }}
-                  >
-                    search &amp; discover…
-                  </button>
-                </div>
               </BarDropdown>
             </div>
             <span className="status-meta" title={bridgeLabel}>
@@ -909,7 +917,7 @@ export function App() {
         {mode === "model" && snapshot ? (
           <ModelPanel
             models={snapshot.models}
-            current={snapshot.provider?.model ?? snapshot.config.model}
+            current={snapshot.provider?.model ?? snapshot.config?.model ?? ""}
             onClose={() => setMode("chat")}
             onSet={async (model) => {
               setSnapshot(await clientRef.current!.call("model.set", { model }));
@@ -949,6 +957,10 @@ export function App() {
             onLoad={async (id) => {
               const loaded = await clientRef.current!.call("session.load", { id });
               setConversation((state) => ({ ...state, entries: entriesFromMessages(loaded.messages as never), live: initialConversation().live }));
+              try {
+                const info = await clientRef.current?.call("agent.hello");
+                if (info) setAgentInfo(info);
+              } catch { /* the banner already reports a dead agent */ }
               setMode("chat");
               setNotice({ tone: "info", text: `resumed ${id}` });
             }}

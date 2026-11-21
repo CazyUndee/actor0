@@ -41,14 +41,43 @@ const DEV_DEFAULT_PORT = 3000;
 /** Where the shell records the agent's port and token, beside its own auth file. */
 export const AGENT_INFO_FILE = ".tmp/agent.json";
 
-/** A port handed to us directly (by the shell, or by a launcher that started the agent). */
-let discoveredPort: number | undefined;
-let discoveredToken: string | undefined;
+type LauncherEndpoint = { port: number; token?: string };
 
-/** Remember the agent endpoint the moment it becomes known, so discovery does not guess. */
-export function setDiscoveredEndpoint(port: number, token?: string): void {
-  discoveredPort = port;
-  discoveredToken = token;
+/** Keep the port and its credential together across the boot → client handoff. */
+let discovered: LauncherEndpoint | undefined;
+
+export function setDiscoveredEndpoint(endpoint: LauncherEndpoint): void {
+  discovered = endpoint;
+}
+
+function parseLauncherEndpoint(info: unknown): LauncherEndpoint | null {
+  if (!info || typeof info !== "object" || !("port" in info)) return null;
+  const { port } = info;
+  if (typeof port !== "number" || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
+  const token = "token" in info && typeof info.token === "string" ? info.token : undefined;
+  return { port, ...(token ? { token } : {}) };
+}
+
+/** Dev serves its port record next to the page; packaged builds keep it beside the executable. */
+export async function readLauncherEndpoint(): Promise<LauncherEndpoint | null> {
+  try {
+    const res = await fetch("/agent-port.json", { cache: "no-store" });
+    if (res.ok) {
+      const endpoint = parseLauncherEndpoint(await res.json());
+      if (endpoint) return endpoint;
+    }
+  } catch {
+    /* no served record */
+  }
+  if (typeof window !== "undefined" && window.NL_PATH && window.Neutralino?.filesystem) {
+    try {
+      const raw = await window.Neutralino.filesystem.readFile(`${window.NL_PATH}/agent/port.json`);
+      return parseLauncherEndpoint(JSON.parse(raw));
+    } catch {
+      /* no packaged record */
+    }
+  }
+  return null;
 }
 
 /**
@@ -62,8 +91,8 @@ export function setDiscoveredEndpoint(port: number, token?: string): void {
  * really is expected on 3000.
  */
 export async function discoverAgentUrl(): Promise<{ url: string; token?: string }> {
-  if (discoveredPort !== undefined) {
-    return { url: `ws://127.0.0.1:${discoveredPort}`, ...(discoveredToken ? { token: discoveredToken } : {}) };
+  if (discovered) {
+    return { url: `ws://127.0.0.1:${discovered.port}`, ...(discovered.token ? { token: discovered.token } : {}) };
   }
 
   const Neutralino = typeof window !== "undefined" ? window.Neutralino : undefined;
@@ -81,38 +110,9 @@ export async function discoverAgentUrl(): Promise<{ url: string; token?: string 
     }
   }
 
-  // A launcher that starts the agent outside the shell can drop the port as a
-  // static file next to the app — the one path that works when the native API
-  // is unavailable (chrome mode without a connected Neutralino client).
-  try {
-    const res = await fetch("/agent-port.json", { cache: "no-store" });
-    if (res.ok) {
-      const info = (await res.json()) as { port?: number; token?: string };
-      if (typeof info.port === "number" && info.port > 0) {
-        return { url: `ws://127.0.0.1:${info.port}`, ...(info.token ? { token: info.token } : {}) };
-      }
-    }
-  } catch {
-    // Not served by a launcher.
-  }
-
-  // The packaged launcher writes agent/port.json beside the exe (the served
-  // root is the read-only resources bundle), so the page reaches it with the
-  // scoped filesystem API rather than a fetch. It now carries the per-launch
-  // token too (D-1); sessionStorage keeps it across a reload (D-2).
-  const fsapi = Neutralino?.filesystem;
-  if (fsapi && base) {
-    try {
-      const raw = await fsapi.readFile(`${base}/agent/port.json`);
-      const info = JSON.parse(raw) as { port?: number; token?: string };
-      if (typeof info.port === "number" && info.port > 0) {
-        const token = info.token || (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("actor0.agentToken") ?? undefined : undefined);
-        if (token && typeof sessionStorage !== "undefined") sessionStorage.setItem("actor0.agentToken", token);
-        return { url: `ws://127.0.0.1:${info.port}`, ...(token ? { token } : {}) };
-      }
-    } catch {
-      /* no launcher record */
-    }
+  const launched = await readLauncherEndpoint();
+  if (launched) {
+    return { url: `ws://127.0.0.1:${launched.port}`, ...(launched.token ? { token: launched.token } : {}) };
   }
 
   const envPort = typeof import.meta !== "undefined" ? import.meta.env?.VITE_AGENT_PORT : undefined;
@@ -147,14 +147,22 @@ export class AgentClient {
     const url = this.resolvedUrl.token
       ? `${this.resolvedUrl.url}?token=${encodeURIComponent(this.resolvedUrl.token)}`
       : this.resolvedUrl.url;
+    // Report only host and port: query parameters may contain the launch credential.
+    let address = "the local WebSocket endpoint";
+    try {
+      address = new URL(url).host;
+    } catch {
+      /* even a malformed URL should not escape through the error message */
+    }
+    const failure = () => new Error(`could not reach the agent at ${address}`);
     this.setState("connecting");
     await new Promise<void>((resolve, reject) => {
       let socket: WebSocket;
       try {
         socket = new WebSocket(url);
-      } catch (error) {
+      } catch {
         this.setState("closed");
-        reject(error as Error);
+        reject(failure());
         return;
       }
       this.socket = socket;
@@ -165,7 +173,7 @@ export class AgentClient {
       socket.onerror = () => {
         // A socket error is always followed by a close; that is where the
         // reconnect decision belongs, so this only rejects the first attempt.
-        if (this.state === "connecting") reject(new Error(`could not reach the agent at ${url}`));
+        if (this.state === "connecting") reject(failure());
       };
       socket.onclose = () => {
         this.failPending(new Error("the agent connection closed"));

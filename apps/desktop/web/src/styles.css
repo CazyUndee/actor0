@@ -185,10 +185,21 @@ button, input, textarea { font: inherit; color: inherit; }
   padding: 24px 16px 12px;
   display: flex; flex-direction: column; align-items: center; gap: 10px;
 }
-.transcript::-webkit-scrollbar, .panel-body::-webkit-scrollbar { width: 10px; }
-.transcript::-webkit-scrollbar-thumb, .panel-body::-webkit-scrollbar-thumb {
-  background: rgba(125, 124, 121, 0.35); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box;
+/* Custom scrollbars everywhere — no default Chrome/OS chrome. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(125, 124, 121, 0.45) transparent;
 }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(125, 124, 121, 0.35);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(125, 124, 121, 0.55); background-clip: padding-box; }
+*::-webkit-scrollbar-corner { background: transparent; }
 
 .empty-state { margin: auto; text-align: center; color: var(--dim); }
 .empty-title { font-size: 22px; font-weight: 700; color: var(--muted); }
@@ -530,8 +541,8 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .session-item-title.stopped { color: var(--muted); }
 .session-menu-actions {
-  display: flex; gap: 8px; padding: 8px 10px 4px;
-  border-top: 2px solid var(--border-subtle); margin-top: 6px;
+  display: flex; gap: 8px; padding: 4px 10px 8px;
+  border-bottom: 2px solid var(--border-subtle); margin-bottom: 6px;
 }
 .session-action {
   border: 2px solid var(--border-subtle); border-radius: var(--radius-sm);

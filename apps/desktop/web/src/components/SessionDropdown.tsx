@@ -110,6 +110,19 @@ export function SessionDropdown(props: {
         <div className="session-menu" role="menu">
           {mode === "list" ? (
             <>
+              <div className="session-menu-actions">
+                <button type="button" className="session-action" onClick={() => setMode("new")}>
+                  + new conversation
+                </button>
+                <button
+                  type="button"
+                  className="session-action danger"
+                  onClick={() => setMode("delete")}
+                  disabled={props.sessions.length === 0}
+                >
+                  delete conversations…
+                </button>
+              </div>
               {grouped.length === 0 ? <div className="session-empty">no saved conversations</div> : null}
               {grouped.map((group) => (
                 <div key={group.name} className="session-group">
@@ -139,19 +152,6 @@ export function SessionDropdown(props: {
                   })}
                 </div>
               ))}
-              <div className="session-menu-actions">
-                <button type="button" className="session-action" onClick={() => setMode("new")}>
-                  + new conversation
-                </button>
-                <button
-                  type="button"
-                  className="session-action danger"
-                  onClick={() => setMode("delete")}
-                  disabled={props.sessions.length === 0}
-                >
-                  delete conversations…
-                </button>
-              </div>
             </>
           ) : null}
 
@@ -211,6 +211,23 @@ export function SessionDropdown(props: {
 
           {mode === "delete" ? (
             <div className="session-delete">
+              <div className="session-menu-actions">
+                <button
+                  type="button"
+                  className="session-action danger"
+                  disabled={checked.size === 0}
+                  onClick={() => {
+                    props.onDelete([...checked]);
+                    setChecked(new Set());
+                    setMode("list");
+                  }}
+                >
+                  delete {checked.size > 0 ? `${checked.size}` : ""}
+                </button>
+                <button type="button" className="session-action" onClick={() => setMode("list")}>
+                  cancel
+                </button>
+              </div>
               {grouped.flatMap((group) =>
                 group.sessions.map((session) => {
                   const isCurrent = session.id === props.currentId;
@@ -237,23 +254,6 @@ export function SessionDropdown(props: {
                   );
                 }),
               )}
-              <div className="session-menu-actions">
-                <button
-                  type="button"
-                  className="session-action danger"
-                  disabled={checked.size === 0}
-                  onClick={() => {
-                    props.onDelete([...checked]);
-                    setChecked(new Set());
-                    setMode("list");
-                  }}
-                >
-                  delete {checked.size > 0 ? `${checked.size}` : ""}
-                </button>
-                <button type="button" className="session-action" onClick={() => setMode("list")}>
-                  cancel
-                </button>
-              </div>
             </div>
           ) : null}
         </div>
