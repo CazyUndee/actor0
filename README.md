@@ -19,6 +19,14 @@ no host, no key, and no model catalog of its own.
   provider-auth shape.
 - `apps/cli` — a terminal client that consumes the harness, and exists to prove
   the extraction boundary holds. See [apps/cli/README.md](apps/cli/README.md).
+- `apps/desktop/agent` — a headless agent core built on the same harness,
+  reachable over a localhost WebSocket. See
+  [apps/desktop/web/README.md](apps/desktop/web/README.md).
+- `apps/desktop/web` — a React UI served by the Neutralino native shell.
+
+Two hosts share the same session store (`~/.config/actor0` /
+`~/.local/share/actor0`) so a conversation started in the CLI resumes in the
+desktop app, and vice versa.
 
 The public project contains no product provider registry, fallback routing,
 built-in model catalog, proprietary tool implementation, memory/storage
@@ -38,20 +46,21 @@ boundary in [ARCHITECTURE.md](ARCHITECTURE.md) is real.
 
 ## Tools
 
-Eight, and none of them ask. Paths are relative to the working directory and
+Nine, and none of them ask. Paths are relative to the working directory and
 shell commands run there; every path is resolved and refused if it leaves that
 directory.
 
-| Tool    | Effect                                                                   |
-| ------- | ------------------------------------------------------------------------ |
-| `read`  | `offset`/`limit` paging; caps at 2000 lines / 50 kB with a named offset  |
-| `write` | creates parent directories; replaces the whole file                      |
-| `edit`  | one exact string; CRLF and BOM safe; fails on 0 or ambiguous matches     |
-| `shell` | a shell command; output capped to the tail; no default timeout           |
-| `rg`    | ripgrep-backed search; lines or counts, with `include`/`exclude` globs  |
-| `glob`  | a directory listing; does not descend into `node_modules`              |
-| `task`  | runs a sub-turn of tool rounds as its own agent                          |
-| `skill` | runs an LLM skill (frontmatter + body in `.claude/skills/`)             |
+| Tool         | Effect                                                                   |
+| ------------ | ------------------------------------------------------------------------ |
+| `read`       | `offset`/`limit` paging; caps at 2000 lines / 50 kB with a named offset  |
+| `write`      | creates parent directories; replaces the whole file                      |
+| `edit`       | one exact string; CRLF and BOM safe; fails on 0 or ambiguous matches     |
+| `shell`      | a shell command; output capped to the tail; no default timeout           |
+| `rg`         | ripgrep-backed search; lines or counts, with `include`/`exclude` globs  |
+| `glob`       | a directory listing; does not descend into `node_modules`                |
+| `task`       | runs a sub-turn of tool rounds as its own agent                          |
+| `skill`      | runs an LLM skill (frontmatter + body in `.claude/skills/`)             |
+| `web_search` | searches the web and returns results with titles, URLs and snippets    |
 
 There is no approval dialog. What replaces it is containment enforced in code
 rather than promised in a prompt — see [apps/cli/README.md](apps/cli/README.md).
