@@ -231,17 +231,40 @@ function zipArtifact() {
 stage();
 zipArtifact();
 
-/** Cross-platform zip extraction. */
+/**
+ * Cross-platform zip extraction, fastest reliable archiver first.
+ *
+ * `tar` is bsdtar on Windows 10+, and it unpacks a .zip in seconds; `unzip` is
+ * the POSIX default. PowerShell's Expand-Archive is the last resort and it is
+ * a poor one: measured on this checkout it took *minutes* over the 3,000-entry
+ * Node runtime zip and, on one run, left a half-filled directory with no
+ * dist folder inside — which the next build then reported as a missing
+ * runtime. It stays only because a machine may have neither of the others.
+ */
 function extractZip(zipPath, dest) {
-  try {
-    execFileSync("unzip", ["-q", zipPath, "-d", dest], { stdio: "inherit" });
-  } catch {
-    execFileSync(
+  const attempts = [
+    ["tar", ["-xf", zipPath, "-C", dest]],
+    ["unzip", ["-q", zipPath, "-d", dest]],
+    [
       "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${dest}' -Force`],
-      { stdio: "inherit" },
-    );
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${dest}' -Force`,
+      ],
+    ],
+  ];
+  const errors = [];
+  for (const [command, args] of attempts) {
+    try {
+      execFileSync(command, args, { stdio: "inherit" });
+      return;
+    } catch (error) {
+      errors.push(`${command}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+    }
   }
+  throw new Error(`could not unpack ${zipPath}\n  ${errors.join("\n  ")}`);
 }
 
 /** The exe file name: version-stamped so each build gets a fresh icon-cache key. */
