@@ -38,10 +38,14 @@ export function ContextMenu(props: {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
+    // `offsetWidth`/`offsetHeight`, not `getBoundingClientRect`: the menu animates
+    // from `scaleY(0.55)`, and the rect reports the *transformed* box, so a clamp
+    // measured with it puts a 195px menu 88px too low and it hangs off the bottom
+    // edge of the window. The offset box is the untransformed layout size, which
+    // is the size the menu must fit in once the animation lands.
     const margin = 8;
-    const left = Math.max(margin, Math.min(props.x, window.innerWidth - rect.width - margin));
-    const top = Math.max(margin, Math.min(props.y, window.innerHeight - rect.height - margin));
+    const left = Math.max(margin, Math.min(props.x, window.innerWidth - el.offsetWidth - margin));
+    const top = Math.max(margin, Math.min(props.y, window.innerHeight - el.offsetHeight - margin));
     setPlaced({ left, top });
   }, [props.x, props.y, props.actions.length]);
 
