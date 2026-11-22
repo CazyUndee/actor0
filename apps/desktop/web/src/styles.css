@@ -529,7 +529,7 @@ button, input, textarea { font: inherit; color: inherit; }
      two shapes meet with no line between them. No top border and square top
      corners complete it: one silhouette, the bar, with a panel hanging off it.
      9px is the bar's padding-bottom; the border is what gets covered. */
-  position: absolute; top: calc(100% + 9px); left: 0; z-index: 60;
+  position: absolute; top: var(--menu-top, calc(100% + 9px)); left: 0; z-index: 60;
   width: min(420px, 70vw); min-width: 100%; max-height: min(440px, 60vh); overflow: auto;
   border: 2px solid var(--border-strong); border-top: none;
   border-radius: 0 0 10px 10px;
@@ -549,9 +549,9 @@ button, input, textarea { font: inherit; color: inherit; }
   transform-origin: top center;
   animation: dropdown-push 0.26s cubic-bezier(0.22, 0.9, 0.24, 1.06);
 }
-/* The rightmost trigger (the model picker) opens inward, or a 460px menu runs
-   off the window edge. */
-.session-menu.align-end { left: auto; right: 0; }
+/* `align-end` is a hook, not a position: useMenuAnchor measures the side with
+   more room, clamps the panel's width to it, and sets `left` inline. Position
+   left to CSS and it cannot be measured in the same pass it is applied in. */
 /* A fused panel at the bar's left wall would be cut by the bar's 16px
    bottom-left curve, leaving a notch exactly where the two meet. While such a
    panel is open the bar squares that corner, so the union is one continuous
@@ -571,7 +571,7 @@ button, input, textarea { font: inherit; color: inherit; }
 .session-dd::after {
   content: "";
   position: absolute;
-  top: calc(100% + 11px);
+  top: calc(var(--menu-top, 100%) + 2px);
   width: 12px; height: 12px;
   pointer-events: none;
   z-index: 59;
