@@ -517,19 +517,21 @@ button, input, textarea { font: inherit; color: inherit; }
   animation: shimmer-sweep 1.6s linear infinite;
 }
 .session-menu {
-  /* A dropdown, not a popover: it hangs under the bar with a clear 6px of air
-     (17px = the top bar's 9px padding + 2px border + 6px gap) rather than
-     sitting on top of the bar's own border, shares the trigger's left edge, is
-     at least as wide as its trigger, and wears tighter corners with a shorter
-     drop than the floating panels use. */
-  position: absolute; top: calc(100% + 17px); left: 0; z-index: 60;
+  /* Fused with the bar, not parked under it. `top: 100% + 9px` puts the panel's
+     top edge on the bar's *content* bottom — inside the bar's 2px bottom border
+     — so the panel's own background covers that border along its width and the
+     two shapes meet with no line between them. No top border and square top
+     corners complete it: one silhouette, the bar, with a panel hanging off it.
+     9px is the bar's padding-bottom; the border is what gets covered. */
+  position: absolute; top: calc(100% + 9px); left: 0; z-index: 60;
   width: min(420px, 70vw); min-width: 100%; max-height: min(440px, 60vh); overflow: auto;
-  border: 2px solid var(--border-strong); border-radius: 10px;
+  border: 2px solid var(--border-strong); border-top: none;
+  border-radius: 0 0 10px 10px;
   /* Glass, not a card: a dropdown is *not* modal, so it must not dim or blur the
      transcript the way the palette does — you still have to be able to read
      what you are switching away from. A light blur under its own translucent
      panel keeps it in the window's material without taking the page hostage. */
-  background: rgba(18, 18, 18, 0.86);
+  background: rgba(20, 20, 20, 0.9);
   backdrop-filter: blur(10px) saturate(1.05);
   -webkit-backdrop-filter: blur(10px) saturate(1.05);
   box-shadow: var(--shadow-md);
@@ -539,6 +541,11 @@ button, input, textarea { font: inherit; color: inherit; }
 /* The rightmost trigger (the model picker) opens inward, or a 460px menu runs
    off the window edge. */
 .session-menu.align-end { left: auto; right: 0; }
+/* A fused panel at the bar's left wall would be cut by the bar's 16px
+   bottom-left curve, leaving a notch exactly where the two meet. While such a
+   panel is open the bar squares that corner, so the union is one continuous
+   edge. */
+.top-bar:has(.session-menu.flush-left) { border-bottom-left-radius: 0; }
 @keyframes dropdown-in {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }

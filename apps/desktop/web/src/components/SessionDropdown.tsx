@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SessionSummary } from "../protocol";
 import { Caret } from "./Caret";
+import { useMenuAnchor } from "./useMenuAnchor";
 
 /**
  * The conversation picker in the top bar.
@@ -88,12 +89,17 @@ export function SessionDropdown(props: {
       .sort((a, b) => (b.sessions[0]?.updatedAt ?? "").localeCompare(a.sessions[0]?.updatedAt ?? ""));
   }, [props.sessions]);
 
+  // The same placement every bar menu uses (see useMenuAnchor): the leftmost
+  // trigger opens from the bar's left wall, so this panel and the bar share one
+  // vertical line and read as one fused shape rather than a card beside it.
+  const { wrapRef, menuRef, menuClass } = useMenuAnchor(open);
+
   const label = props.title ?? "new conversation";
   const untitled = (session: SessionSummary): string =>
     session.title ?? session.updatedAt.replace(/^(\d{4})-(\d{2})-(\d{2}).*?(\d{2})-(\d{2}).*/, "$1-$2-$2 $4:$5");
 
   return (
-    <div className="session-dd">
+    <div className="session-dd" ref={wrapRef}>
       <button
         type="button"
         className={`dropdown-trigger session-trigger ${props.busy ? "streaming" : ""}`}
@@ -107,7 +113,7 @@ export function SessionDropdown(props: {
       </button>
 
       {open ? (
-        <div className="session-menu" role="menu">
+        <div className={`session-menu ${menuClass}`} role="menu" ref={menuRef}>
           {mode === "list" ? (
             <>
               <div className="session-menu-actions">
