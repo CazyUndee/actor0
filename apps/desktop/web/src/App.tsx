@@ -85,6 +85,29 @@ export function App() {
     if (isMax) await w.unmaximize(); else await w.maximize();
     setMaximized(!isMax);
   }, []);
+
+  // The glyph follows the *window*, not the last click on the button. It used to
+  // be set only inside the toggle handler, so any other way of maximising
+  // (double-click the title bar, the OS menu, a drag to the top edge) left it
+  // showing the wrong icon — a single square while the window was maximised,
+  // and two when it was not, which reads as an inconsistent button rather than
+  // a stale one.
+  useEffect(() => {
+    const w = window.Neutralino?.window;
+    if (!w?.isMaximized) return;
+    const sync = (): void => {
+      void Promise.resolve(w.isMaximized?.())
+        .then((value) => setMaximized(Boolean(value)))
+        .catch(() => undefined);
+    };
+    sync();
+    const timer = window.setInterval(sync, 1_000);
+    window.addEventListener("resize", sync);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("resize", sync);
+    };
+  }, []);
   const closeWindow = useCallback(() => {
     const app = window.Neutralino?.app;
     if (app?.exit) { void app.exit(); return; }
@@ -685,10 +708,20 @@ export function App() {
                     <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
                   </button>
                   <button type="button" className="wc wc-max-win" onClick={() => void toggleMaximizeWindow()} aria-label={maximized ? "Restore" : "Maximize"} title={maximized ? "Restore" : "Maximize"}>
+                    {/* Both states are drawn the same way: two 8px squares with
+                        a 1px stroke, the second offset by 2px. The old pair
+                        mixed a filled path with an outlined rect, so the button
+                        changed weight as well as shape and read as two different
+                        icons rather than one control in two states. */}
                     {maximized ? (
-                      <svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 3v5h5V3H2zm1 1h3v3H3V4zm2-2h5v5H8V3H5V2z" fill="currentColor"/></svg>
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
+                        <rect x="0.5" y="2.5" width="7" height="7" />
+                        <path d="M2.5 2.5V0.5h7v7h-2" />
+                      </svg>
                     ) : (
-                      <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor"/></svg>
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
+                        <rect x="1.5" y="1.5" width="7" height="7" />
+                      </svg>
                     )}
                   </button>
                   <button type="button" className="wc wc-close-win" onClick={closeWindow} aria-label="Close" title="Close">

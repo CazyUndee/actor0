@@ -28,10 +28,10 @@ export function BarDropdown(props: {
   onOpenChange: (open: boolean) => void;
   children: ReactNode;
 }) {
-  const { wrapRef, menuRef, menuClass } = useMenuAnchor(props.open);
+  const { wrapRef, menuRef, menuClass, wrapClass } = useMenuAnchor(props.open);
 
   return (
-    <div className="session-dd" ref={wrapRef}>
+    <div className={`session-dd ${wrapClass}`} ref={wrapRef}>
       <button
         type="button"
         className="dropdown-trigger"

@@ -92,14 +92,14 @@ export function SessionDropdown(props: {
   // The same placement every bar menu uses (see useMenuAnchor): the leftmost
   // trigger opens from the bar's left wall, so this panel and the bar share one
   // vertical line and read as one fused shape rather than a card beside it.
-  const { wrapRef, menuRef, menuClass } = useMenuAnchor(open);
+  const { wrapRef, menuRef, menuClass, wrapClass } = useMenuAnchor(open);
 
   const label = props.title ?? "new conversation";
   const untitled = (session: SessionSummary): string =>
     session.title ?? session.updatedAt.replace(/^(\d{4})-(\d{2})-(\d{2}).*?(\d{2})-(\d{2}).*/, "$1-$2-$2 $4:$5");
 
   return (
-    <div className="session-dd" ref={wrapRef}>
+    <div className={`session-dd ${wrapClass}`} ref={wrapRef}>
       <button
         type="button"
         className={`dropdown-trigger session-trigger ${props.busy ? "streaming" : ""}`}

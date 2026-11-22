@@ -26,16 +26,17 @@ export function useMenuAnchor(open: boolean): {
   wrapRef: React.RefObject<HTMLDivElement | null>;
   menuRef: React.RefObject<HTMLDivElement | null>;
   menuClass: string;
+  wrapClass: string;
 } {
   const wrapRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [alignEnd, setAlignEnd] = useState(false);
-  const [flushLeft, setFlushLeft] = useState(false);
+  const [origin, setOrigin] = useState<"wall" | "caret" | "trigger">("trigger");
 
   useLayoutEffect(() => {
     if (!open) {
       setAlignEnd(false);
-      setFlushLeft(false);
+      setOrigin("trigger");
       return;
     }
     const wrap = wrapRef.current;
@@ -55,19 +56,50 @@ export function useMenuAnchor(open: boolean): {
     const room = useEnd ? roomLeft : roomRight;
     if (natural > room) menu.style.maxWidth = `${Math.max(240, room)}px`;
 
+    // A menu opens from the caret of the control to its left, not from its own
+    // edge: the caret is where the previous control visibly ends, so the panel
+    // reads as continuing the row rather than starting under this trigger. The
+    // leftmost has no caret before it, so it opens from the bar's own left wall.
     const bar = wrap.closest(".top-bar")?.getBoundingClientRect();
-    const atLeftWall = Boolean(bar) && !useEnd && trigger.left - bar!.left <= 20;
-    setFlushLeft(atLeftWall);
-    if (atLeftWall) {
-      menu.style.left = `${bar!.left - trigger.left}px`;
-      const barRoom = bar!.width - 4;
+    const previousCaret = wrap.previousElementSibling?.querySelector(".dropdown-caret");
+    const caret = previousCaret?.getBoundingClientRect();
+    const caretLeft = caret && caret.width > 0 ? caret.left : undefined;
+    const left = caretLeft ?? bar?.left;
+    const chained = left !== undefined && !useEnd;
+    setOrigin(!chained ? "trigger" : caretLeft !== undefined ? "caret" : "wall");
+    wrap.style.setProperty("--menu-left", `${(left ?? trigger.left) - trigger.left}px`);
+    if (chained) {
+      menu.style.left = `${left! - trigger.left}px`;
+      // It may not run past the bar's right wall either.
+      const barRoom = (bar?.right ?? window.innerWidth) - left! - 4;
+      if (natural > barRoom) menu.style.maxWidth = `${Math.max(240, barRoom)}px`;
+    } else if (bar) {
+      const barRoom = bar.width - 4;
       if (natural > barRoom) menu.style.maxWidth = `${barRoom}px`;
     }
+    wrap.style.setProperty("--menu-width", `${menu.offsetWidth}px`);
   }, [open]);
+
+  const state = [
+    "menu-open",
+    origin === "wall" ? "flush-left" : "",
+    origin === "caret" ? "chained" : "",
+    alignEnd ? "align-end" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return {
     wrapRef,
     menuRef,
-    menuClass: [alignEnd ? "align-end" : "", flushLeft ? "flush-left" : ""].filter(Boolean).join(" "),
+    wrapClass: open ? state : "",
+    menuClass: [
+      "fused",
+      alignEnd ? "align-end" : "",
+      origin === "wall" ? "flush-left" : "",
+      origin === "caret" ? "chained" : "",
+    ]
+      .filter(Boolean)
+      .join(" "),
   };
 }
