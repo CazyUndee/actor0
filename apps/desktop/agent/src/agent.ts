@@ -437,6 +437,36 @@ export class Agent implements AgentMethods {
     return { ok: true };
   }
 
+  /**
+   * Fork the conversation at `fromIndex`, keeping the messages before it.
+   *
+   * A branch is a *copy into a new session id*, never a truncation of the old
+   * one: the original file keeps every message, so trying a different direction
+   * from the same point costs nothing and losing the first attempt impossible.
+   * The cut is repaired before it is adopted, because slicing a transcript at an
+   * arbitrary index strands the tool results after an assistant message's calls
+   * and the provider refuses that shape on every later turn.
+   */
+  async "session.branch"(params: { fromIndex: number }): Promise<{ id: string; messages: unknown[] }> {
+    if (this.running) throw new Error("cannot branch while a turn is running");
+    const index = Math.floor(Number(params?.fromIndex));
+    if (!Number.isFinite(index) || index < 1 || index > this.messages.length) {
+      throw new Error(`cannot branch at message ${params?.fromIndex}: the conversation has ${this.messages.length}`);
+    }
+    const kept = repairHistory(this.messages.slice(0, index));
+    if (kept.length === 0) throw new Error("a branch needs at least one message before it");
+    this.messages = kept;
+    this.session = { id: newSessionId(), createdAt: new Date().toISOString() };
+    // A fork of a titled conversation keeps the name with a marker, so the list
+    // shows *which* conversation it came from. Repeated forks do not stack the
+    // marker: "X (branch) (branch)" names nothing.
+    const source = this.sessionTitle?.replace(/( \(branch\))+$/, "").trim();
+    this.sessionTitle = source ? `${source} (branch)` : undefined;
+    this.persist();
+    this.changed();
+    return { id: this.session.id, messages: kept };
+  }
+
   async "session.delete"(params: { ids: string[] }): Promise<{ deleted: string[]; missing: string[] }> {
     if (!Array.isArray(params?.ids ?? undefined)) throw new Error("ids: expected a list of session ids");
     const deleted: string[] = [];

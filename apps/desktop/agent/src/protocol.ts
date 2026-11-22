@@ -136,6 +136,11 @@ export type AgentMethods = {
   "session.list": (params: undefined) => Promise<SessionSummaryWire[]>;
   "session.load": (params: { id: string }) => Promise<{ messages: unknown[]; model: string }>;
   "session.new": (params: { cwd?: string }) => Promise<{ ok: true }>;
+  /**
+   * Fork the current conversation at a message index, keeping everything before
+   * it. The original stays on disk untouched, so a branch is never destructive.
+   */
+  "session.branch": (params: { fromIndex: number }) => Promise<{ id: string; messages: unknown[] }>;
   "session.delete": (params: { ids: string[] }) => Promise<{ deleted: string[]; missing: string[] }>;
   /** The current transcript, so a UI that (re)connects can rebuild its view. */
   "conversation.get": (params: undefined) => Promise<{ sessionId: string; messages: unknown[] }>;

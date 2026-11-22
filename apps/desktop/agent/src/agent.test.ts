@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import type { ChatMessage, HarnessEvent, ModelClient, ModelEvent } from "@actor0/harness";
 import { Agent } from "./agent.js";
 import { saveConfig } from "./config.js";
+import { loadSession, saveSession } from "./sessions.js";
 import { nodeBridge } from "./native/bridge.js";
 import { listSessions } from "./sessions.js";
 import type { AgentNotification } from "./protocol.js";
@@ -327,5 +328,76 @@ describe("a conversation in another directory", () => {
     } finally {
       rmSync(other, { recursive: true, force: true });
     }
+  });
+});
+
+describe("branching a conversation", () => {
+  it("forks at a message index and leaves the original intact", async () => {
+    // A branch is a copy into a new session, never a truncation: the whole point
+    // is that trying another direction from the same point costs nothing.
+    const agent = new Agent({ cwd: dir, bridge: nodeBridge(), version: "0.0.0", createClient: () => answeringClient("x") });
+    await agent["session.new"]({});
+    const original = (await agent["conversation.get"]()).sessionId;
+    const messages = [
+      { role: "user" as const, content: "first question" },
+      { role: "assistant" as const, content: "first answer" },
+      { role: "user" as const, content: "second question" },
+      { role: "assistant" as const, content: "second answer" },
+    ];
+    saveSession({
+      id: original,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      model: "m",
+      messages,
+    });
+    await agent["session.load"]({ id: original });
+
+    const forked = await agent["session.branch"]({ fromIndex: 2 });
+    assert.notEqual(forked.id, original, "a branch is a new session id");
+    assert.deepEqual(forked.messages, messages.slice(0, 2), "it keeps exactly the messages before the cut");
+    assert.equal((await agent["conversation.get"]()).messages.length, 2);
+
+    const untouched = loadSession(original);
+    assert.deepEqual(untouched?.messages, messages, "the original keeps every message");
+    const branch = loadSession(forked.id);
+    assert.deepEqual(branch?.messages, messages.slice(0, 2), "and the branch is on disk");
+    assert.equal(branch?.title, undefined, "an untitled conversation forks untitled");
+  });
+
+  it("refuses a cut that would strand a tool result", async () => {
+    const agent = new Agent({ cwd: dir, bridge: nodeBridge(), version: "0.0.0", createClient: () => answeringClient("x") });
+    await agent["session.new"]({});
+    await assert.rejects(agent["session.branch"]({ fromIndex: 0 }), /cannot branch at message 0/);
+    await assert.rejects(agent["session.branch"]({ fromIndex: 99 }), /the conversation has/);
+  });
+});
+
+describe("naming a branch", () => {
+  it("keeps the source name with a marker, and never stacks markers", async () => {
+    const agent = new Agent({ cwd: dir, bridge: nodeBridge(), version: "0.0.0", createClient: () => answeringClient("x") });
+    await agent["session.new"]({});
+    const id = (await agent["conversation.get"]()).sessionId;
+    saveSession({
+      id,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      model: "m",
+      title: "original",
+      messages: [
+        { role: "user" as const, content: "a" },
+        { role: "assistant" as const, content: "b" },
+        { role: "user" as const, content: "c" },
+      ],
+    });
+    await agent["session.load"]({ id });
+
+    const second = await agent["session.branch"]({ fromIndex: 2 });
+    assert.equal(loadSession(second.id)?.title, "original (branch)");
+    // A fork of a fork keeps the same name: "original (branch) (branch)" would
+    // name a lineage nobody is following.
+    const third = await agent["session.branch"]({ fromIndex: 1 });
+    assert.equal(loadSession(third.id)?.title, "original (branch)");
+    assert.equal(loadSession(id)?.title, "original", "the source keeps its own name");
   });
 });

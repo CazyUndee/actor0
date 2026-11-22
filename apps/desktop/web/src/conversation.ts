@@ -14,11 +14,11 @@ import type { ChatMessage, HarnessEvent, ToolCall, ToolResult, Usage } from "@ac
  */
 
 export type Entry =
-  | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string; partial: boolean }
-  | { kind: "reasoning"; text: string; durationSeconds?: number }
-  | { kind: "tool"; name: string; target: string; status: "ok" | "error"; output: ToolResult<unknown> }
-  | { kind: "plan"; title: string; plan: string }
+  | { kind: "user"; text: string; messageIndex?: number }
+  | { kind: "assistant"; text: string; partial: boolean; messageIndex?: number }
+  | { kind: "reasoning"; text: string; durationSeconds?: number; messageIndex?: number }
+  | { kind: "tool"; name: string; target: string; status: "ok" | "error"; output: ToolResult<unknown>; messageIndex?: number }
+  | { kind: "plan"; title: string; plan: string; messageIndex?: number }
   | { kind: "help" };
 
 export type Live = {
@@ -101,17 +101,25 @@ export function entriesFromMessages(messages: ChatMessage[]): Entry[] {
   for (const message of messages) {
     if (message.role === "tool" && message.tool_call_id) results.set(message.tool_call_id, message);
   }
-  for (const message of messages) {
+  // `messageIndex` rides along so a resumed transcript can be forked: "branch
+  // from this message" is a question about the stored array, and an entry has no
+  // other way to say where in that array it came from. Entries built during a
+  // live turn carry none, which is honest: they are not in the saved
+  // conversation yet.
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]!;
     if (message.role === "user") {
-      if (typeof message.content === "string" && message.content.trim()) entries.push({ kind: "user", text: message.content });
+      if (typeof message.content === "string" && message.content.trim()) {
+        entries.push({ kind: "user", text: message.content, messageIndex: index });
+      }
       continue;
     }
     if (message.role !== "assistant") continue;
-    if (message.reasoning?.trim()) entries.push({ kind: "reasoning", text: message.reasoning });
+    if (message.reasoning?.trim()) entries.push({ kind: "reasoning", text: message.reasoning, messageIndex: index });
     const content = typeof message.content === "string" ? message.content : "";
     const partial = /\n\n\[(interrupted|failed|cut off at the output limit)\]$/.test(content);
     const text = content.replace(/\n\n\[(interrupted|failed|cut off at the output limit)\]$/, "").trim();
-    if (text) entries.push({ kind: "assistant", text, partial });
+    if (text) entries.push({ kind: "assistant", text, partial, messageIndex: index });
     for (const call of message.tool_calls ?? []) {
       const result = results.get(call.id);
       const resultText = result?.content ?? "";
@@ -122,6 +130,7 @@ export function entriesFromMessages(messages: ChatMessage[]): Entry[] {
         target: describeCall(call),
         status: isError ? "error" : "ok",
         output: { data: resultText, text: resultText, isError },
+        messageIndex: index,
       });
     }
   }

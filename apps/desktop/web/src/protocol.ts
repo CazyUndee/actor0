@@ -137,6 +137,7 @@ export type AgentCalls = {
   "session.list": () => Promise<SessionSummary[]>;
   "session.load": (params: { id: string }) => Promise<{ messages: unknown[]; model: string }>;
   "session.new": (params: { cwd?: string }) => Promise<{ ok: true }>;
+  "session.branch": (params: { fromIndex: number }) => Promise<{ id: string; messages: unknown[] }>;
   "session.delete": (params: { ids: string[] }) => Promise<{ deleted: string[]; missing: string[] }>;
   "conversation.get": () => Promise<{ sessionId: string; messages: unknown[] }>;
   "usage.get": (params: { period: "day" | "week" | "month" | "all" }) => Promise<UsageSnapshot>;

@@ -30,6 +30,7 @@ import { BarDropdown } from "./components/BarDropdown";
 import { Composer } from "./components/Composer";
 import { SessionDropdown } from "./components/SessionDropdown";
 import { EntryView } from "./components/Entry";
+import { ContextMenu, type MenuAction } from "./components/ContextMenu";
 import { McpPanel, ModelPanel, NoticeBar, ProviderPanel, SessionPanel, ThinkingPanel, UsagePanel } from "./components/Panels";
 
 /**
@@ -68,6 +69,16 @@ export function App() {
 
   const clientRef = useRef<AgentClient | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  /**
+   * The right-click menu: where it was opened, and what was under the pointer.
+   * `messageIndex` is present only when the entry came out of the stored
+   * transcript, which is exactly what "branch from here" needs (see
+   * entriesFromMessages).
+   */
+  const [contextMenu, setContextMenu] = useState<
+    | { x: number; y: number; entry?: { messageIndex?: number; kind: string; text?: string } }
+    | undefined
+  >(undefined);
   /** Live drag state for the frameless-window title bar (saved between events). */
   const resizing = useRef<ResizeState | undefined>(undefined);
   const reasoningStartedAtRef = useRef<number | null>(null);
@@ -662,12 +673,114 @@ export function App() {
   // the number that moves on every commit, and the pair is the only way to tell
   // two packages built from the same version apart. Without it, a user cannot
   // know whether the window they are looking at is the build they were sent.
+  /**
+   * The right-click menu's contents. What it offers depends on what was
+   * right-clicked, because a menu that offers "copy this message" over empty
+   * space is a menu that lies about its subject.
+   */
+  const contextActions = useMemo((): MenuAction[] => {
+    const client = clientRef.current;
+    const entry = contextMenu?.entry;
+    const index = entry?.messageIndex;
+    const actions: MenuAction[] = [];
+
+    if (entry?.text) {
+      actions.push({
+        label: "copy message",
+        onSelect: () => void navigator.clipboard.writeText(entry.text ?? "").catch(() => undefined),
+      });
+    }
+    if (entry) {
+      // Branching at the first message keeps nothing, which is a new conversation
+      // wearing a different name; and an entry with no index is a message that is
+      // not in the saved transcript yet, so there is nothing to cut.
+      const nothingBefore = index !== undefined && index < 1;
+      actions.push({
+        label: "branch from here",
+        hint:
+          index === undefined
+            ? "only for a reopened conversation"
+            : nothingBefore
+              ? "nothing before this message"
+              : `keeps the ${index} message${index === 1 ? "" : "s"} before this one`,
+        disabled: index === undefined || nothingBefore || busy,
+        onSelect: () => {
+          if (index === undefined || !client) return;
+          void (async () => {
+            try {
+              const forked = await client.call("session.branch", { fromIndex: index });
+              setConversation({ entries: entriesFromMessages(forked.messages as never), live: initialConversation().live });
+              setPinned(true);
+              setSessionId(forked.id);
+              setSessionTitle(undefined);
+              setNotice({ tone: "info", text: `branched: ${forked.messages.length} messages kept` });
+              void refreshSessions();
+              // The fork is a different conversation with the same directory; the
+              // header has to read the agent again rather than trust the old view.
+              try {
+                const info = await client.call("agent.hello");
+                setAgentInfo(info);
+              } catch {
+                /* the banner already reports a dead agent */
+              }
+            } catch (error) {
+              setNotice({ tone: "error", text: (error as Error).message });
+            }
+          })();
+        },
+      });
+    }
+    actions.push({
+      label: "copy whole transcript",
+      hint: `${conversation.entries.length} entries`,
+      separatorBefore: actions.length > 0,
+      onSelect: () => {
+        const text = conversation.entries
+          .map((item) => (item.kind === "user" || item.kind === "assistant" ? item.text : ""))
+          .filter(Boolean)
+          .join("\n\n");
+        void navigator.clipboard.writeText(text).catch(() => undefined);
+      },
+    });
+    actions.push({
+      label: "new conversation",
+      onSelect: () => void runCommand("clear"),
+      disabled: busy,
+      separatorBefore: true,
+    });
+    actions.push({ label: "conversations…", onSelect: () => setMode("session") });
+    actions.push({ label: "providers…", onSelect: () => setMode("provider") });
+    actions.push({ label: "models…", onSelect: () => setMode("model") });
+    return actions;
+  }, [contextMenu, conversation.entries, busy, runCommand]);
+
+  /** A right-click anywhere in the app opens our menu instead of the WebView's. */
+  const onContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const target = (event.target as HTMLElement).closest<HTMLElement>("[data-entry-index]");
+    const index = target ? Number.parseInt(target.dataset.entryIndex ?? "", 10) : Number.NaN;
+    const found = Number.isFinite(index) ? conversation.entries[index] : undefined;
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      ...(found
+        ? {
+            entry: {
+              ...("messageIndex" in found && found.messageIndex !== undefined ? { messageIndex: found.messageIndex } : {}),
+              kind: found.kind,
+              ...("text" in found && typeof found.text === "string" ? { text: found.text } : {}),
+            },
+          }
+        : {}),
+    });
+  }, [conversation.entries]);
+
   const version = `v${agentInfo?.version ?? "—"}${agentInfo?.build === undefined ? "" : ` (build: ${agentInfo.build})`}`;
   const mascotSrc = mascotDataUri(face);
 
   return (
     <div className="app">
-      <div className="shell">
+      <div className="shell" onContextMenu={onContextMenu}>
         {showWindowControls ? (
           <div className="resize-edges" aria-hidden="true">
             <span className="resize-edge resize-n" data-resize-edge="n" />
@@ -903,7 +1016,9 @@ export function App() {
             </div>
           ) : null}
           {conversation.entries.map((entry, index) => (
-            <EntryView entry={entry} key={`${entry.kind}-${index}`} />
+            <div className="entry-slot" data-entry-index={index} key={`${entry.kind}-${index}`}>
+              <EntryView entry={entry} />
+            </div>
           ))}
           {busy ? (
             <div className="live">
@@ -1044,6 +1159,14 @@ export function App() {
         {mode === "mcp" && mcp ? <McpPanel status={mcp} onClose={() => setMode("chat")} /> : null}
 
       </div>
+      {contextMenu ? (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          actions={contextActions}
+          onClose={() => setContextMenu(undefined)}
+        />
+      ) : null}
     </div>
   );
 }
