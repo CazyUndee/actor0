@@ -744,9 +744,13 @@ export function App() {
     return "working…";
   }, [conversation.live]);
 
-  // The TUI shimmers the label exactly when the model is thinking or reading
-  // (not for every status line), so the shimmer keys off those two.
-  const shimmering = Boolean(conversation.live.reasoning || conversation.live.readingToolOutput);
+  // The label moves for as long as the turn is live.
+  //
+  // It used to shimmer only while reasoning or while a tool result was being
+  // read, because a braille spinner sitting beside it carried the rest of the
+  // motion. With the spinner gone, the first seconds of a turn had nothing
+  // moving at all, which reads as a hung app rather than a working one.
+  const shimmering = busy;
 
   // "v0.5.7 (build: 125)" — the version is the user's to order, the build is
   // the number that moves on every commit, and the pair is the only way to tell

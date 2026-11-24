@@ -325,6 +325,23 @@ describe("rendering the thinking block", () => {
     assert.doesNotMatch(open, /reasoning-body[^>]*border/, "and it has no border of its own");
   });
 
+  it("does not shut the reasoning the moment the model stops", () => {
+    // Reasoning streams as one component and lands in the transcript as
+    // another, with the same text. A block that opened while it was arriving
+    // used to snap shut at exactly that swap, under the reader's eyes, because
+    // the stored block's own default is collapsed.
+    const text = "weighed it up carefully before answering";
+    const live = markup(<ReasoningEntry text={text} live />);
+    assert.match(live, /reasoning-body/, "it opens while it is arriving");
+    const stored = markup(<EntryView entry={{ kind: "reasoning", text, messageIndex: 3 } as Entry} />);
+    assert.match(stored, /reasoning-body/, "and it is still open once it is history");
+
+    // A block nobody watched is a different case: it starts shut, which is the
+    // whole reason the transcript is readable when you come back to it.
+    const cold = markup(<EntryView entry={{ kind: "reasoning", text: "thought before you arrived", messageIndex: 4 } as Entry} />);
+    assert.doesNotMatch(cold, /reasoning-body/, "reasoning you never saw live starts collapsed");
+  });
+
   it("renders every reasoning entry in a stored transcript without one body open", () => {
     const entries: Entry[] = [
       { kind: "user", text: "go" },

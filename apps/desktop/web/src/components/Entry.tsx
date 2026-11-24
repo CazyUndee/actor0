@@ -87,15 +87,12 @@ export function EntryView({ entry }: { entry: Entry }) {
       );
     }
     case "reasoning":
-      // History opens collapsed (you were not watching it arrive); anything
-      // without a stored index was built during this session.
+      // Whether it opens is a question about you, not about the entry: history
+      // opens collapsed, and a block that streamed while you were watching
+      // keeps the state you were already looking at (see `watchedLive`).
       return (
         <div className="entry reasoning">
-          <ReasoningEntry
-            text={entry.text}
-            durationSeconds={entry.durationSeconds}
-            initialOpen={entry.messageIndex === undefined}
-          />
+          <ReasoningEntry text={entry.text} durationSeconds={entry.durationSeconds} />
         </div>
       );
     case "tool":
@@ -151,6 +148,28 @@ export function EntryView({ entry }: { entry: Entry }) {
  * separates the header from the body but the surface itself: two bordered
  * halves attached to each other read as two blocks, which is not what this is.
  */
+/**
+ * Reasoning that was on screen while it streamed, by text.
+ *
+ * When the model stops reasoning, the live block is replaced by the stored
+ * entry: React unmounts one component and mounts another with the same text.
+ * A stored block opens collapsed, which is right for a conversation you are
+ * coming back to — but at that moment you are already reading it, and it shut
+ * under your eyes the instant the model finished. So a text that streamed
+ * while you were watching is remembered, and its stored block opens.
+ *
+ * Bounded on purpose: this only has to survive the moment of the swap, so the
+ * last handful of texts is the whole requirement.
+ */
+const watchedLive: string[] = [];
+const watchedKey = (text: string): string => text.trim().slice(0, 160);
+
+function rememberWatched(text: string): void {
+  const key = watchedKey(text);
+  if (!watchedLive.includes(key)) watchedLive.push(key);
+  if (watchedLive.length > 24) watchedLive.splice(0, watchedLive.length - 24);
+}
+
 export function ReasoningEntry(props: {
   text: string;
   durationSeconds?: number;
@@ -159,7 +178,15 @@ export function ReasoningEntry(props: {
   /** Persisted history opens collapsed; a block that just streamed opens. */
   initialOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(props.initialOpen ?? Boolean(props.live));
+  const [open, setOpen] = useState(() => {
+    // Runs during the first render of this instance, so the live block
+    // registers its text before the stored one replaces it.
+    if (props.live) {
+      rememberWatched(props.text);
+      return true;
+    }
+    return props.initialOpen ?? watchedLive.includes(watchedKey(props.text));
+  });
   /**
    * A manual close is a decision, not a state. The auto-collapse below may put
    * a block away, but it may never overrule someone who deliberately closed it.
@@ -199,10 +226,13 @@ export function ReasoningEntry(props: {
   }, [props.live]);
 
   // Opening starts at the top of the reasoning. It is a window onto it, not a
-  // log that follows the end.
+  // log that follows the end. The one exception is reasoning that is still
+  // arriving: there the newest line is the whole point, so it follows.
   useEffect(() => {
-    if (open && bodyRef.current) bodyRef.current.scrollTop = 0;
-  }, [open]);
+    const body = bodyRef.current;
+    if (!open || !body) return;
+    body.scrollTop = props.live ? body.scrollHeight : 0;
+  }, [open, props.live, props.text]);
 
   const toggle = (): void => {
     if (open) closedByUser.current = true;
