@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Entry } from "./conversation";
-import { EntryView, ToolEntry } from "./components/Entry";
+import { EntryView, ReasoningEntry, ToolEntry } from "./components/Entry";
 import { Markdown } from "./components/Markdown";
 import { Composer } from "./components/Composer";
 import { Panel } from "./components/Panels";
@@ -274,5 +274,74 @@ describe("the top-bar menus", () => {
       </BarDropdown>,
     );
     assert.ok(open.includes("no saved providers"), "an open menu renders its items");
+  });
+});
+
+describe("rendering the thinking block", () => {
+  const history = { kind: "reasoning", text: "weighed the two options", durationSeconds: 3.4, messageIndex: 7 } as const;
+
+  it("collapses a reopened conversation's reasoning to one header row", () => {
+    // The whole point of the collapsed state: reasoning must not own the
+    // transcript when you come back to it. No body in the markup at all, not a
+    // hidden one, so it costs nothing to render a hundred of them.
+    const out = markup(<EntryView entry={history as Entry} />);
+    assert.match(out, /reasoning-header/);
+    assert.match(out, /thought for 3\.4s/);
+    assert.doesNotMatch(out, /reasoning-body/);
+    assert.doesNotMatch(out, /weighed the two options/, "collapsed means the text is not in the DOM");
+  });
+
+  it("says when the thinking happened, and says nothing it does not know", () => {
+    const timed = markup(<EntryView entry={history as Entry} />);
+    assert.match(timed, /class="reasoning-label">thought for 3\.4s</);
+    // A turn measured under ten seconds keeps its decimal; anything longer is
+    // rounded, because 42.7s of precision is a digit nobody reads.
+    const long = markup(<ReasoningEntry text="x" durationSeconds={42.7} />);
+    assert.match(long, /thought for 43s</);
+    // Old records have no stored duration: "thought", never an invented number.
+    const missing = markup(<ReasoningEntry text="x" />);
+    assert.match(missing, /class="reasoning-label">thought</);
+    assert.doesNotMatch(missing, /thought for/);
+  });
+
+  it("shimmers while the model is still thinking, and counts instead of reporting", () => {
+    const live = markup(<ReasoningEntry text="half a thought" live />);
+    assert.match(live, /reasoning-label shimmer/, "the shimmer the status line uses");
+    assert.match(live, /thinking…/, "present tense while it is happening");
+    assert.doesNotMatch(live, /thought for/, "a turn still running has no duration to report");
+    // A live block is the one that opens by itself: you are watching it arrive.
+    assert.match(live, /reasoning-body/, "live reasoning opens");
+  });
+
+  it("opens as a scrolling window with no rule between header and body", () => {
+    // The body is a sibling of the header inside the same rounded box. A
+    // wrapper with a border of its own is how this became two attached blocks.
+    // `initialOpen` is how a finished block is opened without a click: a stored
+    // block starts shut, and only the live one opens on its own.
+    const open = markup(<ReasoningEntry text={"line\n".repeat(40)} durationSeconds={2} initialOpen />);
+    const box = open.slice(open.indexOf("reasoning-box"), open.indexOf("reasoning-body"));
+    assert.doesNotMatch(box, /border/, "nothing draws a line between the header and the reasoning");
+    assert.match(open, /<pre class="reasoning-body"/, "the body is the scroller itself");
+    assert.doesNotMatch(open, /reasoning-body[^>]*border/, "and it has no border of its own");
+  });
+
+  it("renders every reasoning entry in a stored transcript without one body open", () => {
+    const entries: Entry[] = [
+      { kind: "user", text: "go" },
+      { kind: "reasoning", text: "first", durationSeconds: 1.2, messageIndex: 1 },
+      { kind: "assistant", text: "done", partial: false, messageIndex: 1 },
+      { kind: "reasoning", text: "second", durationSeconds: 9, messageIndex: 2 },
+    ];
+    const out = markup(
+      <>
+        {entries.map((entry) => (
+          // Keyed by its own content: these four entries are distinct, and a
+          // position key would hide a reorder from the renderer.
+          <EntryView entry={entry} key={"text" in entry ? entry.text : entry.kind} />
+        ))}
+      </>,
+    );
+    assert.equal((out.match(/reasoning-header/g) ?? []).length, 2);
+    assert.equal((out.match(/reasoning-body/g) ?? []).length, 0, "a reopened transcript starts with every block shut");
   });
 });
