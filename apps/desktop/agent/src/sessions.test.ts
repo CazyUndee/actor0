@@ -48,6 +48,30 @@ describe("saving and loading", () => {
     assert.deepEqual(loaded.messages, messages);
   });
 
+  it("keeps both display fields of reasoning across a save and a load", () => {
+    // The text and its duration are one fact: "thought for 3.4s" is only true
+    // while the number that produced it came back with the text. `repairHistory`
+    // rebuilds messages on load, so this asserts it rebuilds them *without*
+    // dropping what the renderer needs — a transcript that reloads as "thought"
+    // is a duration that was measured, stored, and then quietly discarded.
+    const id = newSessionId(new Date("2026-11-10T11:00:00.000Z"));
+    saveSession({
+      id,
+      createdAt: "2026-11-10T11:00:00.000Z",
+      updatedAt: "2026-11-10T11:00:05.000Z",
+      model: "m",
+      messages: [
+        { role: "user", content: "why" },
+        { role: "assistant", content: "because", reasoning: "weighed it up", reasoningMs: 3_400 },
+      ],
+    });
+    const loaded = loadSession(id);
+    assert.ok(loaded);
+    const assistant = loaded.messages.find((message) => message.role === "assistant");
+    assert.equal(assistant?.reasoning, "weighed it up");
+    assert.equal(assistant?.reasoningMs, 3_400, "the duration survives repairHistory");
+  });
+
   it("writes a sortable, filesystem-safe id", () => {
     const id = newSessionId(new Date("2026-09-27T12:34:56.789Z"));
     assert.equal(id, "2026-09-27T12-34-56-789Z");

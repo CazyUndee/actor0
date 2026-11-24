@@ -18,6 +18,4 @@ export const color = {
   bg: "#0a0a0a",
 } as const;
 
-export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
-
 export const toolGlyph = { ok: "✓", error: "✗" } as const;
