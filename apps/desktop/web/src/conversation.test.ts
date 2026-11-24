@@ -259,4 +259,19 @@ describe("M3 — rendering a resumed CLI session", () => {
     assert.equal(entries.length, 2);
     assert.equal((entries[1] as { partial?: boolean }).partial, true);
   });
+
+  it("reads the stored reasoning duration, and invents none when it is absent", () => {
+    // "thought for 3.4s" is only true while the number came from the turn that
+    // measured it. Sessions written before the duration was persisted have none,
+    // and the block says "thought" rather than a plausible-looking guess.
+    const entries = entriesFromMessages([
+      { role: "user", content: "why" },
+      { role: "assistant", content: "because", reasoning: "weighed it up", reasoningMs: 3_400 },
+      { role: "assistant", content: "again", reasoning: "older turn" },
+    ] as never);
+    const reasoning = entries.filter((entry) => entry.kind === "reasoning") as { durationSeconds?: number }[];
+    assert.equal(reasoning.length, 2);
+    assert.equal(reasoning[0]!.durationSeconds, 3.4);
+    assert.equal(reasoning[1]!.durationSeconds, undefined, "no stored duration, no number");
+  });
 });
