@@ -147,6 +147,7 @@ export class OpenAiCompatibleModel implements ModelClient {
     const wireMessages = messages.map((message) => {
       const wire = { ...message };
       delete wire.reasoning;
+      delete wire.reasoningMs;
       return wire;
     });
     let response: Response;

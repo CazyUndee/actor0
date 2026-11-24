@@ -96,7 +96,20 @@ async function boot(): Promise<void> {
           `os=${typeof (window as { Neutralino?: { os?: unknown } }).Neutralino?.os}`,
       );
     }
-    const root = document.getElementById("root");
+    /**
+ * The WebView's own context menu is off, globally and from the first frame.
+ *
+ * The app renders its own (see ContextMenu), but a React handler can only see
+ * events after React has mounted and only on the tree it owns — so a right-click
+ * during startup, or on a node outside the shell, opened WebView2's menu on top
+ * of ours. In capture phase on the window, nothing gets the event first and
+ * nothing gets it after: the default is taken away before any of it runs. The
+ * native menu was also the one that stayed on screen behind the window after
+ * the app closed, which a page cannot close; not opening it is the only fix.
+ */
+window.addEventListener("contextmenu", (event) => event.preventDefault(), { capture: true });
+
+const root = document.getElementById("root");
     if (!root) throw new Error("no #root element to mount into");
     createRoot(root).render(
       <StrictMode>

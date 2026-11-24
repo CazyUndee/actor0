@@ -15,7 +15,6 @@ import {
   type Entry,
 } from "./conversation";
 import { mascotDataUri, needsCustomControls, platform, setFavicon } from "./mascot";
-import { SPINNER_FRAMES } from "./theme";
 import { parseSlash } from "./slash";
 import type { AgentInfo, ConfigSnapshot, McpStatus, ProviderKind, SessionSummary, UsageSnapshot } from "./protocol";
 
@@ -29,7 +28,7 @@ type ResizeState = {
 import { BarDropdown } from "./components/BarDropdown";
 import { Composer } from "./components/Composer";
 import { SessionDropdown } from "./components/SessionDropdown";
-import { EntryView } from "./components/Entry";
+import { EntryView, ReasoningEntry } from "./components/Entry";
 import { ContextMenu, type MenuAction } from "./components/ContextMenu";
 import { McpPanel, ModelPanel, NoticeBar, ProviderPanel, SessionPanel, ThinkingPanel, UsagePanel } from "./components/Panels";
 
@@ -64,7 +63,6 @@ export function App() {
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [kinds, setKinds] = useState<ProviderKind[]>([]);
-  const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
 
   const clientRef = useRef<AgentClient | null>(null);
@@ -88,13 +86,88 @@ export function App() {
   const showWindowControls = useMemo(() => needsCustomControls(), []);
   const [maximized, setMaximized] = useState(false);
 
-  const minimizeWindow = useCallback(() => { void window.Neutralino?.window?.minimize?.(); }, []);
+  /**
+   * The window is borderless, so the OS draws no minimise/restore animation for
+   * it: DWM animates a frame that it owns, and there is no frame here. The
+   * substitute is a short transform on the shell while the geometry changes,
+   * content leaving downward on minimise and settling from 97% on maximise. It
+   * is not the system's animation and does not pretend to be; it is the 140ms
+   * that keep the window from teleporting.
+   */
+  const [animating, setAnimating] = useState<"window-out" | "window-in" | null>(null);
+  const playWindowAnimation = useCallback((phase: "window-out" | "window-in", then: () => void): void => {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      then();
+      return;
+    }
+    setAnimating(phase);
+    window.setTimeout(() => {
+      then();
+      setAnimating(null);
+    }, 140);
+  }, []);
+
+  const minimizeWindow = useCallback(() => {
+    playWindowAnimation("window-out", () => void window.Neutralino?.window?.minimize?.());
+  }, [playWindowAnimation]);
+
+  /**
+   * Bounds to restore, when this app is the one that maximised.
+   *
+   * It has to be, because the window is borderless: `window.maximize()` is
+   * `ShowWindow(SW_MAXIMIZE)` on a frame that is not a frame, and the result
+   * covers the whole monitor, taskbar included. The work area is what a
+   * maximised window is supposed to fill, and `screen.avail*` is the one
+   * primitive that reports it on every platform — Windows subtracts the
+   * taskbar, macOS the menu bar and dock, Linux the panel — so a maximised app
+   * fills the space and nothing else.
+   */
+  const restoreBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+
   const toggleMaximizeWindow = useCallback(async () => {
     const w = window.Neutralino?.window;
-    if (!w?.isMaximized || !w.maximize || !w.unmaximize) return;
-    const isMax = await w.isMaximized();
-    if (isMax) await w.unmaximize(); else await w.maximize();
-    setMaximized(!isMax);
+    // This Neutralino build has `move(x, y)`, not `setPosition({x, y})`: the
+    // typed API follows the docs, the shipped binary follows its own version.
+    const place = w?.move
+      ? (x: number, y: number) => w.move!(x, y)
+      : w?.setPosition
+        ? (x: number, y: number) => w.setPosition!({ x, y })
+        : undefined;
+    if (!place || !w?.setSize) return;
+    const dpr = window.devicePixelRatio || 1;
+    setAnimating("window-in");
+
+    if (restoreBoundsRef.current) {
+      const bounds = restoreBoundsRef.current;
+      restoreBoundsRef.current = null;
+      await place(bounds.x, bounds.y);
+      await w.setSize({ width: bounds.width, height: bounds.height });
+      setMaximized(false);
+    } else {
+      // The OS position/size are in device pixels, the screen metrics in CSS
+      // pixels; on a 125% display those are not the same number.
+      const before: { x: number; y: number; width: number; height: number } = {
+        x: 0,
+        y: 0,
+        width: Math.round(innerWidth * dpr),
+        height: Math.round(innerHeight * dpr),
+        ...(await w.getPosition?.()),
+        ...(await w.getSize?.()),
+      };
+      restoreBoundsRef.current = before;
+      // `availLeft`/`availTop` are real but absent from this TS lib version.
+      const screenWork = window.screen as Screen & { availLeft?: number; availTop?: number };
+      await place(
+        Math.round((screenWork.availLeft ?? 0) * dpr),
+        Math.round((screenWork.availTop ?? 0) * dpr),
+      );
+      await w.setSize({
+        width: Math.round(window.screen.availWidth * dpr),
+        height: Math.round(window.screen.availHeight * dpr),
+      });
+      setMaximized(true);
+    }
+    window.setTimeout(() => setAnimating(null), 180);
   }, []);
 
   // The glyph follows the *window*, not the last click on the button. It used to
@@ -107,6 +180,11 @@ export function App() {
     const w = window.Neutralino?.window;
     if (!w?.isMaximized) return;
     const sync = (): void => {
+      // While this app owns the maximised state, the OS flag is not the truth:
+      // our maximise is a position and a size, so `isMaximized()` stays false
+      // and trusting it would clear the glyph (and the square corners) one
+      // second after they were set.
+      if (restoreBoundsRef.current) return;
       void Promise.resolve(w.isMaximized?.())
         .then((value) => setMaximized(Boolean(value)))
         .catch(() => undefined);
@@ -121,9 +199,11 @@ export function App() {
   }, []);
   const closeWindow = useCallback(() => {
     const app = window.Neutralino?.app;
-    if (app?.exit) { void app.exit(); return; }
-    void window.Neutralino?.window?.close?.();
-  }, []);
+    playWindowAnimation("window-out", () => {
+      if (app?.exit) { void app.exit(); return; }
+      void window.Neutralino?.window?.close?.();
+    });
+  }, [playWindowAnimation]);
 
   // --- the client ----------------------------------------------------------
 
@@ -398,14 +478,13 @@ export function App() {
 
   useEffect(() => {
     if (!busy) return;
-    const spinner = setInterval(() => setFrame((value) => (value + 1) % SPINNER_FRAMES.length), 120);
+    // No spinner: the label itself shimmers while the model works, which is the
+    // same signal without a second thing moving. This clock is the turn's
+    // elapsed time, which stays.
     const clock = setInterval(() => {
       if (turnStartedAtRef.current) setElapsed(Math.floor((Date.now() - turnStartedAtRef.current) / 1000));
     }, 250);
-    return () => {
-      clearInterval(spinner);
-      clearInterval(clock);
-    };
+    return () => clearInterval(clock);
   }, [busy]);
 
   // --- the transcript's scroll ---------------------------------------------
@@ -780,7 +859,10 @@ export function App() {
 
   return (
     <div className="app">
-      <div className="shell" onContextMenu={onContextMenu}>
+      <div className={`shell ${maximized ? "maximized" : ""} ${animating ?? ""}`} onContextMenu={onContextMenu}>
+        {/* The new-session blob: a slow crimson swell behind an empty
+            conversation, gone the moment there is something to read. */}
+        <div className={`new-session-blob ${conversation.entries.length === 0 && !busy ? "visible" : ""}`} aria-hidden="true" />
         {showWindowControls ? (
           <div className="resize-edges" aria-hidden="true">
             <span className="resize-edge resize-n" data-resize-edge="n" />
@@ -1022,7 +1104,6 @@ export function App() {
           ))}
           {busy ? (
             <div className="live">
-              <span className="spinner">{SPINNER_FRAMES[frame]}</span>
               {/* The ChatGPT-style shimmer from the TUI: a soft highlight sweeping
                   across the label while the model is thinking/reading. */}
               <span className={`live-status${shimmering ? " shimmer" : ""}`}>{statusLine}</span>
@@ -1040,7 +1121,10 @@ export function App() {
           ) : null}
           {conversation.live.reasoning ? (
             <div className="live-reasoning">
-              <pre>{conversation.live.reasoning}</pre>
+              {/* The same block finished reasoning becomes: it streams into the
+                  collapsed header, and expanding it while it arrives shows the
+                  reasoning from the top rather than a second widget. */}
+              <ReasoningEntry text={conversation.live.reasoning} live />
             </div>
           ) : null}
           {conversation.live.text ? (

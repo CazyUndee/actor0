@@ -115,7 +115,14 @@ export function entriesFromMessages(messages: ChatMessage[]): Entry[] {
       continue;
     }
     if (message.role !== "assistant") continue;
-    if (message.reasoning?.trim()) entries.push({ kind: "reasoning", text: message.reasoning, messageIndex: index });
+    if (message.reasoning?.trim()) {
+      entries.push({
+        kind: "reasoning",
+        text: message.reasoning,
+        ...(message.reasoningMs !== undefined ? { durationSeconds: message.reasoningMs / 1_000 } : {}),
+        messageIndex: index,
+      });
+    }
     const content = typeof message.content === "string" ? message.content : "";
     const partial = /\n\n\[(interrupted|failed|cut off at the output limit)\]$/.test(content);
     const text = content.replace(/\n\n\[(interrupted|failed|cut off at the output limit)\]$/, "").trim();

@@ -231,6 +231,14 @@ test("persists each round's reasoning on its assistant message", async () => {
   });
   const assistants = result.messages.filter((message) => message.role === "assistant");
   assert.deepEqual(assistants.map((message) => message.reasoning), ["Inspect the file first.", "Now summarize the result."]);
+  // The duration rides with the text, so a reopened conversation can say
+  // "thought for 3.4s" with a number that was actually measured. It is real
+  // wall time: this round streamed its reasoning before answering, so the
+  // measurement exists and is not negative.
+  for (const message of assistants) {
+    assert.equal(typeof message.reasoningMs, "number", "each reasoning block carries its own duration");
+    assert.ok((message.reasoningMs ?? -1) >= 0, "and the duration is not a made-up negative");
+  }
 });
 
 test("a cancel mid-stream hands back the exchange instead of throwing it away", async () => {

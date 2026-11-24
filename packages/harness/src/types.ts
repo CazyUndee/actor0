@@ -17,6 +17,15 @@ export type ChatMessage = {
   name?: string;
   /** Model reasoning retained for local transcript rendering, never sent back to a provider. */
   reasoning?: string;
+  /**
+   * How long the model spent reasoning before this message, in milliseconds.
+   *
+   * Also display metadata, and also never sent: "thought for 3.4s" is only a
+   * true statement while the number that produced it is the one measured when
+   * the reasoning ended. A reopened conversation that shows a duration nobody
+   * stored is showing a number that did not happen, so it is stored.
+   */
+  reasoningMs?: number;
 };
 
 export type ToolDefinition = {
@@ -181,6 +190,8 @@ export type RoundResult = {
   reasoning: ReasoningSummary;
   /** Raw reasoning for transcript persistence; `reasoning` remains the short audit summary. */
   reasoningText: string;
+  /** Wall time spent reasoning, when it ended inside this round. */
+  reasoningMs?: number;
   usage: Usage[];
 };
 

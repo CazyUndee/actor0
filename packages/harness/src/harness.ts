@@ -217,6 +217,8 @@ async function runModelAttempt(
   const filter = createAnswerFilter(tools.map((tool) => tool.function.name));
   let attemptText = "";
   let reasoningText = "";
+  /** When the first reasoning delta arrived, for the block's own timer. */
+  let reasoningStartedAt: number | undefined;
   const toolCalls: ToolCall[] = [];
   const rejectedBlocks: RejectedBlock[] = [];
   const usage: Usage[] = [];
@@ -265,6 +267,7 @@ async function runModelAttempt(
       if (event.type === "token") {
         await emitFiltered(event.delta);
       } else if (event.type === "reasoning") {
+        reasoningStartedAt ??= Date.now();
         reasoningText = `${reasoningText}${event.delta}`.slice(-4_000);
         await emit(observer, { type: "reasoning", delta: event.delta });
       } else if (event.type === "tool_call") {
@@ -317,6 +320,9 @@ async function runModelAttempt(
       truncationReason,
       reasoning,
       reasoningText,
+      // Only when the reasoning actually ended before the attempt did: an
+      // aborted attempt has no honest duration.
+      ...(reasoningStartedAt !== undefined && reasoningText ? { reasoningMs: Date.now() - reasoningStartedAt } : {}),
       usage,
     };
   } catch (error) {
@@ -472,6 +478,7 @@ export async function runAgentTurn(options: {
         content: result.text,
         tool_calls: result.toolCalls,
         ...(result.reasoningText ? { reasoning: result.reasoningText } : {}),
+        ...(result.reasoningMs !== undefined ? { reasoningMs: result.reasoningMs } : {}),
       });
       let failedThisRound = 0;
       for (let index = 0; index < result.toolCalls.length; index += 1) {
@@ -610,6 +617,7 @@ export async function runAgentTurn(options: {
         role: "assistant",
         content: result.text,
         ...(result.reasoningText ? { reasoning: result.reasoningText } : {}),
+        ...(result.reasoningMs !== undefined ? { reasoningMs: result.reasoningMs } : {}),
       });
       await emit(options.observer, {
         type: "status",
@@ -658,6 +666,7 @@ export async function runAgentTurn(options: {
       role: "assistant",
       content: result.truncated ? withTruncationMarker(result.text) : result.text,
       ...(result.reasoningText ? { reasoning: result.reasoningText } : {}),
+        ...(result.reasoningMs !== undefined ? { reasoningMs: result.reasoningMs } : {}),
     });
     return {
       messages,

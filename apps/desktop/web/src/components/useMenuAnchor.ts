@@ -112,6 +112,14 @@ export function useMenuAnchor(open: boolean): {
     setOrigin(atWall ? "wall" : chained ? "caret" : "trigger");
     wrap.style.setProperty("--menu-left", `${finalLeft - trigger.left}px`);
     wrap.style.setProperty("--menu-width", `${width}px`);
+    // The first row inside the panel lines up with the *trigger's* own highlight
+    // on the x axis: same fused shape, so the list's first column continues the
+    // control instead of starting 8px further in from it. Capped, because a
+    // panel clamped hard against the window wall (align-end at 520px) is over
+    // 200px from its trigger, and insetting the whole menu by that would be a
+    // different bug rather than this fix.
+    const inset = Math.min(20, Math.max(0, trigger.left - finalLeft - 8));
+    wrap.style.setProperty("--menu-inset", `${inset}px`);
   }, [open, revision]);
 
   const state = [

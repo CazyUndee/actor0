@@ -49,6 +49,8 @@ export type NeutralinoApi = {
     setDraggableRegion?(domId: string): Promise<void>;
     unsetDraggableRegion?(domId: string): Promise<void>;
     getPosition?(): Promise<{ x: number; y: number }>;
+    /** Device pixels, like getPosition; not the same unit as CSS . */
+    setPosition?(position: { x: number; y: number }): Promise<void>;
     move?(x: number, y: number): Promise<void>;
     getSize?(): Promise<{ width: number; height: number }>;
     setSize?(size: { width: number; height: number }): Promise<void>;

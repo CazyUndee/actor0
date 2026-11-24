@@ -1,5 +1,5 @@
 /* eslint-disable react/no-array-index-key -- A tool result is a string; its diff lines have no identity beyond their position, and the list is append-only. */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Entry } from "../conversation";
 
 import { Markdown } from "./Markdown";
@@ -87,7 +87,17 @@ export function EntryView({ entry }: { entry: Entry }) {
       );
     }
     case "reasoning":
-      return <ReasoningEntry entry={entry} />;
+      // History opens collapsed (you were not watching it arrive); anything
+      // without a stored index was built during this session.
+      return (
+        <div className="entry reasoning">
+          <ReasoningEntry
+            text={entry.text}
+            durationSeconds={entry.durationSeconds}
+            initialOpen={entry.messageIndex === undefined}
+          />
+        </div>
+      );
     case "tool":
       return (
         <div className="entry tool">
@@ -127,36 +137,96 @@ export function EntryView({ entry }: { entry: Entry }) {
   }
 }
 
-function ReasoningEntry({ entry }: { entry: Extract<Entry, { kind: "reasoning" }> }) {
-  const [open, setOpen] = useState(false);
-  // The body springs *up* out on close, so closing is the opening animation
-  // played backwards rather than an instant disappear. Mounting the body for
-  // the duration of the animation is the whole trick — the box's rounded frame
-  // stays put, only the body collapses.
-  const [closing, setClosing] = useState(false);
+/**
+ * The thinking block.
+ *
+ * Collapsed it is one line in a rounded box; opened it is a *window* onto the
+ * reasoning, not a tail that follows the newest line — it scrolls, and opening
+ * always starts at the top. That distinction is the whole reason it has a fixed
+ * height instead of a max-height that grows: eight lines of context you can
+ * read is not the same object as the last eight lines the model wrote.
+ *
+ * A block that is streaming says "thinking…" with the same shimmer as the
+ * status line and counts up; once it stops it says "thought for 3.4s". Nothing
+ * separates the header from the body but the surface itself: two bordered
+ * halves attached to each other read as two blocks, which is not what this is.
+ */
+export function ReasoningEntry(props: {
+  text: string;
+  durationSeconds?: number;
+  /** Still arriving: the header counts up instead of reporting a duration. */
+  live?: boolean;
+  /** Persisted history opens collapsed; a block that just streamed opens. */
+  initialOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(props.initialOpen ?? Boolean(props.live));
+  /**
+   * A manual close is a decision, not a state. The auto-collapse below may put
+   * a block away, but it may never overrule someone who deliberately closed it.
+   */
+  const closedByUser = useRef(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLPreElement>(null);
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!props.live) return;
+    const started = Date.now();
+    const timer = window.setInterval(() => setElapsed((Date.now() - started) / 1000), 100);
+    return () => window.clearInterval(timer);
+  }, [props.live]);
+
+  // Collapse only once the block has been off screen for three seconds: a
+  // block scrolling past on its way out is still being read.
+  useEffect(() => {
+    if (props.live || typeof IntersectionObserver === "undefined") return;
+    const node = rootRef.current;
+    if (!node) return;
+    let timer = 0;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        window.clearTimeout(timer);
+        const visible = entries.some((entry) => entry.isIntersecting);
+        if (!visible && !closedByUser.current) timer = window.setTimeout(() => setOpen(false), 3_000);
+      },
+      { threshold: 0 },
+    );
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+    };
+  }, [props.live]);
+
+  // Opening starts at the top of the reasoning. It is a window onto it, not a
+  // log that follows the end.
+  useEffect(() => {
+    if (open && bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [open]);
+
   const toggle = (): void => {
-    if (open) {
-      setClosing(true);
-      setTimeout(() => {
-        setClosing(false);
-        setOpen(false);
-      }, 250);
-    } else {
-      setOpen(true);
-    }
+    if (open) closedByUser.current = true;
+    setOpen(!open);
   };
+
   return (
-    <div className="entry reasoning">
-      <div className={`reasoning-box ${open ? "open" : ""}`}>
-        <button type="button" className="reasoning-header" onClick={toggle} aria-expanded={open}>
-          <span className="reasoning-mark"><Caret open={open} /></span>
-          <span className="reasoning-label">thought</span>
-          {entry.durationSeconds !== undefined ? (
-            <span className="reasoning-time">for {formatDuration(entry.durationSeconds)}</span>
-          ) : null}
-        </button>
-        {open ? <pre className={`reasoning-body ${closing ? "closing" : ""}`}>{entry.text}</pre> : null}
-      </div>
+    <div className={`reasoning-box ${open ? "open" : ""} ${props.live ? "live" : ""}`} ref={rootRef}>
+      <button type="button" className="reasoning-header" onClick={toggle} aria-expanded={open}>
+        <span className="reasoning-mark"><Caret open={open} /></span>
+        {props.live ? (
+          <span className="reasoning-label shimmer">thinking…</span>
+        ) : (
+          <span className="reasoning-label">
+            {props.durationSeconds !== undefined ? `thought for ${formatDuration(props.durationSeconds)}` : "thought"}
+          </span>
+        )}
+        {props.live && elapsed >= 0.1 ? <span className="reasoning-time">{elapsed.toFixed(1)}s</span> : null}
+      </button>
+      {open ? (
+        <pre className="reasoning-body" ref={bodyRef}>
+          {props.text}
+        </pre>
+      ) : null}
     </div>
   );
 }

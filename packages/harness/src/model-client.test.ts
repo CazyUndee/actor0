@@ -114,7 +114,10 @@ test("keeps persisted reasoning metadata out of provider requests", async () => 
       return new Response("data: [DONE]\\n\\n", { status: 200 });
     },
   });
-  for await (const _event of model.stream([{ role: "assistant", content: "done", reasoning: "local only" }], [], new AbortController().signal)) {
+  // Both display fields travel together, so both are asserted together: a
+  // duration left on the wire is the same leak as the text it describes.
+  const stored = { role: "assistant" as const, content: "done", reasoning: "local only", reasoningMs: 3_400 };
+  for await (const _event of model.stream([stored], [], new AbortController().signal)) {
     // Drain the stream so the request and its assertions cover the real path.
   }
   assert.deepEqual(requestMessages, [{ role: "assistant", content: "done" }]);

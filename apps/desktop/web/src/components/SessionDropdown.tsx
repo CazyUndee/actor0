@@ -80,13 +80,21 @@ export function SessionDropdown(props: {
       bucket.push(session);
       groups.set(key, bucket);
     }
-    // Most-recently-touched group first, sessions sorted by updatedAt inside.
+    // Most-recently-touched group first, sessions sorted by updatedAt inside —
+    // except "elsewhere", which is the bucket for conversations with no
+    // directory at all. It is a leftover, not a place, so it is always last:
+    // sorted by recency it kept appearing at the top and pushing the
+    // conversations that belong to this project down the list.
     return [...groups.entries()]
       .map(([name, list]) => ({
         name,
         sessions: [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
       }))
-      .sort((a, b) => (b.sessions[0]?.updatedAt ?? "").localeCompare(a.sessions[0]?.updatedAt ?? ""));
+      .sort((a, b) => {
+        if (a.name === "elsewhere") return 1;
+        if (b.name === "elsewhere") return -1;
+        return (b.sessions[0]?.updatedAt ?? "").localeCompare(a.sessions[0]?.updatedAt ?? "");
+      });
   }, [props.sessions]);
 
   // The same placement every bar menu uses (see useMenuAnchor): the leftmost

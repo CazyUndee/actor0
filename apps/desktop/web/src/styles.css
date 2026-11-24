@@ -16,7 +16,17 @@
   --surface3: #222222;
   --border: #7d7c79;
   --border-subtle: rgba(125, 124, 121, 0.28);
-  --border-strong: rgba(125, 124, 121, 0.5);
+  /* Opaque on purpose. Two translucent lines crossing each other paint twice,
+     and the crossing is brighter than either line: the window's outline meeting
+     the titlebar's divider lit up a 2x2 block at each corner. Opaque values
+     composite to themselves, so an intersection is invisible. */
+  --border-strong: #4a4948;
+  /* The window's own outline: the brightest line in the app, because it is the
+     edge of the window and has to hold against a dark desktop. */
+  --border-window: #6d6b68;
+  /* One highlight for every row the pointer can land on: menus, pickers,
+     palettes, panels. It used to be five different greys at five heights. */
+  --hl: #2b2b2a;
   --accent-soft: rgba(201, 122, 122, 0.16);
   --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.55);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
@@ -74,10 +84,15 @@ button, input, textarea { font: inherit; color: inherit; }
      `border-radius: inherit` box follows the silhouette's actual curve at every
      pixel, which a border on the parent cannot do once the children reach the
      edges. */
-  box-shadow: inset 0 0 0 2px var(--border-strong);
+  box-shadow: inset 0 0 0 2px var(--border-window);
   pointer-events: none;
   z-index: 40;
 }
+/* Maximised, the window is the screen (minus the taskbar): the OS edge is the
+   frame, so a radius would cut four corners off the app and an outline would
+   draw a second border 2px inside the real one. */
+.shell.maximized, .shell.maximized::after { border-radius: 0; }
+.shell.maximized::after { box-shadow: none; }
 
 /* Custom title bar — replaces the native top bar in borderless window mode and
    sits at the very top of the app in every mode. Draggable so the window can
@@ -89,7 +104,7 @@ button, input, textarea { font: inherit; color: inherit; }
   /* The same 2px as the top bar and the composer: this line divides the nav
      from the transcript, so it is a border in the same language, not a hairline. */
   border-bottom: 2px solid var(--border-strong);
-  background: rgba(17, 17, 17, 0.96);
+  background: #111;
 }
 .titlebar button, .titlebar a, .titlebar input { -webkit-app-region: no-drag; }
 .titlebar button, .titlebar a, .titlebar input { -webkit-app-region: no-drag; }
@@ -167,10 +182,10 @@ button, input, textarea { font: inherit; color: inherit; }
   font-family: var(--font-mono); font-size: 12.5px;
   transition: background 0.12s ease, color 0.12s ease;
 }
-.dropdown-trigger:hover { background: var(--surface2); }
+.dropdown-trigger:hover { background: var(--hl); }
 /* The open trigger stays lit while its menu is up, so the menu reads as this
    control's own panel rather than something that floated in over the bar. */
-.dropdown-trigger[aria-expanded="true"] { background: var(--surface3); color: var(--text); }
+.dropdown-trigger[aria-expanded="true"] { background: var(--hl); color: var(--text); }
 .dropdown-trigger[aria-expanded="true"] .dropdown-caret { color: var(--text); }
 .dropdown-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
 .dropdown-caret { color: var(--muted); display: inline-flex; }
@@ -282,7 +297,7 @@ button, input, textarea { font: inherit; color: inherit; }
   padding: 6px 10px; border: none; background: transparent; cursor: pointer; text-align: left;
   font-family: var(--font-mono); font-size: 12.5px; color: var(--muted);
 }
-.tool-header:hover { background: rgba(255, 255, 255, 0.03); }
+.tool-header:hover { background: var(--hl); }
 .tool-glyph.ok { color: var(--success); }
 .tool-glyph.err { color: var(--error); }
 .tool-name { color: var(--text); }
@@ -292,30 +307,47 @@ button, input, textarea { font: inherit; color: inherit; }
 .diff-line.add { color: var(--success); }
 .diff-line.del { color: var(--error); }
 
-/* The thinking block is a rounded-rectangle card. Minimised it is a single
-   1-row-tall rounded rectangle; expanded it holds the body inside the same
-   rounded frame. The body springs down into place when it appears. */
+/* The thinking block. Collapsed it is one line in a rounded box the same radius
+   and the same 2px outline as a tool row, because it is the same kind of thing;
+   opened it is a *window* onto the reasoning with a fixed height, not a tail
+   that follows the newest line. */
 .reasoning-box {
   border: 2px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: var(--surface2);
   overflow: hidden;
 }
 .reasoning-header {
   display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 8px 12px; border: none; background: transparent; cursor: pointer; text-align: left;
-  color: var(--dim); font-size: 12.5px;
+  /* One row tall: the padding is what makes a single line sit inside a 2px
+     outline without touching it. */
+  padding: 6px 10px; border: none; background: transparent; cursor: pointer; text-align: left;
+  color: var(--muted); font-size: 12.5px; line-height: 1.4;
 }
+.reasoning-header:hover { background: var(--hl); }
 .reasoning-mark { color: var(--dim); }
 .reasoning-label { color: var(--muted); }
-.reasoning-time { color: var(--dim); }
+/* Thinking, in the same shimmer the status line uses: the model is working and
+   the label says so by moving, not by spinning. */
+.reasoning-label.shimmer {
+  background: linear-gradient(90deg, var(--muted) 0%, #f2f0ec 50%, var(--muted) 100%);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-sweep 1.6s linear infinite;
+}
+.reasoning-time { color: var(--dim); font-variant-numeric: tabular-nums; margin-left: auto; }
 .reasoning-body {
-  margin: 0; padding: 10px 14px; border-top: 2px solid var(--border-subtle);
+  /* No rule between the header and the body: they are one surface with the
+     header as its first line, and a border there reads as two attached blocks. */
+  margin: 0; padding: 0 10px 9px;
   color: var(--muted); font: 12.5px/1.5 var(--font-mono); white-space: pre-wrap;
-  max-height: 320px; overflow: auto;
-  /* Spring-down: starts a touch above and above it, then settles with a
-     slight overshoot (easeOutBack) so the text visibly drops into place. */
-  animation: spring-down 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* ~8 lines: enough to read a paragraph of reasoning, short enough to stay a
+     window. It scrolls, so the rest is reachable rather than gone. */
+  max-height: 152px; overflow: auto;
+  animation: spring-down 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 @keyframes spring-down {
   from { opacity: 0; transform: translateY(-10px); }
@@ -335,7 +367,6 @@ button, input, textarea { font: inherit; color: inherit; }
 .help-box { border: 2px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface2); padding: 10px 12px; color: var(--muted); font-size: 13px; }
 
 .live { display: flex; align-items: center; gap: 10px; width: min(820px, 86vw); padding: 2px; color: var(--muted); font-size: 13px; }
-.spinner { color: var(--accent-text); }
 .live-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 /* The TUI's ChatGPT-style shimmer, drawn in CSS: a soft highlight band sweeps
    across the label while the model thinks. background-clip:text keeps it on the
@@ -354,8 +385,7 @@ button, input, textarea { font: inherit; color: inherit; }
   to { background-position: -150% 0; }
 }
 .live-time, .live-note { color: var(--dim); }
-.live-reasoning { width: min(820px, 86vw); color: var(--muted); font-size: 12.5px; animation: spring-down 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
-.live-reasoning pre { margin: 0; white-space: pre-wrap; max-height: 200px; overflow: auto; border-left: 2px solid var(--border-subtle); padding-left: 10px; }
+.live-reasoning { width: min(820px, 86vw); }
 
 .composer-area { position: relative; flex: none; width: min(820px, 86vw); margin: 0 auto; padding: 12px 0; }
 .composer {
@@ -364,9 +394,13 @@ button, input, textarea { font: inherit; color: inherit; }
   border: 2px solid var(--border-strong); border-radius: 14px;
   background: #2a2a2a;
   cursor: text;
+  /* Focus, send and stop are three colours on one control. Switched, they
+     flash; transitioned, the composer reads as the same surface changing
+     state, which is what it is. */
+  transition: border-color 0.28s ease, background-color 0.28s ease, box-shadow 0.28s ease;
 }
-.composer:focus-within { border-color: var(--crimson); }
-.composer.busy { border-color: rgba(125, 124, 121, 0.45); }
+.composer:focus-within { border-color: var(--crimson); box-shadow: 0 0 0 3px rgba(107, 35, 35, 0.22); }
+.composer.busy { border-color: rgba(125, 124, 121, 0.45); box-shadow: none; }
 .composer-input {
   flex: 1; min-width: 0; background: transparent; border: none; outline: none;
   resize: none; font: 14.5px/1.45 var(--font-mono); padding: 2px 0; max-height: 200px;
@@ -400,7 +434,7 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .slash-item { padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
 .slash-item + .slash-item { border-top: 2px solid var(--border-subtle); }
-.slash-item.selected { background: var(--surface2); }
+.slash-item.selected { background: var(--hl); }
 .slash-name { color: var(--accent-text); font-size: 13px; }
 .slash-desc { color: var(--muted); font-size: 12.5px; }
 .muted { color: var(--muted); }
@@ -434,8 +468,8 @@ button, input, textarea { font: inherit; color: inherit; }
   width: 100%; padding: 8px 10px; display: flex; align-items: center; gap: 10px;
   border: 2px solid transparent; border-radius: 10px; background: transparent; text-align: left; cursor: pointer;
 }
-.panel-item:hover:not(:disabled) { background: rgba(26, 26, 26, 0.8); }
-.panel-item.selected { background: var(--surface2); border-color: var(--border-subtle); }
+.panel-item:hover:not(:disabled) { background: var(--hl); }
+.panel-item.selected { background: var(--hl); border-color: var(--border-subtle); }
 .panel-item.static, .panel-item:disabled { cursor: default; }
 .panel-item .marker { color: var(--accent-text); min-width: 18px; text-align: center; }
 .panel-item .label { font-size: 13.5px; }
@@ -450,7 +484,7 @@ button, input, textarea { font: inherit; color: inherit; }
 .form-input:focus { border-color: rgba(201, 122, 122, 0.5); }
 .usage-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
 .usage-tab { padding: 3px 10px; border-radius: 8px; border: 2px solid var(--border-subtle); color: var(--muted); font-size: 12.5px; background: transparent; cursor: pointer; }
-.usage-tab.active { color: var(--text); background: var(--surface2); border-color: var(--border-strong); }
+.usage-tab.active { color: var(--text); background: var(--hl); border-color: var(--border-strong); }
 
 @media (max-width: 900px) {
   .entry, .live, .live-reasoning, .composer-area { width: 94vw; }
@@ -541,7 +575,10 @@ button, input, textarea { font: inherit; color: inherit; }
   backdrop-filter: blur(10px) saturate(1.05);
   -webkit-backdrop-filter: blur(10px) saturate(1.05);
   box-shadow: var(--shadow-md);
-  padding: 6px;
+  /* The extra left padding is `--menu-inset` (see useMenuAnchor): it puts the
+     first row's highlight on the trigger's own left edge, so the panel's content
+     column continues the control it belongs to. */
+  padding: 6px 6px 6px calc(6px + var(--menu-inset, 0px));
   /* Pushed down, not faded in: the panel is squashed along its own axis and
      springs back past its length, and the bottom corners open up as it settles.
      That is the "extruded from the bar" read the flat 4px slide could not give:
@@ -575,18 +612,23 @@ button, input, textarea { font: inherit; color: inherit; }
   width: 12px; height: 12px;
   pointer-events: none;
   z-index: 59;
+  /* The arc is the border's 2px band, not 1.4px: a thinner stroke than the
+     lines it joins reads as a second, inset edge, which is exactly the
+     "sharp corner and a rounded one" it looked like. The stop at 12px is the
+     box's own edge, so the band ends where the panel's border begins and the
+     two are one continuous stroke. */
   background: radial-gradient(circle 12px at 0% 100%,
     transparent 0 10px,
-    var(--border-strong) 10px 11.4px,
-    rgba(20, 20, 20, 0.9) 11.4px);
+    var(--border-window) 10px 12px,
+    rgba(20, 20, 20, 0.9) 12px);
 }
 .session-dd.chained::before { left: calc(var(--menu-left, 0px) - 11.5px); }
 .session-dd::after {
   left: calc(var(--menu-left, 0px) + var(--menu-width, 0px) - 0.5px);
   background: radial-gradient(circle 12px at 100% 100%,
     transparent 0 10px,
-    var(--border-strong) 10px 11.4px,
-    rgba(20, 20, 20, 0.9) 11.4px);
+    var(--border-window) 10px 12px,
+    rgba(20, 20, 20, 0.9) 12px);
 }
 /* Nothing is drawn while the panel is shut, and a panel at the bar's own left
    wall must not grow a fillet outside the bar. */
@@ -629,11 +671,13 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .session-item {
   display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 7px 10px; border: none; border-radius: var(--radius-sm);
+  padding: 8px 10px; border: none; border-radius: 8px;
   background: transparent; cursor: pointer; text-align: left;
   font-family: var(--font-mono); font-size: 13px; color: var(--text);
 }
-.session-item:hover { background: var(--surface2); }
+/* The same row the right-click menu draws: every list in the app highlights the
+   same way, at the same height, or the pointer has to re-learn each one. */
+.session-item:hover { background: var(--hl); }
 .session-item-status { width: 16px; flex: none; display: flex; justify-content: center; }
 .tick { color: var(--success); }
 .tick-spacer { width: 1em; }
@@ -654,7 +698,11 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .session-item-title.stopped { color: var(--muted); }
 .session-menu-actions {
-  display: flex; gap: 8px; padding: 4px 10px 8px;
+  /* No horizontal padding: the action buttons are the panel's leftmost control,
+     and they have to start on the same x as the rows under them and as the
+     trigger's own highlight. 10px here was the reason the panel's first column
+     was stepped in from everything else. */
+  display: flex; gap: 8px; padding: 4px 0 8px;
   border-bottom: 2px solid var(--border-subtle); margin-bottom: 6px;
 }
 .session-action {
@@ -672,7 +720,7 @@ button, input, textarea { font: inherit; color: inherit; }
 .session-new-row { display: flex; gap: 8px; }
 .session-new-input { flex: 1; }
 .session-item.checkable { cursor: pointer; }
-.session-item.checkable.checked { background: var(--surface2); }
+.session-item.checkable.checked { background: var(--hl); }
 .session-check { width: 16px; flex: none; color: var(--success); }
 
 /* --- the top bar at a narrow window -------------------------------------
@@ -731,19 +779,62 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .context-item {
   display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
-  width: 100%; padding: 6px 9px;
-  border: none; border-radius: 6px; background: transparent;
+  width: 100%; padding: 8px 10px;
+  border: none; border-radius: 8px; background: transparent;
   color: var(--text); font-family: var(--font-mono); font-size: 13px;
   text-align: left; cursor: pointer;
 }
-.context-item:hover:not(:disabled) { background: var(--surface3); }
+.context-item:hover:not(:disabled) { background: var(--hl); }
 .context-item:disabled { color: var(--dim); cursor: default; }
 .context-item.danger { color: var(--error); }
 /* A break, not a box: options that act on the conversation above, options that
    change what is on screen below. */
-.context-item.separated { margin-top: 5px; border-top: 2px solid var(--border-subtle); border-radius: 0 0 6px 6px; padding-top: 8px; }
+.context-item.separated { margin-top: 5px; border-top: 2px solid var(--border-subtle); border-radius: 0 0 8px 8px; padding-top: 9px; }
 .context-hint { font-size: 11.5px; color: var(--muted); }
 .context-item:disabled .context-hint { color: var(--dim); }
 /* The slot only exists so a right-click can name the entry under the pointer;
    it must not change the transcript's layout. */
 .entry-slot { display: contents; }
+
+/* --- the new-session blob --------------------------------------------------
+   A calm sheet of crimson behind an empty conversation: one very wide, very
+   soft radial gradient drifting a few percent on a 26s cycle. Not a lava lamp:
+   no second blob, no contrast, no readable shape — at any pause it is a tint on
+   the background, and the movement is only noticeable because it is slow.
+   It fades the moment the session has something in it. */
+.new-session-blob {
+  position: absolute;
+  inset: -10%;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity 0.9s ease-out;
+  background:
+    radial-gradient(58% 42% at 38% 58%, rgba(107, 35, 35, 0.34), transparent 70%),
+    radial-gradient(46% 34% at 64% 40%, rgba(140, 46, 46, 0.2), transparent 72%);
+  animation: blob-drift 26s ease-in-out infinite alternate;
+}
+.new-session-blob.visible { opacity: 1; }
+@keyframes blob-drift {
+  from { transform: translate3d(-2.5%, -1.5%, 0) scale(1); }
+  to   { transform: translate3d(2.5%, 2%, 0) scale(1.08); }
+}
+/* Nothing needs a z-index to sit above it: the blob is the shell's first child
+   with `z-index: 0`, so everything painted after it wins. Giving the transcript
+   `z-index: 1` was a stacking context the bar's menus (same level, later in the
+   DOM) fell behind — the transcript then ate every click meant for a dropdown. */
+
+/* --- window motion --------------------------------------------------------
+   The window is borderless, so DWM animates nothing for minimise/restore/close.
+   These stand in: the content leaves downward and shrinks slightly, and comes
+   back the same way. 140ms, matching the shell's own transitions, because a
+   longer one would be a different (and worse) animation, not a better one. */
+.shell.window-out { animation: window-out 0.14s ease-in forwards; }
+.shell.window-in { animation: window-in 0.18s cubic-bezier(0.22, 0.9, 0.24, 1); }
+@keyframes window-out {
+  to { opacity: 0; transform: scale(0.985) translateY(6px); }
+}
+@keyframes window-in {
+  from { opacity: 0.72; transform: scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
