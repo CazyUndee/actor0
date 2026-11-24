@@ -102,8 +102,14 @@ export function App() {
     }
     setAnimating(phase);
     window.setTimeout(() => {
-      then();
-      setAnimating(null);
+      // The shell is left at opacity 0 by `window-out` if this never runs, so
+      // the clear is a finally: a native call that throws must not leave a
+      // blank window behind.
+      try {
+        then();
+      } finally {
+        setAnimating(null);
+      }
     }, 140);
   }, []);
 

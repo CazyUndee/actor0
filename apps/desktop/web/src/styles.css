@@ -838,3 +838,31 @@ button, input, textarea { font: inherit; color: inherit; }
   from { opacity: 0.72; transform: scale(0.985); }
   to   { opacity: 1; transform: none; }
 }
+
+/* --- reduced motion -------------------------------------------------------
+   The window animations already ask the system whether motion is welcome (see
+   playWindowAnimation); the CSS never did, so the blob drifted, the shimmer
+   swept, the menus pushed down and the reasoning sprung into place regardless.
+
+   All of it is entrance or decoration, so switching it off loses no
+   information. The shimmer is the one exception worth care: it is the only
+   sign that a turn is alive, so it stops *moving* rather than disappearing, and
+   the gradient stays as a steady highlight. */
+@media (prefers-reduced-motion: reduce) {
+  .new-session-blob,
+  .session-menu,
+  .context-menu,
+  .slash-modal-panel,
+  .reasoning-body,
+  .live-reasoning,
+  .shell.window-out,
+  .shell.window-in {
+    animation: none;
+  }
+  .live-status.shimmer,
+  .reasoning-label.shimmer,
+  .session-trigger.streaming .dropdown-value,
+  .session-item.active-turn .session-item-title {
+    animation: none;
+  }
+}
