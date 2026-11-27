@@ -195,6 +195,9 @@ async function main() {
     requireFile(join(layout, "icon.png"), "icon.png");
     const launcher = readFileSync(join(layout, "actor0"), "utf8");
     if (!launcher.startsWith("#!/bin/sh\n")) fail("the POSIX launcher does not start with #!/bin/sh (CRLF?)");
+    if (!readFileSync(join(layout, "install.sh"), "utf8").startsWith("#!/bin/sh\n")) {
+      fail("install.sh does not start with #!/bin/sh (CRLF?)");
+    }
     if (!launcher.includes(`actor0-${version}-${targetId.replaceAll("_", "-")}`)) {
       fail("the POSIX launcher does not name this package's shell binary");
     }

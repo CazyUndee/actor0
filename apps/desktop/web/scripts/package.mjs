@@ -462,8 +462,14 @@ function infoPlist() {
 }
 
 function stageLinux(layout) {
-  cpSync(join(webRoot, "scripts", "install-linux.sh"), join(layout, "install.sh"));
-  chmodSync(join(layout, "install.sh"), 0o755);
+  // The checkout is CRLF on Windows, and this script is copied verbatim into
+  // the tarball. A shebang followed by CR is not a shebang on Linux, so a
+  // tar built on Windows would install nothing. Normalise it here rather than
+  // relying on which host produced the archive.
+  const source = readFileSync(join(webRoot, "scripts", "install-linux.sh"), "utf8");
+  const installer = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (!installer.startsWith("#!/bin/sh\n")) throw new Error("install-linux.sh must start with a #!/bin/sh line");
+  writeFileSync(join(layout, "install.sh"), installer, { mode: 0o755 });
   cpSync(join(webRoot, "resources", "app", "icon.png"), join(layout, "icon.png"));
 }
 
