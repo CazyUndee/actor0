@@ -131,6 +131,7 @@ The same places the CLI uses, in the same formats:
 - `$ACTOR0_CONFIG_DIR` (default `~/.config/actor0`) — `config.json`
 - `$ACTOR0_DATA_DIR` (default `~/.local/share/actor0`) — `sessions/*.json`, `usage.jsonl`
 - `~/.actor0/agent/` — `port.json`, `agent.log`, and the pid file the launcher
-  uses for single-instance. Set `ACTOR0_STATE_DIR` to move this directory.
+  uses for single-instance. The page and the launcher both derive it from the
+home directory, so it stays in one place.
 
 So a conversation started in the CLI resumes here, and the other way round.

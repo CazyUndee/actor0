@@ -498,7 +498,7 @@ function writeReadme(layout, targetId) {
           "Without installing, ./actor0 also runs from this directory.",
           "Requires WebKitGTK 4.1: libwebkit2gtk-4.1-0 (Debian/Ubuntu),",
           "webkit2gtk4.1 (Fedora). The agent's log and port record live in",
-          "~/.actor0/agent/ (set ACTOR0_STATE_DIR to move them).",
+          "~/.actor0/agent/, which the launcher and the page both derive from home.",
         ];
   writeFileSync(join(layout, "README.txt"), [...common, ...body, ""].join("\n"));
 }
