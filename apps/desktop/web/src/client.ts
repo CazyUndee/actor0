@@ -58,7 +58,28 @@ function parseLauncherEndpoint(info: unknown): LauncherEndpoint | null {
   return { port, ...(token ? { token } : {}) };
 }
 
-/** Dev serves its port record next to the page; packaged builds keep it beside the executable. */
+/**
+ * The launcher's record under the user's home directory.
+ *
+ * The POSIX launcher keeps runtime state outside the app: on macOS the app is
+ * a signed bundle, often in /Applications, where writing a port file both
+ * fails for a non-admin user and mutates the code signature. `$HOME/.actor0`
+ * is writable everywhere and is derived the same way by the launcher and by
+ * `os.getPath("home")` here. Windows keeps the record beside the executable
+ * (see packaged-launcher.vbs) and is read from NL_PATH below.
+ */
+async function readHomeLauncherState(): Promise<LauncherEndpoint | null> {
+  const api = typeof window !== "undefined" ? window.Neutralino : undefined;
+  if (!api?.filesystem || !api.os?.getPath) return null;
+  try {
+    const home = await api.os.getPath("home");
+    return parseLauncherEndpoint(JSON.parse(await api.filesystem.readFile(`${home}/.actor0/agent/port.json`)));
+  } catch {
+    return null;
+  }
+}
+
+/** Dev serves its port record next to the page; packaged builds keep it beside the executable or in $HOME. */
 export async function readLauncherEndpoint(): Promise<LauncherEndpoint | null> {
   try {
     const res = await fetch("/agent-port.json", { cache: "no-store" });
@@ -69,12 +90,17 @@ export async function readLauncherEndpoint(): Promise<LauncherEndpoint | null> {
   } catch {
     /* no served record */
   }
-  if (typeof window !== "undefined" && window.NL_PATH && window.Neutralino?.filesystem) {
-    try {
-      const raw = await window.Neutralino.filesystem.readFile(`${window.NL_PATH}/agent/port.json`);
-      return parseLauncherEndpoint(JSON.parse(raw));
-    } catch {
-      /* no packaged record */
+  const filesystem = typeof window !== "undefined" ? window.Neutralino?.filesystem : undefined;
+  if (filesystem) {
+    const fromHome = await readHomeLauncherState();
+    if (fromHome) return fromHome;
+    if (window.NL_PATH) {
+      try {
+        const raw = await filesystem.readFile(`${window.NL_PATH}/agent/port.json`);
+        return parseLauncherEndpoint(JSON.parse(raw));
+      } catch {
+        /* no packaged record */
+      }
     }
   }
   return null;

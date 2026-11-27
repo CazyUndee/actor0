@@ -1,0 +1,106 @@
+name: Desktop packages
+
+# Builds the seven installables on the three hosts that can produce them and
+# smoke-tests each archive before it is offered. The macOS bundles are ad-hoc
+# signed here; notarization needs an Apple Developer ID and is a separate,
+# credential-gated step.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/desktop/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach the artifacts to (optional)"
+        required: false
+        default: ""
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: package:win
+            targets: win_x64
+          - os: ubuntu-latest
+            script: package:linux
+            targets: linux_x64 linux_arm64 linux_armhf
+          - os: macos-latest
+            script: package:mac
+            targets: mac_x64 mac_arm64 mac_universal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+      - run: npm ci
+      - name: Fetch the Neutralino binaries for this host
+        working-directory: apps/desktop/web
+        run: npx neu update
+      - name: Build and package
+        working-directory: apps/desktop/web
+        run: npm run ${{ matrix.script }}
+      - name: Smoke each archive
+        working-directory: apps/desktop/web
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in ${{ matrix.targets }}; do
+            node scripts/smoke.mjs "$target"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/web/dist/*.zip
+            apps/desktop/web/dist/*.tar.gz
+            apps/desktop/web/dist/*.sha256
+      - name: Upload the updater files
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-meta
+          if-no-files-found: error
+          path: |
+            apps/desktop/web/dist/update-manifest.json
+            apps/desktop/web/dist/actor0-desktop-resources-*.neu
+
+  attach:
+    name: attach to release
+    needs: build
+    if: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != '') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: artifacts
+          merge-multiple: true
+      - name: Attach every installable and its checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          shopt -s nullglob
+          files=(artifacts/*.zip artifacts/*.tar.gz artifacts/*.sha256 artifacts/update-manifest.json artifacts/*.neu)
+          if [ ${#files[@]} -eq 0 ]; then echo "no desktop artifacts to attach" >&2; exit 1; fi
+          gh release upload "$tag" "${files[@]}" --clobber
+          printf 'attached %d files to %s\n' "${#files[@]}" "$tag"

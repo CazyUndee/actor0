@@ -66,15 +66,19 @@ export function agentCommand(): string {
  * Where the packaged agent lives on disk (inside the data dir) after the
  * first-boot extraction, and where the bundled runtime sits beside the exe.
  *
- * In the packaged app `NL_PATH` is the exe's directory, so `runtime/node.exe`
- * resolves to the file package.mjs staged. The agent bundle itself cannot run
- * from inside resources.neu, so it is extracted to `os.getPath('data')/agent`.
+ * In the packaged app `NL_PATH` is the exe's directory (or Contents/MacOS in
+ * a .app), so the bundled runtime resolves beside it: a flat `runtime/node.exe`
+ * on Windows, and `runtime/<arch>/node` on macOS and Linux (a universal macOS
+ * package carries x64 and arm64 and the launcher normally starts the agent
+ * before the page gets here). The agent bundle itself cannot run from inside
+ * resources.neu, so it is extracted to `os.getPath('data')/agent`.
  */
 async function packagedAgentPaths(api: NeutralinoApi): Promise<{ bundle: string; nodeExe: string } | undefined> {
   const base = typeof window !== "undefined" ? window.NL_PATH : undefined;
   if (!base || !api.os?.getPath) return undefined;
   // The bundled runtime is the packaged marker: dev mode has no runtime/ dir.
-  const runtimeExe = `${base}/runtime/node.exe`;
+  const arch = window.NL_ARCH === "armhf" ? "armv7l" : window.NL_ARCH ?? "x64";
+  const runtimeExe = window.NL_OS === "Windows" ? `${base}/runtime/node.exe` : `${base}/runtime/${arch}/node`;
   let dataDir: string;
   try {
     dataDir = await api.os.getPath("data");

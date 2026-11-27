@@ -63,6 +63,8 @@ declare global {
     Neutralino?: NeutralinoApi;
     /** The app directory. */
     NL_PATH?: string;
+    /** The host architecture (x64, arm64, armhf, ia32). */
+    NL_ARCH?: string;
     /** The shell's own port. */
     NL_PORT?: string;
     /** The shell's access token (present with tokenSecurity "none"). */

@@ -28,6 +28,14 @@ Two hosts share the same session store (`~/.config/actor0` /
 `~/.local/share/actor0`) so a conversation started in the CLI resumes in the
 desktop app, and vice versa.
 
+The desktop app packages for seven targets: Windows x64; macOS Intel, Apple
+Silicon and universal; Linux x64, arm64 and armhf. Each archive is
+self-contained (shell, `resources.neu`, agent and a pinned Node runtime).
+Build commands and per-platform install notes — including the macOS
+right-click Open for the ad-hoc signature, and running the x64 Windows build
+on ARM64 Windows — are in
+[apps/desktop/web/README.md](apps/desktop/web/README.md#installing).
+
 The public project contains no product provider registry, fallback routing,
 built-in model catalog, proprietary tool implementation, memory/storage
 subsystem, billing code, or application prompt library.
