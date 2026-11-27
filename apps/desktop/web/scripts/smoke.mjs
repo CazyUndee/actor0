@@ -162,9 +162,13 @@ async function main() {
     requireFile(join(app, "Contents", "Resources", "icon.icns"), "icon.icns");
     requireExecutable(join(app, "Contents", "MacOS", "actor0"), "Mach-O launcher stub");
     requireExecutable(join(app, "Contents", "Resources", "run.sh"), "launcher script");
-    const magic = readFileSync(join(app, "Contents", "MacOS", "actor0")).subarray(0, 4);
-    if (magic.readUInt32BE(0) !== 0xfeedfacf && magic.readUInt32BE(0) !== 0xcffaedfe) {
-      fail("the macOS entry point is not a Mach-O executable");
+    const magic = readFileSync(join(app, "Contents", "MacOS", "actor0")).readUInt32BE(0);
+    // A single-architecture stub is Mach-O; the universal build is a fat
+    // header wrapping both slices. Both are executables that codesign accepts,
+    // so the check is the container, not one slice's magic.
+    const machO = new Set([0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca]);
+    if (!machO.has(magic)) {
+      fail(`the macOS entry point is not a Mach-O executable (magic 0x${magic.toString(16)})`);
     }
     if (process.platform === "darwin") {
       run("codesign", ["--verify", "--deep", "--strict", app]);
