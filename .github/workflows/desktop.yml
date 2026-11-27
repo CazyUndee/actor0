@@ -50,6 +50,9 @@ jobs:
           node-version: 22.14.0
           cache: npm
       - run: npm ci
+      # A clean checkout has no packages/harness/dist or providers/dist; the
+      # agent bundle resolves both workspaces through their build output.
+      - run: npm run build
       - name: Fetch the Neutralino binaries for this host
         working-directory: apps/desktop/web
         run: npx neu update

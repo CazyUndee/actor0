@@ -270,7 +270,7 @@ async function stageTarget(targetId) {
   stageLauncher(layout, webRoot, { targetId, binaryName });
   await stageRuntimes(layout, targetId);
 
-  if (isWindows(targetId)) patchWindowsIcon(join(layout, binaryName));
+  if (isWindows(targetId)) await patchWindowsIcon(join(layout, binaryName));
   if (mac) stageMacBundle(appDir, targetId);
   if (os === "linux") stageLinux(layout);
   if (!mac) writeReadme(layout, targetId);
@@ -333,18 +333,46 @@ async function stageRuntimes(layout, targetId) {
  * Replace the exe's embedded icon. Windows reads the taskbar and Explorer icon
  * from the resource section, and neu build embeds the Neutralino default.
  * rcedit is a Windows binary, so this runs only when packaging on Windows.
+ *
+ * A clean machine has no .tools/rcedit.exe, and a package that silently kept
+ * the Neutralino logo is not the package this repository promises. So the
+ * binary is downloaded at package time like the Node runtimes, from a pinned
+ * release and with the pinned hash checked before it is executed.
  */
-function patchWindowsIcon(exe) {
+const RCEDIT_URL = "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe";
+const RCEDIT_SHA256 = "3e7801db1a5edbec91b49a24a094aad776cb4515488ea5a4ca2289c400eade2a";
+
+async function ensureRcedit() {
+  const dir = join(webRoot, ".tools");
+  const dest = join(dir, "rcedit.exe");
+  const matches = (path) =>
+    existsSync(path) && createHash("sha256").update(readFileSync(path)).digest("hex") === RCEDIT_SHA256;
+  if (matches(dest)) return dest;
+
+  mkdirSync(dir, { recursive: true });
+  console.log("downloading rcedit for the exe icon...");
+  const response = await fetch(RCEDIT_URL);
+  if (!response.ok) throw new Error(`could not download rcedit: HTTP ${response.status} from ${RCEDIT_URL}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== RCEDIT_SHA256) {
+    throw new Error(`rcedit hash mismatch: expected ${RCEDIT_SHA256}, got ${actual}`);
+  }
+  const download = `${dest}.download`;
+  writeFileSync(download, bytes);
+  rmSync(dest, { force: true });
+  renameSync(download, dest);
+  return dest;
+}
+
+async function patchWindowsIcon(exe) {
   const ico = join(webRoot, "resources", "app", "icon.ico");
-  const rcedit = join(webRoot, ".tools", "rcedit.exe");
   if (process.platform !== "win32") {
     console.log("icon patch skipped on this host (rcedit is a Windows binary)");
     return;
   }
-  if (!existsSync(ico) || !existsSync(rcedit)) {
-    console.log("icon patch skipped (missing icon.ico or .tools/rcedit.exe) — the exe keeps the Neutralino default");
-    return;
-  }
+  if (!existsSync(ico)) throw new Error(`the icon is missing: ${ico}`);
+  const rcedit = await ensureRcedit();
   console.log("patching the exe icon...");
   execFileSync(rcedit, [exe, "--set-icon", ico], { stdio: "inherit" });
 }
