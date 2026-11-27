@@ -425,11 +425,13 @@ function stageMacBundle(appDir, targetId) {
     { stdio: "inherit" },
   );
 
-  // Sign the Mach-O files before the bundle. --deep descends, but signing the
-  // executable we built makes a failure name the binary instead of the bundle.
+  // Sign the bundle once, with --deep. Signing the stub by its own path is
+  // not a smaller operation: codesign recognises it as the app's main
+  // executable and starts signing the enclosing bundle, where --force without
+  // --deep refuses to continue at the still-unsigned shell binary (that is
+  // exactly how the first macOS CI run failed).
   execFileSync("xattr", ["-cr", appDir], { stdio: "inherit" });
   execFileSync("plutil", ["-lint", join(contents, "Info.plist")], { stdio: "inherit" });
-  execFileSync("codesign", ["--force", "--sign", "-", executable], { stdio: "inherit" });
   execFileSync("codesign", ["--force", "--deep", "--sign", "-", appDir], { stdio: "inherit" });
   execFileSync("codesign", ["--verify", "--deep", "--strict", appDir], { stdio: "inherit" });
   console.log("ad-hoc signed and verified the .app (not notarized)");
