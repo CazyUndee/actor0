@@ -90,15 +90,22 @@ function layoutDir() {
   return join(workRoot, roots[0].name);
 }
 
+function runtimeArch() {
+  // A universal archive carries one runtime per slice, not a merged binary.
+  // The host's own slice is the one this test can execute.
+  if (targetId === "mac_universal") return process.arch === "x64" ? "x64" : "arm64";
+  return TARGETS[targetId].arch === "armhf" ? "armv7l" : TARGETS[targetId].arch;
+}
+
 function bundledRuntime(layout) {
   if (TARGETS[targetId].os === "win32") return join(layout, "runtime", "node.exe");
-  const arch = TARGETS[targetId].arch === "armhf" ? "armv7l" : TARGETS[targetId].arch;
-  return join(layout, "runtime", arch, "node");
+  return join(layout, "runtime", runtimeArch(), "node");
 }
 
 function hostCanExecute() {
   if (TARGETS[targetId].os !== process.platform) return false;
   if (process.platform === "win32") return TARGETS[targetId].arch === "x64";
+  if (targetId === "mac_universal") return process.arch === "x64" || process.arch === "arm64";
   return TARGETS[targetId].arch === process.arch;
 }
 
@@ -156,6 +163,10 @@ async function main() {
   const runtime = bundledRuntime(layout);
   requireFile(join(layout, "resources.neu"), "resources.neu");
   requireFile(join(layout, "agent", "agent.mjs"), "agent bundle");
+  if (targetId === "mac_universal") {
+    requireFile(join(layout, "runtime", "x64", "node"), "Intel Node runtime");
+    requireFile(join(layout, "runtime", "arm64", "node"), "Apple Silicon Node runtime");
+  }
 
   if (TARGETS[targetId].os === "darwin") {
     const app = join(workRoot, "actor0.app");
