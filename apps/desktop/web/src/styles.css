@@ -77,13 +77,18 @@ button, input, textarea { font: inherit; color: inherit; }
   width: 100%;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, rgba(31, 24, 25, 0.94), rgba(20, 16, 17, 0.95));
-  /* The surfaces are translucent, so whatever is behind the window is *there*.
-     Without this it is legible: a document or a bright window behind the app
-     read as faint text bleeding through the transcript card. Blurred, it is a
-     tint, which is what glass is for. */
-  backdrop-filter: blur(36px) saturate(1.1);
-  -webkit-backdrop-filter: blur(36px) saturate(1.1);
+  /* Opaque, because the *window* is transparent.
+     `neutralino.config.json` sets `"transparent": true` so the rounded corners
+     can be cut out of the desktop, which makes this background's alpha the
+     thing that decides whether other windows show through the app — and 94%
+     with a 36px backdrop blur was not enough: with a bright web page open
+     behind the window, its paragraphs were legible underneath the wordmark and
+     the "type / for commands" hint, and a full-screen capture at the same
+     position before and after this change is the evidence. Blur softens large
+     dark-on-white text, it does not remove it.
+     The translucency worth having is *inside* the window — the bar, the cards,
+     the dropdowns, over an opaque shell — so that is where it lives now. */
+  background: linear-gradient(180deg, #1f1819, #141011);
   /* The silhouette: the window is transparent, so this radius is the window's
      corner radius. Anti-aliased by the browser, at any size. */
   border-radius: var(--radius-lg);
