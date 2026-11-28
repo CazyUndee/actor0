@@ -102,21 +102,21 @@ describe("rendering markdown", () => {
 describe("rendering chrome", () => {
   it("renders the composer with the slash popup closed for ordinary text", () => {
     const html = markup(
-      <Composer value="hello" onChange={() => {}} onSubmit={() => {}} onCancel={() => {}} busy={false} blocked={false} />,
+      <Composer value="hello" onChange={() => {}} onSubmit={() => {}} onCancel={() => {}} onCommand={() => {}} busy={false} blocked={false} />,
     );
     assert.ok(html.includes("composer-input"));
     assert.ok(!html.includes("slash-popup"));
   });
 
   it("opens the centered slash palette for a half-typed command", () => {
-    const html = markup(<Composer value="/" onChange={() => {}} onSubmit={() => {}} onCancel={() => {}} busy={false} blocked={false} />);
+    const html = markup(<Composer value="/" onChange={() => {}} onSubmit={() => {}} onCancel={() => {}} onCommand={() => {}} busy={false} blocked={false} />);
     assert.ok(html.includes("slash-modal"));
     assert.ok(html.includes("slash-modal-panel"));
     assert.ok(html.includes("/provider"));
   });
 
   it("shows the stop affordance while a turn is running", () => {
-    const html = markup(<Composer value="" onChange={() => {}} onSubmit={() => {}} onCancel={() => {}} busy blocked={false} />);
+    const html = markup(<Composer value="" onChange={() => {}} onSubmit={() => {}} onCancel={() => {}} onCommand={() => {}} busy blocked={false} />);
     assert.ok(html.includes("Stop"));
   });
 

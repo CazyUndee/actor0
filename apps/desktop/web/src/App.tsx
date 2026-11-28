@@ -259,11 +259,16 @@ export function App() {
 
   // A click outside every top-bar menu closes it. The picker used to close only
   // when an item was chosen, so it sat open over the transcript.
+  //
+  // The title bar does not count as outside. A menu is anchored to this window,
+  // so moving the window is not a dismissal of it — and the caption's own
+  // mousedown begins a native drag, which meant every attempt to move the
+  // window while a menu was open closed the menu instead.
   useEffect(() => {
     if (openMenu === null) return;
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest(".session-dd")) return;
+      if (target?.closest(".session-dd") || target?.closest(".titlebar")) return;
       setOpenMenu(null);
     };
     document.addEventListener("mousedown", onPointerDown);
@@ -885,7 +890,18 @@ export function App() {
             <span className="resize-edge resize-sw" data-resize-edge="sw" />
           </div>
         ) : null}
-        <div className={`titlebar ${plat === "mac" ? "titlebar-mac" : "titlebar-win"}`} id="titlebar">
+        <div
+          className={`titlebar ${plat === "mac" ? "titlebar-mac" : "titlebar-win"}`}
+          id="titlebar"
+          // A double-click on the caption maximises and restores. The window has
+          // no caption, so the gesture has to be put back — and a click on the
+          // window controls is that control's own, not the caption's.
+          onDoubleClick={(event) => {
+            if (!showWindowControls) return;
+            if ((event.target as HTMLElement).closest("button, .titlebar-controls")) return;
+            void toggleMaximizeWindow();
+          }}
+        >
           {plat === "mac" ? (
             <>
               {showWindowControls ? (
@@ -1153,6 +1169,7 @@ export function App() {
           onChange={setDraft}
           onSubmit={() => void submit()}
           onCancel={() => void cancel()}
+          onCommand={(name) => void runCommand(name)}
           busy={busy}
           blocked={blocked}
         />

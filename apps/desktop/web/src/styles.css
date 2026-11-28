@@ -11,9 +11,16 @@
   --warning: #c4a43a;
   --error: #c46b6b;
   --info: #6ba8c4;
-  --surface: #111111;
-  --surface2: #1a1a1a;
-  --surface3: #222222;
+  /* Surfaces carry a crimson tint and ~12% transparency: the window is
+     transparent (modes.window.transparent), so these let a little of the
+     desktop through and keep the dark chrome on the accent's hue instead of a
+     neutral grey sitting next to it. Transparency is shallow on purpose — the
+     transcript is read for minutes at a time and a busy wallpaper behind it
+     would cost legibility for a colour that only shows while nothing is
+     behind the text. */
+  --surface: rgba(25, 19, 20, 0.88);
+  --surface2: rgba(33, 25, 26, 0.86);
+  --surface3: rgba(42, 32, 33, 0.9);
   --border: #7d7c79;
   --border-subtle: rgba(125, 124, 121, 0.28);
   /* Opaque on purpose. Two translucent lines crossing each other paint twice,
@@ -56,13 +63,16 @@ body {
 button, input, textarea { font: inherit; color: inherit; }
 
 .app { height: 100%; display: flex; align-items: stretch; justify-content: center; }
+/* The shell is the window body: the silhouette, the gradient the cards sit on,
+   and the one surface that must stay almost opaque, because every translucent
+   card above it borrows its contrast. */
 .shell {
   flex: 1;
   min-height: 0;
   width: 100%;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, #1a1a1a, #111);
+  background: linear-gradient(180deg, rgba(31, 24, 25, 0.94), rgba(20, 16, 17, 0.95));
   /* The silhouette: the window is transparent, so this radius is the window's
      corner radius. Anti-aliased by the browser, at any size. */
   border-radius: var(--radius-lg);
@@ -106,9 +116,14 @@ button, input, textarea { font: inherit; color: inherit; }
   display: flex; align-items: center; flex: none;
   height: 38px; padding: 0 8px 0 10px; gap: 8px;
   -webkit-app-region: drag; user-select: none;
-  background: #111;
+  background: rgba(24, 18, 19, 0.9);
 }
-.titlebar button, .titlebar a, .titlebar input { -webkit-app-region: no-drag; }
+/* A double-click on the caption maximises and restores, the way it does on
+   every window that has a caption. The app has none, so the gesture is
+   restored here; the controls opt out below, or a fast second click on
+   minimise would also maximise. */
+.titlebar button, .titlebar a, .titlebar input, .titlebar-controls { -webkit-app-region: no-drag; }
+.titlebar button, .titlebar-controls { cursor: default; }
 .titlebar button, .titlebar a, .titlebar input { -webkit-app-region: no-drag; }
 .titlebar-drag { flex: 1; min-width: 12px; height: 100%; }
 .titlebar-mascot {
@@ -161,7 +176,7 @@ button, input, textarea { font: inherit; color: inherit; }
 .resize-se { bottom: 0; right: 0; cursor: nwse-resize; }
 .resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 
-.bar-row { display: flex; align-items: stretch; gap: 10px; flex: none; margin: 8px 16px 0; }
+.bar-row { display: flex; align-items: stretch; gap: 10px; flex: none; margin: 8px 16px 0; position: relative; z-index: 20; }
 .top-bar {
   flex: 1;
   min-width: 0;
@@ -174,7 +189,7 @@ button, input, textarea { font: inherit; color: inherit; }
   padding: 9px 12px;
   border: 2px solid var(--border-strong);
   border-radius: 16px;
-  background: rgba(20, 20, 20, 0.62);
+  background: rgba(33, 25, 26, 0.88);
 }
 .selector-group { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 8px; }
 .dropdown-trigger {
@@ -196,7 +211,7 @@ button, input, textarea { font: inherit; color: inherit; }
   aspect-ratio: 1 / 1; align-self: stretch; flex: none;
   display: flex; align-items: center; justify-content: center;
   border: 2px solid var(--border-strong); border-radius: 16px;
-  background: rgba(20, 20, 20, 0.62);
+  background: rgba(33, 25, 26, 0.88);
   font-size: 20px; font-weight: 700; letter-spacing: -1px; color: var(--accent-text);
 }
 .mascot.face-dead, .mascot.face-suffering { color: var(--error); }
@@ -394,7 +409,7 @@ button, input, textarea { font: inherit; color: inherit; }
   display: flex; align-items: center; gap: 10px;
   padding: 8px 10px 8px 14px;
   border: 2px solid var(--border-strong); border-radius: 14px;
-  background: #2a2a2a;
+  background: rgba(49, 38, 40, 0.88);
   cursor: text;
   /* Focus, send and stop are three colours on one control. Switched, they
      flash; transitioned, the composer reads as the same surface changing
@@ -422,7 +437,7 @@ button, input, textarea { font: inherit; color: inherit; }
    fought the composer for space; centered, it reads as a command palette
    (the shift-cmd-k convention every desktop app converged on). */
 .slash-modal {
-  position: fixed; inset: 0; z-index: 50;
+  position: fixed; inset: 38px 0 0 0; z-index: 50;
   display: flex; align-items: center; justify-content: center;
   background: rgba(10, 10, 10, 0.45);
   backdrop-filter: blur(6px);
@@ -441,8 +456,14 @@ button, input, textarea { font: inherit; color: inherit; }
 .slash-desc { color: var(--muted); font-size: 12.5px; }
 .muted { color: var(--muted); }
 
+/* The bars and the panels take the whole window except its caption.
+
+   Dragging a window is not a dismissal of what is in it: with the overlay
+   covering the title bar, opening a panel made the window undraggable and a
+   drag across the caption closed the panel instead of moving the window. The
+   38px strip is the caption, which stays live above every surface. */
 .overlay {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  position: absolute; inset: 38px 0 0 0; display: flex; align-items: center; justify-content: center;
   padding: 24px; background: rgba(10, 10, 10, 0.55); z-index: 10;
   /* The same glass the slash palette wears. Both are modals — they take the
      whole window and stop it responding — so both say so the same way. This

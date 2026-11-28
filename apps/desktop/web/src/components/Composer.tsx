@@ -21,6 +21,8 @@ export function Composer(props: {
   onChange: (value: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
+  /** Run a slash command the palette picked, without a second keypress. */
+  onCommand: (name: string) => void;
   busy: boolean;
   blocked: boolean;
   placeholder?: string;
@@ -58,6 +60,21 @@ export function Composer(props: {
     textareaRef.current?.focus();
   }
 
+  /**
+   * Pick a command from the palette.
+   *
+   * Two gestures, two meanings, because a command is both a thing to run and a
+   * word with an argument: a click (and Enter) *runs* it, so `/provider` is one
+   * click and opens the panel; Tab *completes* it into the composer, so
+   * `/model gpt-4o` can be typed. Requiring a click and then Enter was the
+   * redundant half of this — the palette had already said what to run.
+   */
+  function run(command: SlashCommandDef): void {
+    setDismissed(true);
+    props.onCommand(command.name);
+    textareaRef.current?.focus();
+  }
+
   return (
     <div className="composer-area">
       {matches.length > 0 ? (
@@ -79,7 +96,7 @@ export function Composer(props: {
                 onMouseEnter={() => setSlashIndex(index)}
                 onMouseDown={(event) => {
                   event.preventDefault();
-                  choose(command);
+                  run(command);
                 }}
               >
                 <span className="slash-name">
@@ -117,11 +134,23 @@ export function Composer(props: {
                 setSlashIndex((index) => Math.max(0, index - 1));
                 return;
               }
-              if (event.key === "Tab" || (event.key === "Enter" && matches.length > 0)) {
+              if (event.key === "Tab") {
                 const command = matches[slashIndex];
-                if (command && !(event.key === "Enter" && props.value.includes(" "))) {
+                if (command) {
                   event.preventDefault();
                   choose(command);
+                  return;
+                }
+              }
+              // Enter runs what is highlighted — but only while the composer
+              // still holds nothing but the command itself. Once a space has
+              // been typed the argument is being written, so Enter is the
+              // composer's send again.
+              if (event.key === "Enter" && !props.value.includes(" ")) {
+                const command = matches[slashIndex];
+                if (command) {
+                  event.preventDefault();
+                  run(command);
                   return;
                 }
               }
