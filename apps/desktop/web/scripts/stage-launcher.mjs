@@ -52,6 +52,13 @@ function stageWindowsLauncher(stagingDir, webRoot) {
   if (!existsSync(vbsSource)) throw new Error("packaged-launcher.vbs missing");
   cpSync(vbsSource, join(stagingDir, "start-actor0.vbs"));
 
+  // The launcher runs this before the window exists (it polls), so it ships
+  // beside the launchers rather than being generated per launch: it is the
+  // one copy the dev path runs too.
+  const frameScript = join(webRoot, "scripts", "win-frameless.ps1");
+  if (!existsSync(frameScript)) throw new Error("win-frameless.ps1 missing");
+  cpSync(frameScript, join(stagingDir, "win-frameless.ps1"));
+
   // Double-click entry: the exe's name is fixed by the shim's own script body.
   // The CRLF pair is built from a char-code join rather than written as an
   // escape, so nothing that reformats this file can turn it into real newlines.

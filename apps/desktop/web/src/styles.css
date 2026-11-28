@@ -88,6 +88,11 @@ button, input, textarea { font: inherit; color: inherit; }
   pointer-events: none;
   z-index: 40;
 }
+/* It is the *only* border because scripts/win-frameless.ps1 clears the 1px
+   DWMWA_BORDER_COLOR line Windows 11 draws around every window. That line is
+   translucent and sits just outside this ring, so leaving it in place is an app
+   wearing two borders — a light see-through one outside its own, which is what
+   this ring was removed in favour of once and should not be again. */
 /* Maximised, the window is the screen (minus the taskbar): the OS edge is the
    frame, so a radius would cut four corners off the app and an outline would
    draw a second border 2px inside the real one. */
@@ -101,9 +106,6 @@ button, input, textarea { font: inherit; color: inherit; }
   display: flex; align-items: center; flex: none;
   height: 38px; padding: 0 8px 0 10px; gap: 8px;
   -webkit-app-region: drag; user-select: none;
-  /* The same 2px as the top bar and the composer: this line divides the nav
-     from the transcript, so it is a border in the same language, not a hairline. */
-  border-bottom: 2px solid var(--border-strong);
   background: #111;
 }
 .titlebar button, .titlebar a, .titlebar input { -webkit-app-region: no-drag; }

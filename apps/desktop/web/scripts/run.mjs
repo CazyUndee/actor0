@@ -69,66 +69,30 @@ async function startAgent() {
 }
 
 /**
- * Strip the native frame from the borderless window.
+ * Hand the window's frame to the page (scripts/win-frameless.ps1).
  *
- * resizable:true makes Neutralino add WS_THICKFRAME, and it re-adds it after
- * any SWP_FRAMECHANGED. That frame is a real non-client area: the client rect
- * shrinks by 7px on every side and DWM paints the band (it showed up as an
- * accent-blue strip along the top). With the style removed the client area is
- * the whole window, so the only border is the CSS hairline.
+ * Windows draws two things over a borderless window that neither the config
+ * nor the CSS can reach: a WS_THICKFRAME non-client band (7px a side) and the
+ * 1px translucent DWMWA_BORDER_COLOR line. Both read as a second border
+ * outside the app's own ring, so both are cleared here — by the same script
+ * the packaged launcher runs, because a dev build and a shipped build must not
+ * disagree about how many borders the app has.
  *
- * Resize is in-page (invisible edge handles) because the native frame is gone.
- */
-/**
- * Make the window frameless and rounded.
- *
- * Two Windows behaviours the app cannot reach from CSS:
- *
- *  1. WS_THICKFRAME is a real non-client area: the client rect shrinks by 7px
- *     on every side and DWM paints that band (the light strip that used to run
- *     along the top). Removing the style makes the client area the whole
- *     window, so the CSS hairline is the only border.
- *  2. DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND gives the silhouette its
- *     curve, composited with alpha. No clip region: DWM rounds the window
- *     itself, so nothing is cut and nothing is drawn outside the curve but the
- *     desktop. (A region can give any radius but a stair-stepped edge.)
+ * Resize is in-page (invisible edge handles) rather than a native frame, and
+ * the shell radius is the silhouette, so there is nothing to lose by it.
  */
 function stripNativeFrame() {
-  const ps = `
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public class StripFrame {
-  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
-  [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int i, int v);
-  [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);
-}
-'@
-$deadline = (Get-Date).AddSeconds(20)
-while ((Get-Date) -lt $deadline) {
-  $p = Get-Process neutralino-win_x64 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-  if ($p) {
-    $h = $p.MainWindowHandle
-    $GWL_STYLE = -16
-    $WS_THICKFRAME = 0x00040000
-    $style = [StripFrame]::GetWindowLong($h, $GWL_STYLE)
-    if (($style -band $WS_THICKFRAME) -ne 0) {
-      [StripFrame]::SetWindowLong($h, $GWL_STYLE, $style -band (-bnot $WS_THICKFRAME)) | Out-Null
-    }
-    $pref = 2   # DWMWCP_ROUND
-    [StripFrame]::DwmSetWindowAttribute($h, 33, [ref]$pref, 4) | Out-Null
-    exit 0
-  }
-  Start-Sleep -Milliseconds 250
-}
-exit 1
-`;
   if (process.platform !== "win32") return Promise.resolve(false);
   return new Promise((resolve) => {
-    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
+    const child = spawn(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(here, "win-frameless.ps1")],
+      { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+    );
+    // The script's own words are the only report of a frame it could not
+    // clear, and a frame that survives is invisible until someone looks.
+    child.stdout.on("data", (d) => process.stdout.write(`[run] ${d}`));
+    child.stderr.on("data", (d) => process.stderr.write(`[run] ${d}`));
     child.on("exit", (code) => resolve(code === 0));
     child.on("error", () => resolve(false));
   });

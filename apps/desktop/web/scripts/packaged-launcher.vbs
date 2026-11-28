@@ -41,6 +41,20 @@ If appExe = "" Then
   WScript.Quit 1
 End If
 
+' --- take the OS frame off the window -------------------------------------
+' Windows paints two things over a borderless window that the page cannot
+' reach — a WS_THICKFRAME band and the 1px translucent DWMWA_BORDER_COLOR
+' line — and both read as a second border outside the app's own ring. The
+' script polls for the window (it does not exist yet) and is started hidden
+' and unwaited, so it costs no start-up time. Dev starts the same file
+' (scripts/run.mjs), so the two builds cannot disagree about how many borders
+' the app has.
+frameScript = here & "\win-frameless.ps1"
+If fso.FileExists(frameScript) Then
+  q = Chr(34)
+  sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " & q & frameScript & q, 0, False
+End If
+
 ' --- single instance ------------------------------------------------------
 ' If a live agent already holds the port file, this is a second launch: open
 ' the window on the existing agent instead of racing it with a second agent.
