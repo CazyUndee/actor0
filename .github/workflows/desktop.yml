@@ -56,13 +56,19 @@ jobs:
       - name: Fetch the Neutralino binaries for this host
         working-directory: apps/desktop/web
         run: npx neu update
-      # The Windows installer is NSIS and the runner has no makensis. The
-      # version is pinned because an NSIS that silently moved under the
-      # package would change the bytes a user installs without a commit
-      # saying so; scripts/nsis.mjs also looks for the chocolatey shim.
+      # The Windows installer is NSIS and the runner has no makensis;
+      # scripts/nsis.mjs looks for the chocolatey shim when it is there.
+      #
+      # Not version-pinned, deliberately and unlike rcedit: a pin is only worth
+      # having when the version is a fact, and the first one written here
+      # (3.13.0) did not exist — the job failed twice, once on a chocolatey
+      # gateway timeout that hid the real error. Any NSIS 3.x runs the script
+      # below, and the installer is smoked (silently installed, uninstalled,
+      # registry checked) in the next step, so a regression in NSIS itself shows
+      # up as a failed job rather than as a user's broken install.
       - name: Install NSIS
         if: runner.os == 'Windows'
-        run: choco install nsis --version=3.13.0 -y --no-progress
+        run: choco install nsis -y --no-progress
       - name: Build and package
         working-directory: apps/desktop/web
         run: npm run ${{ matrix.script }}
