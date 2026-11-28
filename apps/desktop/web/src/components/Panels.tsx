@@ -316,9 +316,6 @@ export function ProviderPanel(props: {
     <Panel title="Providers" onClose={props.onClose} footer="Enter to switch · Esc to close">
       <Row marker="+" label="Add provider" onClick={() => setAdding(true)} />
       <Row marker="✓" label="Test the active connection" onClick={() => props.onTest()} />
-      {props.snapshot.providers.map((provider) => (
-        <Row key={`remove-${provider.name}`} marker="✗" label={`Remove ${provider.name}`} onClick={() => props.onRemove(provider.name)} />
-      ))}
       <Divider />
       {props.kinds.length > 0 ? (
         <>
@@ -375,13 +372,28 @@ export function ProviderPanel(props: {
       <Divider />
       {providers.length === 0 ? <Row label="no providers registered" /> : null}
       {providers.map((provider: NamedProvider) => (
-        <Row
-          key={provider.name}
-          marker={provider.name === props.snapshot.activeProvider ? "●" : " "}
-          label={provider.name}
-          detail={provider.model ?? provider.baseUrl}
-          onClick={() => props.onActivate(provider.name)}
-        />
+        // Removing a provider used to be nine top-level rows of its own, above
+        // the list that names the same nine providers — one flat column where a
+        // verb and its object were three dividers apart, and the list a user
+        // reads to pick a provider was the second copy of it. The verb now sits
+        // on the row it acts on, where it cannot be mistaken for a destination.
+        <div className="provider-row" key={provider.name}>
+          <Row
+            marker={provider.name === props.snapshot.activeProvider ? "●" : " "}
+            label={provider.name}
+            detail={provider.model ?? provider.baseUrl}
+            onClick={() => props.onActivate(provider.name)}
+          />
+          <button
+            type="button"
+            className="row-x"
+            aria-label={`Remove ${provider.name}`}
+            title={`Remove ${provider.name}`}
+            onClick={() => props.onRemove(provider.name)}
+          >
+            ✕
+          </button>
+        </div>
       ))}
       {props.snapshot.providerError ? (
         <>

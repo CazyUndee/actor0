@@ -564,6 +564,19 @@ button, input, textarea { font: inherit; color: inherit; }
 .panel-item .label.mono { font-family: var(--font-mono); font-size: 13.5px; }
 .panel-item .detail { margin-left: auto; color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
 .panel-divider { height: 2px; background: var(--border-subtle); margin: 6px 4px; }
+/* A row's verb, on the row. Quiet until the row is under the pointer or the
+   keyboard is on it, because nine crosses down a list is a wall of delete
+   buttons; `:focus-visible` keeps it reachable without a pointer. */
+.provider-row { position: relative; display: flex; align-items: center; }
+.provider-row .panel-item { flex: 1; min-width: 0; padding-right: 40px; }
+.row-x {
+  position: absolute; right: 8px; display: grid; place-items: center;
+  width: 26px; height: 26px; border: 0; border-radius: 8px; cursor: pointer;
+  background: transparent; color: var(--dim); font-size: 12px; line-height: 1;
+  opacity: 0; transition: opacity 0.12s ease, color 0.12s ease;
+}
+.provider-row:hover .row-x, .provider-row:focus-within .row-x { opacity: 1; }
+.row-x:hover { color: var(--accent-text); background: var(--hl); }
 .panel-footer { padding: 9px 16px; border-top: 2px solid var(--border-subtle); color: var(--dim); font-size: 12px; }
 .panel-form { padding: 6px; display: flex; flex-direction: column; gap: 8px; }
 .form-field { display: flex; flex-direction: column; gap: 4px; padding: 0 4px; }
@@ -585,8 +598,8 @@ button, input, textarea { font: inherit; color: inherit; }
 .usage-list-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); padding: 0 4px 8px; }
 .usage-row { display: flex; align-items: center; gap: 12px; padding: 7px 4px; border-radius: 8px; }
 .usage-row:hover { background: var(--hl); }
-.usage-model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 13.5px; }
-.usage-bar { flex: 0 1 180px; height: 6px; border-radius: 999px; background: rgba(240, 237, 232, 0.08); overflow: hidden; }
+.usage-model { flex: 0 1 46%; min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 13.5px; }
+.usage-bar { flex: 1 1 auto; min-width: 80px; height: 6px; border-radius: 999px; background: rgba(240, 237, 232, 0.08); overflow: hidden; }
 .usage-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--crimson); }
 .usage-tokens { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 68px; text-align: right; }
 .usage-empty { color: var(--dim); font-size: 13px; padding: 4px; }
