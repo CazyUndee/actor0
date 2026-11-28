@@ -56,6 +56,13 @@ jobs:
       - name: Fetch the Neutralino binaries for this host
         working-directory: apps/desktop/web
         run: npx neu update
+      # The Windows installer is NSIS and the runner has no makensis. The
+      # version is pinned because an NSIS that silently moved under the
+      # package would change the bytes a user installs without a commit
+      # saying so; scripts/nsis.mjs also looks for the chocolatey shim.
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        run: choco install nsis --version=3.13.0 -y --no-progress
       - name: Build and package
         working-directory: apps/desktop/web
         run: npm run ${{ matrix.script }}
@@ -67,6 +74,18 @@ jobs:
           for target in ${{ matrix.targets }}; do
             node scripts/smoke.mjs "$target"
           done
+      # The installers are the thing a user double-clicks, so they are smoked
+      # natively — silently installed and uninstalled, mounted and verified, or
+      # inspected with dpkg-deb — rather than trusted because the archive under
+      # them passed.
+      - name: Smoke each installer
+        working-directory: apps/desktop/web
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in ${{ matrix.targets }}; do
+            node scripts/smoke-installers.mjs "$target"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.os }}
@@ -74,6 +93,9 @@ jobs:
           path: |
             apps/desktop/web/dist/*.zip
             apps/desktop/web/dist/*.tar.gz
+            apps/desktop/web/dist/*.exe
+            apps/desktop/web/dist/*.dmg
+            apps/desktop/web/dist/*.deb
             apps/desktop/web/dist/*.sha256
       - name: Upload the updater files
         if: runner.os == 'Linux'
@@ -103,7 +125,7 @@ jobs:
           set -euo pipefail
           tag="${{ github.event.release.tag_name || inputs.tag }}"
           shopt -s nullglob
-          files=(artifacts/*.zip artifacts/*.tar.gz artifacts/*.sha256 artifacts/update-manifest.json artifacts/*.neu)
+          files=(artifacts/*.zip artifacts/*.tar.gz artifacts/*.exe artifacts/*.dmg artifacts/*.deb artifacts/*.sha256 artifacts/update-manifest.json artifacts/*.neu)
           if [ ${#files[@]} -eq 0 ]; then echo "no desktop artifacts to attach" >&2; exit 1; fi
           gh release upload "$tag" "${files[@]}" --clobber
           printf 'attached %d files to %s\n' "${#files[@]}" "$tag"
