@@ -45,6 +45,23 @@ export function useMenuAnchor(open: boolean): {
     return () => window.removeEventListener("resize", bump);
   }, [open]);
 
+  /**
+   * A menu that opened is a menu that can be driven from the keyboard.
+   *
+   * The triggers are real buttons, so Enter and Space open them, but nothing
+   * moved the focus into the panel: a keyboard user could open the model list
+   * and then have to Tab through the whole app to reach a row. Focusing the
+   * first row on open is what a menu means by opening — and `:focus-visible`
+   * only draws it for the keyboard, so a click opens it silently.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLElement>("[role='menuitem']")?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
+
   useLayoutEffect(() => {
     if (!open) {
       setAlignEnd(false);

@@ -1026,3 +1026,16 @@ button, input, textarea { font: inherit; color: inherit; }
     animation: none;
   }
 }
+
+/* --- focus, visibly ------------------------------------------------------
+   Every control here is a real button or input, but nothing said so: the app
+   styled hover and open states and left focus at the browser default, which the
+   dark theme's own rules had already made invisible. A keyboard user could move
+   focus through the whole window and see nothing move. `:focus-visible` only
+   draws for keyboard focus, so a mouse click stays as quiet as it was. */
+:focus-visible {
+  outline: 2px solid rgba(201, 122, 122, 0.7);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.composer:focus-within { outline: none; }
