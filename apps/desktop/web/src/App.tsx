@@ -1,5 +1,5 @@
 /* eslint-disable react/no-array-index-key -- The transcript is append-only: entries are added, never reordered or removed, so an entry's position is its identity. */
-import type { UIEvent } from "react";
+import type { UIEvent, WheelEvent as ReactWheelEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HarnessEvent } from "@actor0/harness";
 import { AgentClient, type ConnectionState } from "./client";
@@ -29,6 +29,7 @@ import { BarDropdown } from "./components/BarDropdown";
 import { Composer } from "./components/Composer";
 import { SessionDropdown } from "./components/SessionDropdown";
 import { EntryView, ReasoningEntry } from "./components/Entry";
+import { Markdown } from "./components/Markdown";
 import { ContextMenu, type MenuAction } from "./components/ContextMenu";
 import { McpPanel, ModelPanel, NoticeBar, ProviderPanel, SessionPanel, ThinkingPanel, UsagePanel } from "./components/Panels";
 
@@ -508,21 +509,56 @@ export function App() {
   // biggest difference between an app that streams well and one that fights the
   // person reading it.
   const [pinned, setPinned] = useState(true);
+  /**
+   * True while *the app* is moving the viewport.
+   *
+   * The scroll event cannot tell the reader's scroll from the one that follows
+   * our own `scrollTop = scrollHeight`, so it used to treat its own landing as
+   * a request to stay pinned — which is how a reader who scrolled up got dragged
+   * back down a frame later.
+   */
+  const selfScroll = useRef(false);
 
   /** Is the viewport at (or within a couple of rows of) the bottom? */
   function nearBottom(node: HTMLElement): boolean {
     return node.scrollHeight - node.scrollTop - node.clientHeight <= 24;
   }
 
+  function landAtEnd(node: HTMLElement): void {
+    selfScroll.current = true;
+    node.scrollTo({ top: node.scrollHeight });
+    requestAnimationFrame(() => {
+      selfScroll.current = false;
+    });
+  }
+
   function onTranscriptScroll(event: UIEvent<HTMLDivElement>): void {
-    const node = event.currentTarget;
-    setPinned(nearBottom(node));
+    if (selfScroll.current) return;
+    setPinned(nearBottom(event.currentTarget));
+  }
+
+  /**
+   * Scrolling up is a decision, and it is taken on the first notch.
+   *
+   * Deciding from the scroll event alone waited until the viewport was already
+   * more than a couple of rows from the bottom, so a small upward flick was
+   * undone by the next token — and a reader watching an agent about to do
+   * something destructive could be pulled away from it. The wheel is the
+   * earliest signal there is, so it unpins immediately; scrolling back down only
+   * re-pins at the bottom, where the reader has caught up.
+   */
+  function onTranscriptWheel(event: ReactWheelEvent<HTMLDivElement>): void {
+    if (event.deltaY < 0) {
+      setPinned(false);
+      return;
+    }
+    if (event.deltaY > 0) setPinned(nearBottom(event.currentTarget));
   }
 
   useEffect(() => {
     const node = transcriptRef.current;
     if (!node || !pinned) return;
-    node.scrollTo({ top: node.scrollHeight });
+    landAtEnd(node);
     // A resize re-lands the bottom badly (the width change re-wraps every
     // entry), so re-pin explicitly rather than trusting the browser.
     //
@@ -532,7 +568,7 @@ export function App() {
     // would fight a reader who scrolled during it.
     const frame = requestAnimationFrame(() => {
       const settled = transcriptRef.current;
-      if (settled && pinned) settled.scrollTo({ top: settled.scrollHeight });
+      if (settled && pinned) landAtEnd(settled);
     });
     return () => cancelAnimationFrame(frame);
   }, [conversation, pinned]);
@@ -1116,7 +1152,7 @@ export function App() {
           </div>
         ) : null}
 
-        <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll}>
+        <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll} onWheel={onTranscriptWheel}>
           {conversation.entries.length === 0 && !busy ? (
             <div className="empty-state">
               <div className="empty-title">actor0</div>
@@ -1154,14 +1190,18 @@ export function App() {
             </div>
           ) : null}
           {conversation.live.text ? (
-            // Streaming text renders *without* the answer card. A card drawn
-            // around text that is still arriving reads as an empty outlined box
-      // sitting under the transcript (and then becomes the answer, which is
-      // the "weird border that stays until the answer block"). The card is the
-      // committed answer's chrome; the live text is just text, like the CLI's
-      // live region.
-      <div className="stream-text-live">{conversation.live.text}</div>
-    ) : null}
+            // The streaming answer *is* the answer: rendered as markdown, in the
+            // card it is about to become. It used to be raw text in a bare div,
+            // so at commit time it re-laid-out as rendered markdown inside a
+            // bordered card that appeared underneath it — the "the card does not
+            // render until the turn is done, then it snaps down" half of this.
+            // Now the only thing that changes at the end is the border colour.
+            <div className="entry assistant">
+              <div className="assistant-box streaming">
+                <Markdown text={conversation.live.text} />
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <Composer

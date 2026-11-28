@@ -40,6 +40,11 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
+  /* One radius for everything that is a *card in the transcript*: the answer,
+     a tool row, the thinking block, a fence. They were 8px and 14px in the same
+     column, which reads as two different kinds of object rather than one
+     transcript. 8px stays the radius of small controls — buttons, menu rows. */
+  --radius-card: 14px;
   --font-ui: "Inter", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
@@ -73,6 +78,12 @@ button, input, textarea { font: inherit; color: inherit; }
   display: flex;
   flex-direction: column;
   background: linear-gradient(180deg, rgba(31, 24, 25, 0.94), rgba(20, 16, 17, 0.95));
+  /* The surfaces are translucent, so whatever is behind the window is *there*.
+     Without this it is legible: a document or a bright window behind the app
+     read as faint text bleeding through the transcript card. Blurred, it is a
+     tint, which is what glass is for. */
+  backdrop-filter: blur(36px) saturate(1.1);
+  -webkit-backdrop-filter: blur(36px) saturate(1.1);
   /* The silhouette: the window is transparent, so this radius is the window's
      corner radius. Anti-aliased by the browser, at any size. */
   border-radius: var(--radius-lg);
@@ -196,7 +207,7 @@ button, input, textarea { font: inherit; color: inherit; }
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
   align-self: stretch; padding: 0 8px;
   border: none; border-radius: var(--radius-sm); background: transparent; cursor: pointer;
-  font-family: var(--font-mono); font-size: 12.5px;
+  font-family: var(--font-mono); font-size: 13.5px;
   transition: background 0.12s ease, color 0.12s ease;
 }
 .dropdown-trigger:hover { background: var(--hl); }
@@ -258,56 +269,81 @@ button, input, textarea { font: inherit; color: inherit; }
   max-width: 85%; padding: 10px 18px; border-radius: 14px;
   border: 2px solid rgba(107, 35, 35, 0.75);
   background: linear-gradient(180deg, rgba(107, 35, 35, 0.26), rgba(107, 35, 35, 0.14));
-  font-size: 14.5px; white-space: pre-wrap;
+  font-size: 14px; line-height: 1.62; white-space: pre-wrap;
 }
 .assistant-box {
-  padding: 12px 16px; border-radius: 14px;
+  padding: 12px 16px; border-radius: var(--radius-card);
   border: 2px solid var(--border-subtle); background: var(--surface);
-  font-size: 14.5px;
+  font-size: 14px;
 }
 .assistant-box.streaming { border-color: rgba(201, 122, 122, 0.35); }
 .assistant-box.partial { border-style: dashed; }
-/* The streaming answer: text only, no card. The card is the committed
-   answer's chrome, and drawing it around text that is still arriving is what
-   made an empty outlined box sit under the transcript until the answer landed. */
-.stream-text-live {
-  width: min(820px, 86vw);
-  margin: 0;
-  padding: 12px 16px;
-  color: var(--text);
-  font-size: 14.5px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
+/* The committed answer's chrome is the streaming answer's chrome: there is no
+   layout change at the moment a turn ends, only a border that settles. */
 .stream-text { margin: 0; white-space: pre-wrap; font: inherit; }
 .partial-note { margin-top: 6px; font-size: 12px; color: var(--warning); }
 
-.md { display: flex; flex-direction: column; gap: 14px; }
-.md-heading { margin: 4px 0 0; font-size: 15px; font-weight: 700; }
+/* --- reading a long answer ------------------------------------------------
+   The transcript is read for minutes at a time, so it is typographically
+   distinct from the chrome around it rather than merely darker: a wider
+   leading, a real gap between blocks, and headings that step in size and are
+   separated by more than a paragraph is. Every size here is the same 14px the
+   rest of the app uses — a menu that renders thinner than the answer it is
+   about makes the two look like different applications. */
+.md { display: flex; flex-direction: column; gap: 18px; font-size: 14px; font-weight: 400; line-height: 1.62; }
+.md-heading { margin: 10px 0 0; font-weight: 700; line-height: 1.3; letter-spacing: -0.01em; }
+.md-heading:first-child { margin-top: 0; }
+.md h1 { font-size: 19px; }
+.md h2 { font-size: 17px; }
+.md h3 { font-size: 15.5px; }
+.md h4, .md h5, .md h6 { font-size: 14px; }
 .md-para { margin: 0; white-space: pre-wrap; }
+.md strong { font-weight: 650; }
+/* Inline code is a *token* in the sentence, not an accent: a grey wash with the
+   text colour basically intact, so a path or an identifier is marked without
+   becoming the loudest thing on the line. */
 .md-code {
-  font-family: var(--font-mono); color: var(--accent-text);
-  background: var(--surface2); padding: 1px 5px; border-radius: 6px;
+  font-family: var(--font-mono); font-size: 0.94em; color: #e4e0da;
+  background: rgba(240, 237, 232, 0.1);
+  padding: 1px 5px; border-radius: 5px;
+  border: 1px solid rgba(240, 237, 232, 0.06);
 }
 .md-link { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
-.md-list { margin: 0; padding-left: 20px; }
-.md-list li + li { margin-top: 6px; }
+/* Depth is the indent: a child list sits inside its item, indented, with the
+   marker changing per level, so three levels are three visible levels. */
+.md-list { margin: 0; padding-left: 22px; }
+.md-list .md-list { margin: 6px 0 0; padding-left: 20px; }
+.md-list li + li { margin-top: 7px; }
+.md-list li::marker { color: var(--muted); }
+.md-list ul { list-style: circle; }
+.md-list ul ul { list-style: square; }
 .md-quote { margin: 0; padding-left: 12px; border-left: 2px solid var(--border-subtle); color: var(--muted); }
 .md-rule { border: none; border-top: 2px solid var(--border-subtle); margin: 4px 0; }
 .md-fence {
-  border: 2px solid var(--border-subtle); border-radius: var(--radius-sm);
+  border: 2px solid var(--border-subtle); border-radius: var(--radius-card);
   background: var(--surface2); overflow: hidden;
 }
 .md-fence.streaming { border-color: rgba(201, 122, 122, 0.35); }
 .md-fence-lang { padding: 4px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); border-bottom: 2px solid var(--border-subtle); }
-.md-fence-body { margin: 0; padding: 10px 12px; overflow-x: auto; white-space: pre; font: 13px/1.5 var(--font-mono); }
+.md-fence-body { margin: 0; padding: 10px 12px; overflow-x: auto; white-space: pre; font: 13px/1.55 var(--font-mono); }
+/* Prism's token classes, coloured from this app's own palette. One block, so
+   the highlight cannot drift into a second theme. */
+.md-fence-body .token.comment, .md-fence-body .token.prolog, .md-fence-body .token.doctype, .md-fence-body .token.cdata { color: #6f6e6a; font-style: italic; }
+.md-fence-body .token.punctuation { color: #8e8c88; }
+.md-fence-body .token.property, .md-fence-body .token.tag, .md-fence-body .token.constant, .md-fence-body .token.symbol, .md-fence-body .token.deleted, .md-fence-body .token.important { color: var(--accent); }
+.md-fence-body .token.boolean, .md-fence-body .token.number { color: var(--warning); }
+.md-fence-body .token.selector, .md-fence-body .token.attr-name, .md-fence-body .token.string, .md-fence-body .token.char, .md-fence-body .token.builtin, .md-fence-body .token.inserted { color: #8fbf86; }
+.md-fence-body .token.operator, .md-fence-body .token.entity, .md-fence-body .token.url { color: #bdb9b3; }
+.md-fence-body .token.atrule, .md-fence-body .token.attr-value, .md-fence-body .token.keyword { color: var(--info); }
+.md-fence-body .token.function, .md-fence-body .token.class-name { color: #d6b26a; }
+.md-fence-body .token.regex, .md-fence-body .token.variable { color: #c98fb0; }
 .md-fence-note { padding: 2px 10px 6px; font-size: 11px; color: var(--accent); }
 .md-table-wrap { overflow-x: auto; }
 .md-table { border-collapse: collapse; width: 100%; }
 .md-table th, .md-table td { padding: 6px 10px; text-align: left; border-bottom: 2px solid var(--border-subtle); white-space: nowrap; }
 .md-table th { color: var(--accent-text); font-weight: 600; }
 
-.tool-entry { border: 2px solid var(--border-subtle); border-radius: var(--radius-sm); background: rgba(26, 26, 26, 0.7); overflow: hidden; }
+.tool-entry { border: 2px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface2); overflow: hidden; }
 .tool-entry.error { border-color: rgba(196, 107, 107, 0.4); }
 .tool-header {
   width: 100%; display: flex; align-items: center; gap: 8px;
@@ -330,7 +366,7 @@ button, input, textarea { font: inherit; color: inherit; }
    that follows the newest line. */
 .reasoning-box {
   border: 2px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-card);
   background: var(--surface2);
   overflow: hidden;
 }
@@ -364,23 +400,35 @@ button, input, textarea { font: inherit; color: inherit; }
   /* ~8 lines: enough to read a paragraph of reasoning, short enough to stay a
      window. It scrolls, so the rest is reachable rather than gone. */
   max-height: 152px; overflow: auto;
-  animation: spring-down 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Opening a thinking block is the bar menus' gesture: the panel is squashed
+     along its own axis and springs back past its length as it settles. It used
+     to slide down and fade, which is the one animation in the app that moved
+     differently from every other surface that opens. */
+  transform-origin: top center;
+  animation: dropdown-push 0.26s cubic-bezier(0.22, 0.9, 0.24, 1.06);
 }
-@keyframes spring-down {
-  from { opacity: 0; transform: translateY(-10px); }
-  to   { opacity: 1; transform: translateY(0); }
+/* Closing is the opening reversed: the body is squashed back up before it
+   unmounts (ReasoningEntry holds it mounted for the duration). */
+.reasoning-body.closing { animation: push-close 0.22s cubic-bezier(0.4, 0, 0.6, 1) forwards; }
+@keyframes push-close {
+  from { opacity: 1; transform: scaleY(1); }
+  to   { opacity: 0; transform: scaleY(0.55); }
 }
-/* Closing is the opening animation reversed: the body springs back up and
-   fades before it unmounts (ReasoningEntry holds it mounted for the duration). */
-.reasoning-body.closing { animation: spring-up 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
-@keyframes spring-up {
-  from { opacity: 1; transform: translateY(0); }
-  to   { opacity: 0; transform: translateY(-10px); }
+/* The bar menus' open gesture without their corner choreography: a panel that
+   is not fused to the bar keeps its own radius while it springs open. */
+@keyframes push-open {
+  0%   { opacity: 0.55; transform: scaleY(0.55); }
+  55%  { opacity: 1; transform: scaleY(1.04); }
+  100% { opacity: 1; transform: scaleY(1); }
 }
 
-.plan-box { border: 2px solid rgba(107, 168, 196, 0.35); border-radius: var(--radius-sm); background: rgba(107, 168, 196, 0.06); padding: 10px 12px; }
-.plan-title { color: var(--info); font-weight: 600; }
-.plan-body { margin: 6px 0 0; white-space: pre-wrap; font: 12.5px/1.5 var(--font-mono); }
+/* A plan is the model's own outline: a title that reads as a heading and the
+   steps under it. It used to be a bordered blue card, which made a heading look
+   like a widget and put a second box inside the answer for no reason — the gap
+   above a heading is what separates it from the paragraph before. */
+.plan-box { padding: 0; }
+.plan-title { font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; }
+.plan-body { margin: 10px 0 0; white-space: pre-wrap; font: 14px/1.62 var(--font-mono); }
 .help-box { border: 2px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface2); padding: 10px 12px; color: var(--muted); font-size: 13px; }
 
 .live { display: flex; align-items: center; gap: 10px; width: min(820px, 86vw); padding: 2px; color: var(--muted); font-size: 13px; }
@@ -447,13 +495,14 @@ button, input, textarea { font: inherit; color: inherit; }
   width: min(560px, 86vw); max-height: min(480px, 70vh); overflow: auto;
   border: 2px solid var(--border-strong); border-radius: var(--radius-lg);
   background: rgba(17, 17, 17, 0.98); box-shadow: var(--shadow-lg);
-  animation: spring-down 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform-origin: top center;
+  animation: push-open 0.25s cubic-bezier(0.22, 0.9, 0.24, 1.06);
 }
 .slash-item { padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
 .slash-item + .slash-item { border-top: 2px solid var(--border-subtle); }
 .slash-item.selected { background: var(--hl); }
-.slash-name { color: var(--accent-text); font-size: 13px; }
-.slash-desc { color: var(--muted); font-size: 12.5px; }
+.slash-name { color: var(--accent-text); font-size: 14px; }
+.slash-desc { color: var(--muted); font-size: 13.5px; }
 .muted { color: var(--muted); }
 
 /* The bars and the panels take the whole window except its caption.
@@ -495,8 +544,8 @@ button, input, textarea { font: inherit; color: inherit; }
 .panel-item.selected { background: var(--hl); border-color: var(--border-subtle); }
 .panel-item.static, .panel-item:disabled { cursor: default; }
 .panel-item .marker { color: var(--accent-text); min-width: 18px; text-align: center; }
-.panel-item .label { font-size: 13.5px; }
-.panel-item .label.mono { font-family: var(--font-mono); font-size: 12.5px; }
+.panel-item .label { font-size: 14px; }
+.panel-item .label.mono { font-family: var(--font-mono); font-size: 13.5px; }
 .panel-item .detail { margin-left: auto; color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
 .panel-divider { height: 2px; background: var(--border-subtle); margin: 6px 4px; }
 .panel-footer { padding: 9px 16px; border-top: 2px solid var(--border-subtle); color: var(--dim); font-size: 12px; }
@@ -607,7 +656,7 @@ button, input, textarea { font: inherit; color: inherit; }
      That is the "extruded from the bar" read the flat 4px slide could not give:
      a panel that only fades has no material, a panel that stretches does. */
   transform-origin: top center;
-  animation: dropdown-push 0.26s cubic-bezier(0.22, 0.9, 0.24, 1.06);
+  animation: push-open 0.26s cubic-bezier(0.22, 0.9, 0.24, 1.06);
 }
 /* `align-end` is a hook, not a position: useMenuAnchor measures the side with
    more room, clamps the panel's width to it, and sets `left` inline. Position
@@ -696,7 +745,7 @@ button, input, textarea { font: inherit; color: inherit; }
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 8px 10px; border: none; border-radius: 8px;
   background: transparent; cursor: pointer; text-align: left;
-  font-family: var(--font-mono); font-size: 13px; color: var(--text);
+  font-family: var(--font-mono); font-size: 14px; color: var(--text);
 }
 /* The same row the right-click menu draws: every list in the app highlights the
    same way, at the same height, or the pointer has to re-learn each one. */
@@ -804,7 +853,7 @@ button, input, textarea { font: inherit; color: inherit; }
   display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
   width: 100%; padding: 8px 10px;
   border: none; border-radius: 8px; background: transparent;
-  color: var(--text); font-family: var(--font-mono); font-size: 13px;
+  color: var(--text); font-family: var(--font-mono); font-size: 14px;
   text-align: left; cursor: pointer;
 }
 .context-item:hover:not(:disabled) { background: var(--hl); }

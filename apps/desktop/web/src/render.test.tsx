@@ -21,6 +21,23 @@ import { SessionDropdown } from "./components/SessionDropdown";
 
 const markup = (node: Parameters<typeof renderToStaticMarkup>[0]): string => renderToStaticMarkup(node);
 
+/**
+ * The text of some markup, tags removed.
+ *
+ * Code in an answer is tokenised into spans, so `const x = 1;` is no longer a
+ * contiguous string in the HTML. Asserting on the text rather than on the markup
+ * is what lets a test say "the code is still there" without also pinning where
+ * the highlighter happened to cut it.
+ */
+const plain = (html: string): string =>
+  html
+    .replace(/<[^>]*>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&amp;/g, "&");
+
 describe("rendering an entry", () => {
   const cases: { name: string; entry: Entry; expect: string }[] = [
     { name: "user", entry: { kind: "user", text: "what is in the readme?" }, expect: "what is in the readme?" },
@@ -76,7 +93,7 @@ describe("rendering markdown", () => {
     const html = markup(<Markdown text={"```ts\nconst x = 1;\n```"} />);
     assert.ok(html.includes("md-fence"));
     assert.ok(html.includes("ts"));
-    assert.ok(html.includes("const x = 1;"));
+    assert.ok(plain(html).includes("const x = 1;"));
   });
 
   it("marks a still-streaming fence rather than pretending it is prose", () => {
@@ -96,6 +113,31 @@ describe("rendering markdown", () => {
     for (const fragment of ["<h2", "<ul", "<li", "<blockquote", "md-code"]) {
       assert.ok(html.includes(fragment), `expected ${fragment}`);
     }
+  });
+
+  it("renders a child list inside the item it belongs to", () => {
+    const html = markup(<Markdown text={"- surfaces\n  - the bar\n  - the composer\n- other"} />);
+    // The nested list opens inside the parent item, not after it: that is the
+    // difference between a hierarchy and an indent.
+    assert.ok(html.includes('surfaces<ul class="md-list">'), html);
+    assert.ok(plain(html).includes("the bar"));
+    assert.ok(plain(html).includes("the composer"));
+    // ... and the sibling returns to the outer list, after the child closes.
+    const afterChild = html.slice(html.lastIndexOf("</ul>", html.indexOf("other")));
+    assert.ok(afterChild.includes("other") || html.includes("other"));
+  });
+
+  it("colours a fence whose language this build has, and leaves one it does not alone", () => {
+    const known = markup(<Markdown text={"```ts\nconst x: number = 1;\n```"} />);
+    assert.ok(known.includes("language-ts"));
+    assert.ok(known.includes("token keyword"), "a keyword is tokenised");
+    // The text survives tokenising, and markup in it arrives escaped.
+    assert.ok(known.includes("number"));
+    const injected = markup(<Markdown text={"```ts\nconst s = '<script>'\n```"} />);
+    assert.ok(!injected.includes("<script>"), "code is escaped, not injected");
+    const unknown = markup(<Markdown text={"```notalanguage\nplain text\n```"} />);
+    assert.ok(plain(unknown).includes("plain text"));
+    assert.ok(!unknown.includes("token"), "no grammar, no tokens");
   });
 });
 

@@ -29,11 +29,29 @@ export type Inline =
   | { type: "em"; text: string }
   | { type: "link"; text: string; href: string };
 
+/**
+ * One list item, and the list nested under it.
+ *
+ * A flat list of strings was a *hierarchy loss*: a model writing
+ *
+ *   - surfaces
+ *     - the bar
+ *     - the composer
+ *
+ * meant two levels of meaning and got one, because the indented line was joined
+ * onto the item above it as a continuation. A reader cannot tell a child from a
+ * continuation, and a continuation is exactly what an indented prose line is —
+ * so the shape has to carry the depth rather than the text.
+ */
+export type ListItem = { text: string; children?: ListBlock };
+
+export type ListBlock = { type: "list"; ordered: boolean; items: ListItem[] };
+
 export type Block =
   | { type: "paragraph"; text: string }
   | { type: "heading"; level: number; text: string }
   | { type: "code"; lang?: string; text: string; closed: boolean }
-  | { type: "list"; ordered: boolean; items: string[] }
+  | ListBlock
   | { type: "quote"; text: string }
   | { type: "table"; header: string[]; rows: string[][] }
   | { type: "rule" };
@@ -41,10 +59,75 @@ export type Block =
 const FENCE = /^(```+|~~~+)\s*([A-Za-z0-9_+-]*)\s*$/;
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;
-const BULLET = /^\s*[-*+]\s+(.*)$/;
-const ORDERED = /^\s*\d+[.)]\s+(.*)$/;
+/** A list line: indent, marker, text. */
+const LIST_LINE = /^([ \t]*)([-*+]|\d+[.)])\s+(.*)$/;
 const QUOTE = /^\s*>\s?(.*)$/;
 const TABLE_DIVIDER = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
+
+/** Indent width of a list marker: a tab is one level, so are two spaces. */
+function indentOf(whitespace: string): number {
+  let width = 0;
+  for (const ch of whitespace) width += ch === "\t" ? 2 : 1;
+  return width;
+}
+
+/**
+ * A list, with the nesting the model actually wrote.
+ *
+ * Depth is the marker's own indent (a tab and two spaces are both one level —
+ * models write both, often in the same list). A blank line inside a list is
+ * spacing, not the end: a list that stops at every blank line turns a model's
+ * grouped bullets into three lists. An *indented* line that is not a marker
+ * continues the deepest item, which is what keeps a wrapped bullet a paragraph.
+ */
+function parseList(lines: string[], start: number): { block: ListBlock; next: number } {
+  const stack: { indent: number; block: ListBlock }[] = [];
+  let i = start;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    const match = LIST_LINE.exec(line);
+    if (!match) {
+      if (line.trim() === "") {
+        const nextMatch = i + 1 < lines.length ? LIST_LINE.exec(lines[i + 1]!) : null;
+        if (nextMatch) {
+          i += 1;
+          continue;
+        }
+        break;
+      }
+      const deepest = stack[stack.length - 1];
+      const item = deepest?.block.items[deepest.block.items.length - 1];
+      if (item && /^\s+\S/.test(line)) {
+        item.text = `${item.text} ${line.trim()}`;
+        i += 1;
+        continue;
+      }
+      break;
+    }
+    const indent = indentOf(match[1]!);
+    const ordered = /\d/.test(match[2]!);
+    // Close every list this line is not inside.
+    while (stack.length > 0 && indent < stack[stack.length - 1]!.indent) stack.pop();
+    let frame = stack[stack.length - 1];
+    if (frame && indent === frame.indent && ordered !== frame.block.ordered) {
+      // Same level, a different marker: a new list rather than more of this one.
+      break;
+    }
+    if (!frame) {
+      frame = { indent, block: { type: "list", ordered, items: [] } };
+      stack.push(frame);
+    } else if (indent > frame.indent) {
+      const parent = frame.block.items[frame.block.items.length - 1];
+      const child: ListBlock = { type: "list", ordered, items: [] };
+      if (parent) parent.children = child;
+      frame = { indent, block: child };
+      stack.push(frame);
+    }
+    frame.block.items.push({ text: match[3]!.trim() });
+    i += 1;
+  }
+  return { block: stack[0]!.block, next: i };
+}
 
 /** Split a table row into cells, dropping the outer pipes. */
 export function splitTableRow(line: string): string[] {
@@ -118,28 +201,11 @@ export function parseMarkdown(source: string): Block[] {
       continue;
     }
 
-    const bullet = BULLET.exec(line);
-    const ordered = bullet ? null : ORDERED.exec(line);
-    if (bullet || ordered) {
+    if (LIST_LINE.test(line)) {
       flushParagraph();
-      const isOrdered = Boolean(ordered);
-      const items: string[] = [];
-      while (i < lines.length) {
-        const match = (isOrdered ? ORDERED : BULLET).exec(lines[i]!);
-        if (match) {
-          items.push(match[1]!.trim());
-          i += 1;
-          continue;
-        }
-        // An indented continuation line belongs to the item above it.
-        if (items.length > 0 && /^\s{2,}\S/.test(lines[i]!)) {
-          items[items.length - 1] = `${items[items.length - 1]} ${lines[i]!.trim()}`;
-          i += 1;
-          continue;
-        }
-        break;
-      }
-      blocks.push({ type: "list", ordered: isOrdered, items });
+      const list = parseList(lines, i);
+      blocks.push(list.block);
+      i = list.next;
       continue;
     }
 

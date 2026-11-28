@@ -1,6 +1,7 @@
 /* eslint-disable react/no-array-index-key -- A parsed markdown document has no stable identity for its blocks or inline runs: they are produced fresh from the answer text on every render, and the list is append-only within a render, so the index is the identity. */
 import { Fragment, type ReactNode } from "react";
-import { parseInline, parseMarkdown, type Block, type Inline } from "../markdown";
+import { parseInline, parseMarkdown, type Block, type Inline, type ListBlock } from "../markdown";
+import { highlight } from "../highlight";
 
 /**
  * Markdown, rendered.
@@ -51,6 +52,30 @@ function prose(text: string, keyPrefix: string): ReactNode {
   ));
 }
 
+/**
+ * A list, and the lists under it.
+ *
+ * The nesting is rendered as a list inside the owning `<li>`, which is what HTML
+ * means by a sub-list — as a sibling it would read as another top-level list
+ * that merely happens to be indented. The indent itself is CSS, so the depth a
+ * model wrote is the depth a reader sees.
+ */
+function ListItems({ block, keyPrefix }: { block: ListBlock; keyPrefix: string }): ReactNode {
+  const Tag = block.ordered ? "ol" : "ul";
+  return (
+    <Tag className="md-list">
+      {block.items.map((item, index) => (
+        <li key={`${keyPrefix}-${index}`}>
+          {inline(parseInline(item.text), `${keyPrefix}-${index}`)}
+          {item.children ? (
+            <ListItems block={item.children} keyPrefix={`${keyPrefix}-${index}-children`} />
+          ) : null}
+        </li>
+      ))}
+    </Tag>
+  );
+}
+
 function BlockView({ block, index }: { block: Block; index: number }): ReactNode {
   const key = `b${index}`;
   switch (block.type) {
@@ -62,12 +87,20 @@ function BlockView({ block, index }: { block: Block; index: number }): ReactNode
         </Tag>
       );
     }
-    case "code":
+    case "code": {
+      // Highlighted when this build has the grammar, plain when it does not.
+      // Prism escapes as it tokenises, so the markup is safe here; the plain
+      // path is a text node and needs no escaping at all.
+      const markup = highlight(block.text, block.lang);
       return (
         <div className={`md-fence ${block.closed ? "" : "streaming"}`} key={key}>
           {block.lang ? <div className="md-fence-lang">{block.lang}</div> : null}
           <pre className="md-fence-body">
-            <code>{block.text}</code>
+            {markup === undefined ? (
+              <code>{block.text}</code>
+            ) : (
+              <code className={`language-${block.lang}`} dangerouslySetInnerHTML={{ __html: markup }} />
+            )}
           </pre>
           {block.closed ? null : (
             // Saying so is the point: an unterminated fence is what most of a
@@ -77,20 +110,9 @@ function BlockView({ block, index }: { block: Block; index: number }): ReactNode
           )}
         </div>
       );
+    }
     case "list":
-      return block.ordered ? (
-        <ol className="md-list" key={key}>
-          {block.items.map((item, itemIndex) => (
-            <li key={`${key}-${itemIndex}`}>{inline(parseInline(item), `${key}-${itemIndex}`)}</li>
-          ))}
-        </ol>
-      ) : (
-        <ul className="md-list" key={key}>
-          {block.items.map((item, itemIndex) => (
-            <li key={`${key}-${itemIndex}`}>{inline(parseInline(item), `${key}-${itemIndex}`)}</li>
-          ))}
-        </ul>
-      );
+      return <ListItems block={block} keyPrefix={key} key={key} />;
     case "quote":
       return (
         <blockquote className="md-quote" key={key}>

@@ -89,14 +89,55 @@ describe("other blocks", () => {
   it("parses bullet and ordered lists", () => {
     const bullets = parseMarkdown("- one\n- two");
     assert.equal(bullets[0]!.type === "list" && bullets[0]!.ordered, false);
-    assert.deepEqual(bullets[0]!.type === "list" && bullets[0]!.items, ["one", "two"]);
+    assert.deepEqual(bullets[0]!.type === "list" && bullets[0]!.items.map((item) => item.text), ["one", "two"]);
     const ordered = parseMarkdown("1. one\n2. two");
     assert.equal(ordered[0]!.type === "list" && ordered[0]!.ordered, true);
   });
 
   it("joins an indented continuation line to its list item", () => {
     const blocks = parseMarkdown("- first line\n  continues here\n- second");
-    assert.deepEqual(blocks[0]!.type === "list" && blocks[0]!.items, ["first line continues here", "second"]);
+    assert.deepEqual(blocks[0]!.type === "list" && blocks[0]!.items.map((item) => item.text), [
+      "first line continues here",
+      "second",
+    ]);
+  });
+
+  it("nests a deeper marker under the item above it instead of merging it", () => {
+    const blocks = parseMarkdown("- surfaces\n  - the bar\n  - the composer\n- other");
+    const list = blocks[0]!;
+    assert.equal(list.type, "list");
+    if (list.type !== "list") return;
+    // The child is a list of its own, not two more sentences on "surfaces".
+    assert.deepEqual(list.items.map((item) => item.text), ["surfaces", "other"]);
+    assert.deepEqual(list.items[0]!.children?.items.map((item) => item.text), ["the bar", "the composer"]);
+    assert.equal(list.items[0]!.children?.ordered, false);
+    assert.equal(list.items[1]!.children, undefined);
+  });
+
+  it("treats a tab as one level and numbers a child list of its own", () => {
+    const blocks = parseMarkdown("1. install\n\t1. download\n\t2. run\n2. configure");
+    const list = blocks[0]!;
+    if (list.type !== "list") throw new Error("expected a list");
+    assert.equal(list.ordered, true);
+    assert.deepEqual(list.items.map((item) => item.text), ["install", "configure"]);
+    assert.equal(list.items[0]!.children?.ordered, true);
+    assert.deepEqual(list.items[0]!.children?.items.map((item) => item.text), ["download", "run"]);
+  });
+
+  it("keeps a blank line inside a list as spacing, and a level-2 child under a level-1 item", () => {
+    const blocks = parseMarkdown("- one\n\n- two\n  - two a\n    - two a i");
+    const list = blocks[0]!;
+    if (list.type !== "list") throw new Error("expected a list");
+    assert.deepEqual(list.items.map((item) => item.text), ["one", "two"]);
+    const twoA = list.items[1]!.children?.items[0];
+    assert.equal(twoA?.text, "two a");
+    assert.equal(twoA?.children?.items[0]?.text, "two a i");
+  });
+
+  it("starts a new list when the marker changes at the same depth", () => {
+    const blocks = parseMarkdown("- bullet\n1. first\n2. second");
+    assert.deepEqual(blocks.map((block) => block.type), ["list", "list"]);
+    assert.equal(blocks[1]!.type === "list" && blocks[1]!.ordered, true);
   });
 
   it("parses a blockquote spanning several lines", () => {
