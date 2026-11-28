@@ -137,20 +137,25 @@ export function ProviderPanel(props: {
   onClose: () => void;
 }) {
   /**
-   * The add flow, phased like the CLI's: kind → url → key → verify → models.
+   * The add flow: what it is, then which model.
    *
-   * One form asking for four things at once is faster to write and worse to
-   * use: it cannot tell the user *which* field was wrong (the URL? the key?),
-   * and it cannot offer the models the endpoint actually has, which is the
-   * thing that saves a round trip to `/model` later. Each phase here can only
-   * be submitted with what it needs, and a failure lands in the phase it
-   * belongs to.
+   * Two phases, in the order the fields read. It used to be three — url, then
+   * key and name, then the model list — which put an action row *above* the
+   * field it acted on and asked for the name after the credential it has nothing
+   * to do with. One form in reading order (name, endpoint, key), one button
+   * under it, then the model list with its own search; the finish button sits at
+   * the bottom, where the flow ends.
+   *
+   * A listing that fails is still a successful phase: the key may be right and
+   * the list endpoint absent, so a manual model name is offered rather than the
+   * flow being abandoned (the CLI behaves the same way).
    */
-  type AddPhase = "url" | "key" | "models";
+  type AddPhase = "details" | "model";
   const [adding, setAdding] = useState(false);
-  const [phase, setPhase] = useState<AddPhase>("url");
+  const [phase, setPhase] = useState<AddPhase>("details");
   const [form, setForm] = useState({ name: "", baseUrl: "", model: "", apiKey: "" });
   const [discovered, setDiscovered] = useState<string[]>([]);
+  const [modelQuery, setModelQuery] = useState("");
   const [phaseError, setPhaseError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [signingIn, setSigningIn] = useState<string | null>(null);
@@ -159,187 +164,149 @@ export function ProviderPanel(props: {
   const providers = props.snapshot.providers;
 
   if (adding) {
-    const submitUrl = (): void => {
+    const entry = () => ({
+      baseUrl: form.baseUrl.trim(),
+      ...(form.name.trim() ? { name: form.name.trim() } : {}),
+      model: form.model.trim(),
+      ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
+    });
+
+    const findModels = (): void => {
       const url = form.baseUrl.trim();
       if (!/^https?:\/\//i.test(url)) {
         setPhaseError("A base URL starting with http:// or https:// is required.");
         return;
       }
       setPhaseError(null);
-      setPhase("key");
-    };
-
-    const submitKey = (): void => {
-      setPhaseError(null);
       setSubmitting(true);
       void props
-        .onDiscoverModels(form.baseUrl.trim(), form.apiKey.trim() || undefined)
+        .onDiscoverModels(url, form.apiKey.trim() || undefined)
         .then((models) => {
           setDiscovered(models);
-          setPhase("models");
+          setModelQuery("");
+          setPhase("model");
         })
         .catch((error: Error) => {
-          // A listing that failed is not a reason to abandon the provider: the
-          // key may be right and the list endpoint absent. The CLI treats this
-          // the same way — verify, and fall back to a manual model name.
           setDiscovered([]);
-          setPhase("models");
+          setPhase("model");
           setPhaseError(`Could not list models (${error.message}) — name one by hand.`);
         })
         .finally(() => setSubmitting(false));
     };
 
-    const title = phase === "url" ? "Add provider — endpoint" : phase === "key" ? "Add provider — credential" : "Add provider — model";
-    const footer =
-      phase === "url"
-        ? "Enter to continue · Esc to go back"
-        : phase === "key"
-          ? "Enter to list models · Esc to go back"
-          : "Enter to add · Esc to go back";
+    const finish = (): void => {
+      if (!form.model.trim()) {
+        setPhaseError("Name the model this provider should use.");
+        return;
+      }
+      props.onAdd(entry());
+      setAdding(false);
+    };
+
+    const field = (
+      label: string,
+      key: "name" | "baseUrl" | "apiKey",
+      placeholder: string,
+      type?: string,
+    ) => (
+      <label className="form-field">
+        <span className="form-label">{label}</span>
+        <input
+          className="form-input"
+          type={type ?? "text"}
+          value={form[key]}
+          placeholder={placeholder}
+          onChange={(event) => setForm({ ...form, [key]: event.target.value })}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            findModels();
+          }}
+          spellCheck={false}
+          autoFocus={key === "name"}
+        />
+      </label>
+    );
+
+    const matches = discovered.filter((model) => model.toLowerCase().includes(modelQuery.toLowerCase()));
 
     return (
       <Panel
-        title={title}
+        title={phase === "details" ? "Add provider" : "Add provider — model"}
         onClose={() => {
-          // Esc in phase one leaves the whole flow; deeper phases step back, so a
-          // mistyped key is a correction rather than starting over.
-          if (phase === "url") {
+          // Esc in the first phase leaves the whole flow; the model phase steps
+          // back to the details, so a bad endpoint is a correction and not a
+          // restart.
+          if (phase === "details") {
             setAdding(false);
             return;
           }
           setPhaseError(null);
-          setPhase(phase === "models" ? "key" : "url");
+          setPhase("details");
         }}
-        footer={footer}
+        footer={
+          phase === "details"
+            ? "Enter to find models · Esc to cancel"
+            : "Enter to add · Esc to go back"
+        }
+        {...(phase === "model" && discovered.length > 0
+          ? {
+              search: {
+                value: modelQuery,
+                onChange: setModelQuery,
+                placeholder: `search ${discovered.length} model${discovered.length === 1 ? "" : "s"}`,
+              },
+            }
+          : {})}
       >
         <div className="panel-form">
-          {form.baseUrl.trim() && phase !== "url" ? (
-            <div className="form-review">{form.baseUrl.trim()}</div>
-          ) : null}
-
-          {phase === "url" ? (
+          {phase === "details" ? (
             <>
-              <Row marker="→" label="Continue" onClick={submitUrl} />
+              {field("name", "name", "optional — defaults to the host")}
+              {field("base url", "baseUrl", "https://api.example.com/v1")}
+              {field("api key", "apiKey", "stored in config.json, or ${ENV_VAR}", "password")}
               {phaseError ? <div className="form-error">{phaseError}</div> : null}
-              <label className="form-field">
-                <span className="form-label">base URL</span>
-                <input
-                  className="form-input"
-                  value={form.baseUrl}
-                  placeholder="https://api.example.com/v1"
-                  onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      submitUrl();
-                    }
-                  }}
-                  autoFocus
-                  spellCheck={false}
-                />
-              </label>
-            </>
-          ) : null}
-
-          {phase === "key" ? (
-            <>
               <Row
-                marker="↻"
-                label={submitting ? "listing models…" : "Continue — list models"}
-                onClick={() => !submitting && submitKey()}
+                marker="→"
+                label={submitting ? "finding models…" : "Find models"}
+                onClick={() => !submitting && findModels()}
               />
-              {phaseError ? <div className="form-error">{phaseError}</div> : null}
-              <label className="form-field">
-                <span className="form-label">api key</span>
-                <input
-                  className="form-input"
-                  type="password"
-                  value={form.apiKey}
-                  placeholder="stored in config.json, or ${ENV_VAR}"
-                  onChange={(event) => setForm({ ...form, apiKey: event.target.value })}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      submitKey();
-                    }
-                  }}
-                  autoFocus
-                  spellCheck={false}
-                />
-              </label>
-              <label className="form-field">
-                <span className="form-label">name (optional)</span>
-                <input
-                  className="form-input"
-                  value={form.name}
-                  placeholder="defaults to the host"
-                  onChange={(event) => setForm({ ...form, name: event.target.value })}
-                  spellCheck={false}
-                />
-              </label>
             </>
-          ) : null}
-
-          {phase === "models" ? (
+          ) : (
             <>
-              <Row
-                marker="+"
-                label="Add this provider"
-                onClick={() => {
-                  if (!form.model.trim()) {
-                    setPhaseError("Name the model this provider should use.");
-                    return;
-                  }
-                  props.onAdd({
-                    baseUrl: form.baseUrl.trim(),
-                    ...(form.name.trim() ? { name: form.name.trim() } : {}),
-                    model: form.model.trim(),
-                    ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
-                  });
-                  setAdding(false);
-                }}
-              />
+              <div className="form-review">{form.baseUrl.trim()}</div>
               {phaseError ? <div className="form-error">{phaseError}</div> : null}
-              {discovered.length > 0 ? (
-                discovered.map((model) => (
-                  <Row
-                    key={model}
-                    marker={form.model === model ? "✓" : " "}
-                    label={model}
-                    mono
-                    onClick={() => setForm({ ...form, model })}
-                  />
-                ))
-              ) : null}
+              {matches.map((model) => (
+                <Row
+                  key={model}
+                  marker={form.model === model ? "✓" : " "}
+                  label={model}
+                  mono
+                  onClick={() => setForm({ ...form, model })}
+                />
+              ))}
+              {discovered.length > 0 && matches.length === 0 ? <Row label="no matches" /> : null}
               <label className="form-field">
-                <span className="form-label">model {discovered.length > 0 ? "(or name another)" : ""}</span>
+                <span className="form-label">
+                  model {discovered.length > 0 ? "(or name another)" : ""}
+                </span>
                 <input
                   className="form-input"
                   value={form.model}
                   placeholder="e.g. gpt-4o-mini"
                   onChange={(event) => setForm({ ...form, model: event.target.value })}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      if (!form.model.trim()) {
-                        setPhaseError("Name the model this provider should use.");
-                        return;
-                      }
-                      props.onAdd({
-                        baseUrl: form.baseUrl.trim(),
-                        ...(form.name.trim() ? { name: form.name.trim() } : {}),
-                        model: form.model.trim(),
-                        ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
-                      });
-                      setAdding(false);
-                    }
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    finish();
                   }}
-                  autoFocus
+                  autoFocus={discovered.length === 0}
                   spellCheck={false}
                 />
               </label>
+              <Row marker="+" label="Add this provider" onClick={finish} />
             </>
-          ) : null}
+          )}
         </div>
       </Panel>
     );
@@ -523,7 +490,16 @@ export function SessionPanel(props: {
   );
 }
 
-/** `/usage` — tokens and turns, from the local log. */
+/**
+ * `/usage` — tokens and turns, from the local log.
+ *
+ * Two numbers and a breakdown, which is all this panel is. It used to be a row
+ * of tabs, three dividers and a sentence — the same list rows as a picker, used
+ * for something that is not a list of choices, so nothing read as a figure. The
+ * period is a tab strip at the top, the totals are figures, and each model gets a
+ * share of the widest one: the question "where did my tokens go" is a proportion,
+ * and a proportion is a bar.
+ */
 export function UsagePanel(props: {
   usage: UsageSnapshot;
   onPeriod: (period: "day" | "week" | "month" | "all") => void;
@@ -535,14 +511,17 @@ export function UsagePanel(props: {
     { key: "month", label: "month" },
     { key: "all", label: "all" },
   ];
+  const widest = Math.max(...props.usage.byModel.map((model) => model.tokens), 1);
   return (
     <Panel title="usage" onClose={props.onClose} footer="Esc to close">
-      <div className="panel-item static">
-        <div className="usage-tabs">
+      <div className="usage-head">
+        <div className="usage-tabs" role="tablist" aria-label="Period">
           {periods.map((period) => (
             <button
               type="button"
               key={period.key}
+              role="tab"
+              aria-selected={props.usage.period === period.key}
               className={`usage-tab ${props.usage.period === period.key ? "active" : ""}`}
               onClick={() => props.onPeriod(period.key)}
             >
@@ -550,16 +529,30 @@ export function UsagePanel(props: {
             </button>
           ))}
         </div>
+        <div className="usage-figures">
+          <div className="usage-figure">
+            <span className="usage-value">{formatTokens(props.usage.tokens)}</span>
+            <span className="usage-label">tokens</span>
+          </div>
+          <div className="usage-figure">
+            <span className="usage-value">{props.usage.turns}</span>
+            <span className="usage-label">{props.usage.turns === 1 ? "turn" : "turns"}</span>
+          </div>
+        </div>
       </div>
-      <Divider />
-      <Row label={`${formatTokens(props.usage.tokens)} tokens · ${props.usage.turns} turn${props.usage.turns === 1 ? "" : "s"}`} />
-      <Divider />
-      <Row label="by model" />
-      <Divider />
-      {props.usage.byModel.length === 0 ? <Row label="no usage recorded" /> : null}
-      {props.usage.byModel.map((model) => (
-        <Row key={model.model} marker="·" label={model.model} detail={formatTokens(model.tokens)} mono />
-      ))}
+      <div className="usage-list">
+        <div className="usage-list-title">by model</div>
+        {props.usage.byModel.length === 0 ? <div className="usage-empty">no usage recorded</div> : null}
+        {props.usage.byModel.map((model) => (
+          <div className="usage-row" key={model.model}>
+            <span className="usage-model">{model.model}</span>
+            <span className="usage-bar" aria-hidden="true">
+              <span className="usage-bar-fill" style={{ width: `${Math.max(2, (model.tokens / widest) * 100)}%` }} />
+            </span>
+            <span className="usage-tokens">{formatTokens(model.tokens)}</span>
+          </div>
+        ))}
+      </div>
     </Panel>
   );
 }

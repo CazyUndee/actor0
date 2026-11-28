@@ -512,8 +512,13 @@ button, input, textarea { font: inherit; color: inherit; }
    drag across the caption closed the panel instead of moving the window. The
    38px strip is the caption, which stays live above every surface. */
 .overlay {
-  position: absolute; inset: 38px 0 0 0; display: flex; align-items: center; justify-content: center;
-  padding: 24px; background: rgba(10, 10, 10, 0.55); z-index: 10;
+  position: absolute; inset: 38px 0 0 0; display: flex; align-items: flex-start; justify-content: center;
+  /* Top-anchored, not centred. A panel whose content changes height — a filter
+     narrowing a list, a phase with fewer fields — moved its own first row up and
+     down under the pointer while the user was reading it, and a modal that
+     shifts is worse than one that sits low: the top edge is where the eye and
+     the focus land. */
+  padding: 48px 24px 24px; background: rgba(10, 10, 10, 0.55); z-index: 10;
   /* The same glass the slash palette wears. Both are modals — they take the
      whole window and stop it responding — so both say so the same way. This
      overlay had drifted without it, which made a panel and the palette look
@@ -557,6 +562,23 @@ button, input, textarea { font: inherit; color: inherit; }
 .usage-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
 .usage-tab { padding: 3px 10px; border-radius: 8px; border: 2px solid var(--border-subtle); color: var(--muted); font-size: 12.5px; background: transparent; cursor: pointer; }
 .usage-tab.active { color: var(--text); background: var(--hl); border-color: var(--border-strong); }
+/* The panel's own layout: figures on top, a proportion list under them. Not the
+   picker's rows — a number is not a choice, and rendering one at row height with
+   a divider under it was why this panel read as an unfinished list. */
+.usage-head { display: flex; flex-direction: column; gap: 16px; padding: 4px 6px 16px; border-bottom: 2px solid var(--border-subtle); }
+.usage-figures { display: flex; gap: 36px; }
+.usage-figure { display: flex; flex-direction: column; gap: 2px; }
+.usage-value { font-size: 24px; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.usage-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.usage-list { padding: 12px 6px 4px; display: flex; flex-direction: column; gap: 2px; }
+.usage-list-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); padding: 0 4px 8px; }
+.usage-row { display: flex; align-items: center; gap: 12px; padding: 7px 4px; border-radius: 8px; }
+.usage-row:hover { background: var(--hl); }
+.usage-model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 13.5px; }
+.usage-bar { flex: 0 1 180px; height: 6px; border-radius: 999px; background: rgba(240, 237, 232, 0.08); overflow: hidden; }
+.usage-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--crimson); }
+.usage-tokens { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 68px; text-align: right; }
+.usage-empty { color: var(--dim); font-size: 13px; padding: 4px; }
 
 @media (max-width: 900px) {
   .entry, .live, .live-reasoning, .composer-area { width: 94vw; }
