@@ -303,7 +303,7 @@ describe("the top-bar menus", () => {
 
   it("renders a bar menu's items only while it is open", () => {
     const closed = markup(
-      <BarDropdown label="built-in" title="Provider" open={false} onOpenChange={() => {}}>
+      <BarDropdown label="built-in" kind="provider" title="Provider" open={false} onOpenChange={() => {}}>
         <div className="session-empty">no saved providers</div>
       </BarDropdown>,
     );
@@ -311,7 +311,7 @@ describe("the top-bar menus", () => {
     assert.ok(!closed.includes("no saved providers"), "a closed menu renders no items");
 
     const open = markup(
-      <BarDropdown label="built-in" title="Provider" open onOpenChange={() => {}}>
+      <BarDropdown label="built-in" kind="provider" title="Provider" open onOpenChange={() => {}}>
         <div className="session-empty">no saved providers</div>
       </BarDropdown>,
     );

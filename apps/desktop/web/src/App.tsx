@@ -47,6 +47,15 @@ import { McpPanel, ModelPanel, NoticeBar, ProviderPanel, SessionPanel, ThinkingP
 
 type Mode = "chat" | "provider" | "model" | "thinking" | "session" | "usage" | "mcp";
 /** Which top-bar menu is open. At most one — a panel is separate and modal. */
+/**
+ * Every row the pointer can land on, in one selector.
+ *
+ * The hover highlight is a radial that grows from the cursor, so the row has to
+ * be found from the event target: this list is the contract between the CSS that
+ * paints it and the handler that feeds it a position.
+ */
+const HOVER_ROWS =
+  ".session-item, .panel-item, .context-item, .slash-item, .dropdown-trigger, .tool-header, .reasoning-header, .usage-row, .session-action";
 type BarMenu = "session" | "provider" | "model";
 
 export function App() {
@@ -905,11 +914,35 @@ export function App() {
     });
   }, [conversation.entries]);
 
+  /**
+   * The pointer's position inside whatever row it is over.
+   *
+   * One delegated listener for every list in the app (menus, panels, palettes,
+   * tool rows): the highlight is painted as a radial gradient that fills from
+   * this point, so each row needs to know where the pointer entered. Doing it per
+   * component would be twelve listeners doing the same arithmetic; doing it here
+   * is one.
+   */
+  const hoverRow = useRef<HTMLElement | null>(null);
+  const trackPointer = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const row = (event.target as HTMLElement).closest<HTMLElement>(HOVER_ROWS);
+    if (!row) return;
+    if (row !== hoverRow.current) {
+      hoverRow.current = row;
+      const rect = row.getBoundingClientRect();
+      row.style.setProperty("--row-w", `${rect.width}px`);
+      row.style.setProperty("--row-h", `${rect.height}px`);
+    }
+    const rect = row.getBoundingClientRect();
+    row.style.setProperty("--mx", `${event.clientX - rect.left}px`);
+    row.style.setProperty("--my", `${event.clientY - rect.top}px`);
+  }, []);
+
   const version = `v${agentInfo?.version ?? "—"}${agentInfo?.build === undefined ? "" : ` (build: ${agentInfo.build})`}`;
   const mascotSrc = mascotDataUri(face);
 
   return (
-    <div className="app">
+    <div className="app" onPointerMove={trackPointer}>
       <div className={`shell ${maximized ? "maximized" : ""} ${animating ?? ""}`} onContextMenu={onContextMenu}>
         {/* The new-session blob: a slow crimson swell behind an empty
             conversation, gone the moment there is something to read. */}
@@ -1054,6 +1087,7 @@ export function App() {
               />
               <BarDropdown
                 label={providerName}
+                kind="provider"
                 title={snapshot?.provider?.endpoint ?? "no endpoint configured"}
                 open={openMenu === "provider"}
                 onOpenChange={(next) => setBarMenu("provider", next)}
@@ -1089,6 +1123,7 @@ export function App() {
               </BarDropdown>
               <BarDropdown
                 label={providerLabel}
+                kind="model"
                 title="Model"
                 open={openMenu === "model"}
                 onOpenChange={(next) => setBarMenu("model", next)}

@@ -187,7 +187,7 @@ button, input, textarea { font: inherit; color: inherit; }
 .resize-se { bottom: 0; right: 0; cursor: nwse-resize; }
 .resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 
-.bar-row { display: flex; align-items: stretch; gap: 10px; flex: none; margin: 8px 16px 0; position: relative; z-index: 20; }
+.bar-row { display: flex; align-items: stretch; gap: 10px; flex: none; margin: 0 16px 0; position: relative; z-index: 20; }
 .top-bar {
   flex: 1;
   min-width: 0;
@@ -216,6 +216,12 @@ button, input, textarea { font: inherit; color: inherit; }
 .dropdown-trigger[aria-expanded="true"] { background: var(--hl); color: var(--text); }
 .dropdown-trigger[aria-expanded="true"] .dropdown-caret { color: var(--text); }
 .dropdown-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+/* The category word the narrow bar shows above each value (see the 900px block).
+   In the wide bar the value is unambiguous on its own, and "session: " is the one
+   place it still helps — so it is shown there as a prefix, not as a heading. */
+.dd-kind { display: none; }
+.session-trigger .dd-kind { display: inline; color: var(--muted); }
+.session-trigger .dd-kind::after { content: ": "; }
 .dropdown-caret { color: var(--muted); display: inline-flex; }
 .status-meta { align-self: center; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; direction: rtl; }
 .mascot {
@@ -818,37 +824,97 @@ button, input, textarea { font: inherit; color: inherit; }
 .session-check { width: 16px; flex: none; color: var(--success); }
 
 /* --- the top bar at a narrow window -------------------------------------
-   Measured on the packaged app: the bar's four labels want ~750px of room
-   (session 215 + provider 83 + model 142 + path 211, plus gaps and padding),
-   a 40px mascot and 24px of padding, so at 700px every one of them was
-   already clipped and by 520px the path showed 164 of its 211px and the
-   provider trigger 10 of its 51. Squeezing harder is not a layout.
+   Measured on the packaged app: the bar's four labels want ~750px (session 215
+   + provider 83 + model 142 + path 211, plus gaps and padding), a 40px mascot
+   and 24px of padding. Below that, wrapping the bar onto two rows was worse than
+   clipping: a menu measured against a first-row trigger ended 24px above the
+   bar's own bottom edge, so it opened *inside* the bar and over the second row,
+   and the bar's two shapes had to be fused by hand for a case that should not
+   exist.
 
-   Below 820px the bar becomes two rows instead: the selectors on the first,
-   the working directory on the second with the room it needs. The "session: "
-   prefix is dropped there — the picker is the only conversation control on
-   screen, so the word is the one thing that can go without losing meaning.
-   Nothing is removed: every label stays, and every menu still opens. */
-@media (max-width: 820px) {
-  .top-bar { flex-wrap: wrap; row-gap: 4px; }
-  .selector-group { flex-wrap: wrap; row-gap: 4px; }
-  /* The mascot is `align-self: stretch` with a 1:1 aspect ratio, so a two-row
-     bar made it as tall as the bar was — 62px of a 438px bar spent on the face.
-     Pinned to its own size here, where every pixel is spoken for. */
-  .mascot { align-self: center; width: 40px; height: 40px; flex: none; }
-  .status-meta {
-    flex-basis: 100%;
-    max-width: 100%;
-    /* Its own row: the path reads left to right and is no longer competing for
-       a share of the bar, so the RTL trick that kept the path's tail visible
-       while it ellipsised would only right-align it here. */
-    direction: ltr;
-    text-align: left;
+   So the bar never wraps. Below 900px the three triggers stop being
+   label-and-value lines and become *categories* with the current value under
+   them — session / provider / model on top, the title, endpoint and model id
+   below — each sharing the row equally and ellipsising its own value. The path
+   goes first (it is repeated in the agent's own tool rows), then the mascot
+   shrinks, then the values ellipsise; nothing else is removed, and every menu
+   still opens below the bar rather than over it. */
+@media (max-width: 900px) {
+  .top-bar { flex-wrap: nowrap; }
+  .selector-group { flex-wrap: nowrap; gap: 6px; }
+  /* Equal shares of one row: the widths stop being a function of the labels, so
+     a long model id cannot push the picker off the edge. */
+  .selector-group > .session-dd { flex: 1 1 0; min-width: 0; }
+  .dropdown-trigger {
+    flex-direction: column; align-items: flex-start; justify-content: center;
+    gap: 0; width: 100%; padding: 4px 8px; text-align: left;
   }
-  .dd-prefix { display: none; }
-  /* The triggers keep a readable stub rather than collapsing to an ellipsis. */
-  .dropdown-trigger .dropdown-value { max-width: none; }
-  .session-trigger .dropdown-value { max-width: none; }
+  .dd-kind {
+    display: block; font-size: 9.5px; line-height: 1.2;
+    text-transform: uppercase; letter-spacing: 0.09em; color: var(--dim);
+  }
+  .dropdown-value { max-width: 100%; font-size: 13px; line-height: 1.25; }
+  .session-trigger .dropdown-value { max-width: 100%; }
+  .status-meta { display: none; }
+  /* `align-self: stretch` on a 1:1 box makes the mascot as tall as the bar; at
+     this width every pixel is spoken for. */
+  .mascot { align-self: center; width: 34px; height: 34px; flex: none; }
+}
+
+/* --- the hover highlight, which spreads from the pointer -------------------
+   Every row the pointer can land on (App.tsx's HOVER_ROWS) paints the same
+   highlight, and it is painted as a radial gradient centred on where the pointer
+   actually entered the row, growing from nothing to the whole row. The flat
+   `background: var(--hl)` each of these rules used to set is gone from the hover
+   states: a fill that switches on tells you the pointer is somewhere in the row,
+   and a fill that spreads from the cursor tells you where it is — the Windows 10
+   button behaviour, which is the one people already know how to read.
+
+   `--hl-r` is a registered custom property so it can be *animated*; without
+   @property a length inside a gradient is not interpolatable and the highlight
+   would snap on, which is the thing this is replacing. The fallback inside
+   `var()` is the finished radius, so a renderer that ignores @property gets the
+   spread as a still image rather than no highlight at all. */
+@property --hl-r {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+:is(.session-item, .panel-item, .context-item, .slash-item, .dropdown-trigger, .tool-header, .reasoning-header, .usage-row, .session-action):hover {
+  background-color: transparent;
+}
+:is(.session-item, .panel-item, .context-item, .slash-item, .dropdown-trigger, .tool-header, .reasoning-header, .usage-row, .session-action) {
+  position: relative;
+  isolation: isolate;
+}
+:is(.session-item, .panel-item, .context-item, .slash-item, .dropdown-trigger, .tool-header, .reasoning-header, .usage-row, .session-action)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  --hl-r: 0px;
+  background: radial-gradient(
+    circle var(--hl-r, calc(var(--row-w, 520px) * 1.1)) at var(--mx, 50%) var(--my, 50%),
+    var(--hl) 0%,
+    var(--hl) 55%,
+    transparent 100%);
+}
+:is(.session-item, .panel-item, .context-item, .slash-item, .dropdown-trigger, .tool-header, .reasoning-header, .usage-row, .session-action):hover::before {
+  opacity: 1;
+  animation: hl-spread 0.24s ease-out forwards;
+}
+@keyframes hl-spread {
+  from { --hl-r: 0px; }
+  to   { --hl-r: calc(var(--row-w, 520px) * 1.1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.session-item, .panel-item, .context-item, .slash-item, .dropdown-trigger, .tool-header, .reasoning-header, .usage-row, .session-action):hover::before {
+    animation: none;
+    --hl-r: calc(var(--row-w, 520px) * 1.1);
+  }
 }
 
 /* --- the right-click menu -------------------------------------------------

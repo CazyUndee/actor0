@@ -22,7 +22,10 @@ import { useMenuAnchor } from "./useMenuAnchor";
  * element can.
  */
 export function BarDropdown(props: {
+  /** The current value — the model id, the endpoint name. */
   label: string;
+  /** The category, shown only where the bar is too narrow to spell it out. */
+  kind: string;
   title?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -40,6 +43,7 @@ export function BarDropdown(props: {
         aria-expanded={props.open}
         onClick={() => props.onOpenChange(!props.open)}
       >
+        <span className="dd-kind">{props.kind}</span>
         <span className="dropdown-value">{props.label}</span>
         <span className="dropdown-caret"><Caret open={props.open} /></span>
       </button>

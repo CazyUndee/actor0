@@ -116,7 +116,8 @@ export function SessionDropdown(props: {
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <span className="dropdown-value"><span className="dd-prefix">session: </span>{label}</span>
+        <span className="dd-kind">session</span>
+        <span className="dropdown-value">{label}</span>
         <span className="dropdown-caret"><Caret open={open} /></span>
       </button>
 
