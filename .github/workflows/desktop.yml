@@ -77,15 +77,14 @@ jobs:
       # The installers are the thing a user double-clicks, so they are smoked
       # natively — silently installed and uninstalled, mounted and verified, or
       # inspected with dpkg-deb — rather than trusted because the archive under
-      # them passed.
+      # them passed. No target list is passed: one DMG covers the whole macOS
+      # set, so the script's own per-platform default is the only correct
+      # answer, and a loop over the matrix targets asked for a mac_x64.dmg that
+      # deliberately does not exist.
       - name: Smoke each installer
         working-directory: apps/desktop/web
         shell: bash
-        run: |
-          set -euo pipefail
-          for target in ${{ matrix.targets }}; do
-            node scripts/smoke-installers.mjs "$target"
-          done
+        run: node scripts/smoke-installers.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.os }}
