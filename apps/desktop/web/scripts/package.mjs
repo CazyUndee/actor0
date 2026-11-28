@@ -62,7 +62,7 @@ import { stageLauncher } from "./stage-launcher.mjs";
 import { createTarGz, extractTarGz, makeExecutablePredicate } from "./tar.mjs";
 import { createDeb } from "./deb.mjs";
 import { buildDmg } from "./dmg.mjs";
-import { buildWindowsInstaller } from "./nsis.mjs";
+import { buildWindowsInstaller, findMakensis } from "./nsis.mjs";
 import {
   DIST_BASE,
   TARGETS,
@@ -316,6 +316,61 @@ function writeChecksum(path) {
  * Windows has one target, so its setup executable always corresponds to
  * win_x64. Debian packages are produced for every Linux target.
  */
+/**
+ * The NSIS compiler, downloaded from its pinned release like rcedit.
+ *
+ * The Windows installer needs `makensis`, and the Windows *runner* has none.
+ * The first attempt installed it from Chocolatey, which turned out to be two
+ * failures in one: its feed answers 503/504 from GitHub's runners often enough
+ * to have failed two runs out of three, and `choco install` exits 0 when it
+ * installs 0/0 packages, so the failure surfaced thirty seconds later as
+ * "NSIS is required to build the Windows installer" from this file. A build
+ * step that can report success having done nothing is not a build step.
+ *
+ * So: fetch the official archive once, check its hash, unpack it beside the
+ * other tools. `tar` unpacks a zip (bsdtar) on Windows 10+, which is what the
+ * runtime download already relies on. A local `makensis` still wins, so a
+ * developer who has NSIS installed uses the one they installed.
+ */
+const NSIS_URL = "https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip";
+const NSIS_SHA256 = "c7d27f780ddb6cffb4730138cd1591e841f4b7edb155856901cdf5f214394fa1";
+
+async function ensureMakensis() {
+  const local = findMakensis({ optional: true });
+  if (local) return local;
+
+  const dir = join(webRoot, ".tools", "nsis-3.11");
+  const marker = join(dir, ".source-sha256");
+  const makensis = join(dir, "makensis.exe");
+  if (existsSync(makensis) && existsSync(marker) && readFileSync(marker, "utf8").trim() === NSIS_SHA256) {
+    return makensis;
+  }
+
+  const archive = join(webRoot, ".tools", "nsis-3.11.zip");
+  mkdirSync(join(webRoot, ".tools"), { recursive: true });
+  console.log("downloading NSIS for the Windows installer...");
+  await download(NSIS_URL, archive);
+  const actual = sha256(archive);
+  if (actual !== NSIS_SHA256) {
+    rmSync(archive, { force: true });
+    throw new Error(`NSIS checksum mismatch: expected ${NSIS_SHA256}, got ${actual}`);
+  }
+
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  // The archive has a single `nsis-3.11/` root, and extracting into it would
+  // add a second level; unpack and let the inner directory be flattened.
+  const unpacked = join(webRoot, ".tools", "nsis-unpacked");
+  rmSync(unpacked, { recursive: true, force: true });
+  mkdirSync(unpacked, { recursive: true });
+  extractZip(archive, unpacked);
+  cpSync(join(unpacked, "nsis-3.11"), dir, { recursive: true });
+  rmSync(unpacked, { recursive: true, force: true });
+  if (!existsSync(makensis)) throw new Error(`NSIS did not unpack to ${makensis} — delete ${dir} and build again`);
+  writeFileSync(marker, NSIS_SHA256);
+  return makensis;
+}
+
 async function buildInstallers(targets) {
   const made = [];
   const universal = targets.includes("mac_universal");
@@ -327,6 +382,7 @@ async function buildInstallers(targets) {
     rmSync(artifact, { force: true });
     if (target.os === "win32") {
       buildWindowsInstaller({
+        makensis: await ensureMakensis(),
         staging,
         outFile: artifact,
         version: appVersion,

@@ -10,8 +10,8 @@
  * %USERPROFILE%\.actor0 and is deliberately left behind on uninstall.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, rmSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 
 /** NSIS expands $ in strings; a path may legitimately contain one. */
 function nsiPath(path) {
@@ -116,8 +116,14 @@ export function nsisScript({ staging, outFile, version, binaryName, icon }) {
   ].join("\n");
 }
 
-/** Find the NSIS compiler, including Chocolatey's shim and the default install. */
-export function findMakensis() {
+/**
+ * Find an NSIS compiler the machine already has.
+ *
+ * `optional` returns undefined instead of throwing, for the packaging path that
+ * can fetch its own copy: a developer with NSIS installed compiles with the one
+ * they installed, and a machine with none downloads the pinned release.
+ */
+export function findMakensis({ optional = false } = {}) {
   const candidates = [
     process.env.MAKENSIS,
     join(process.env.ProgramFiles || "C:\\Program Files", "NSIS", "makensis.exe"),
@@ -133,19 +139,21 @@ export function findMakensis() {
       if (existsSync(candidate)) return candidate;
     }
   }
+  if (optional) return undefined;
   throw new Error(
     "NSIS is required to build the Windows installer.\n" +
-      "  Install it with: choco install nsis --version=3.13.0 -y\n" +
+      "  node scripts/package.mjs win_x64 fetches its own copy,\n" +
       "  or set MAKENSIS to the full path of makensis.exe.",
   );
 }
 
 /** Compile the setup executable and leave no generated .nsi in the release output. */
-export function buildWindowsInstaller({ staging, outFile, version, binaryName, icon, webRoot }) {
+export function buildWindowsInstaller({ staging, outFile, version, binaryName, icon, webRoot, makensis }) {
   const scriptPath = join(webRoot, ".tools", "actor0-win_x64.nsi");
+  mkdirSync(dirname(scriptPath), { recursive: true });
   writeFileSync(scriptPath, nsisScript({ staging, outFile, version, binaryName, icon }));
   try {
-    execFileSync(findMakensis(), ["/V2", scriptPath], { stdio: "inherit" });
+    execFileSync(makensis || findMakensis(), ["/V2", scriptPath], { stdio: "inherit" });
   } finally {
     rmSync(scriptPath, { force: true });
   }
