@@ -78,6 +78,22 @@ describe("saving and loading", () => {
     assert.doesNotMatch(id, /[:.]/);
   });
 
+  it("gives two sessions minted in the same millisecond their own file", () => {
+    // CI caught this the only way it can be seen: three branches of one
+    // conversation in one millisecond produced one id, so the last write stood
+    // for all three and the source conversation came back wearing the branch's
+    // title. Equal ids are equal files, so the second session overwrote the
+    // first without any error at all.
+    const now = new Date("2026-11-28T10:00:00.000Z");
+    const first = newSessionId(now);
+    const second = newSessionId(now);
+    const third = newSessionId(now);
+    assert.notEqual(first, second);
+    assert.notEqual(second, third);
+    // Still sortable, so the picker's ordering is unchanged.
+    assert.ok(third.startsWith(first));
+  });
+
   it("refuses an id that would escape the sessions directory", () => {
     assert.throws(() => saveSession({ id: "../escape", createdAt: "", updatedAt: "", model: "", messages: [] }), /invalid session id/);
     assert.equal(loadSession("../../etc/passwd"), undefined);

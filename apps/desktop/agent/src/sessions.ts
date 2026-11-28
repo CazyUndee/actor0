@@ -60,8 +60,28 @@ function isChatMessage(value: unknown): value is ChatMessage {
 
 export function newSessionId(now = new Date()): string {
   // Sortable, filesystem-safe, readable: 2026-09-27T12-34-56-789Z
-  return now.toISOString().replace(/[:.]/g, "-");
+  //
+  // A millisecond is not a session: `/clear` followed by a branch, or three
+  // branches of one conversation, can land in the same millisecond (a CI runner
+  // does). Two ids that are equal are one file, so the second session silently
+  // *overwrote* the first — CI caught it as a branched conversation's source
+  // wearing the branch's title, which is the signature of two writes to one
+  // path. The counter keeps the format sortable while making the value unique
+  // within this process; a collision across processes would need two hosts
+  // starting a session in the same millisecond, and the rename below is atomic
+  // either way.
+  const base = now.toISOString().replace(/[:.]/g, "-");
+  if (base === lastSessionIdBase) {
+    sessionIdCounter += 1;
+    return `${base}-${sessionIdCounter}`;
+  }
+  lastSessionIdBase = base;
+  sessionIdCounter = 0;
+  return base;
 }
+
+let lastSessionIdBase = "";
+let sessionIdCounter = 0;
 
 export function sessionFile(id: string): string {
   return join(sessionsDir(), `${id}.json`);
