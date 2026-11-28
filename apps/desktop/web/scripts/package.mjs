@@ -60,10 +60,14 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stageLauncher } from "./stage-launcher.mjs";
 import { createTarGz, extractTarGz, makeExecutablePredicate } from "./tar.mjs";
+import { createDeb } from "./deb.mjs";
+import { buildDmg } from "./dmg.mjs";
+import { buildWindowsInstaller } from "./nsis.mjs";
 import {
   DIST_BASE,
   TARGETS,
   artifactName,
+  installerName,
   isWindows,
   neuBinaryName,
   stagedBinaryName,
@@ -88,7 +92,9 @@ async function main() {
   buildShell(targets);
   writeReleaseFiles();
   for (const targetId of targets) await stageTarget(targetId);
-  console.log("\ndone: " + targets.map((targetId) => artifactName(appVersion, targetId)).join(", "));
+  const installers = await buildInstallers(targets);
+  const names = [...targets.map((targetId) => artifactName(appVersion, targetId)), ...installers];
+  console.log("\ndone: " + names.join(", "));
 }
 
 function readAppVersion() {
@@ -289,10 +295,62 @@ async function stageTarget(targetId) {
       executable: makeExecutablePredicate(binaryName),
     });
   }
-  const hash = sha256(artifact);
-  writeFileSync(`${artifact}.sha256`, `${hash}  ${basename(artifact)}\n`);
+  writeChecksum(artifact);
   const size = statSync(artifact).size / 1048576;
   console.log(`\nok ${artifactName(appVersion, targetId)} (${size.toFixed(1)} MB)`);
+}
+
+function writeChecksum(path) {
+  const hash = sha256(path);
+  writeFileSync(`${path}.sha256`, `${hash}  ${basename(path)}\n`);
+  return hash;
+}
+
+/**
+ * Build the native installers after every archive exists.
+ *
+ * They consume the same staging tree as the archive, so the bytes a user
+ * installs and the bytes a smoke test unpacks cannot drift. macOS gets one
+ * universal DMG when that target was built (three near-identical disk images
+ * would be release clutter); a single-arch mac build still gets its own DMG.
+ * Windows has one target, so its setup executable always corresponds to
+ * win_x64. Debian packages are produced for every Linux target.
+ */
+async function buildInstallers(targets) {
+  const made = [];
+  const universal = targets.includes("mac_universal");
+  for (const targetId of targets) {
+    const target = TARGETS[targetId];
+    if (target.os === "darwin" && universal && targetId !== "mac_universal") continue;
+    const staging = join(distRoot, `build-${targetId}`);
+    const artifact = join(distRoot, installerName(appVersion, targetId));
+    rmSync(artifact, { force: true });
+    if (target.os === "win32") {
+      buildWindowsInstaller({
+        staging,
+        outFile: artifact,
+        version: appVersion,
+        binaryName: stagedBinaryName(appVersion, targetId),
+        icon: join(webRoot, "resources", "app", "icon.ico"),
+        webRoot,
+      });
+    } else if (target.os === "darwin") {
+      buildDmg({ appDir: join(staging, "actor0.app"), outFile: artifact, version: appVersion });
+    } else {
+      await createDeb({
+        layout: staging,
+        version: appVersion,
+        targetId,
+        outFile: artifact,
+        binaryName: stagedBinaryName(appVersion, targetId),
+      });
+    }
+    writeChecksum(artifact);
+    const size = statSync(artifact).size / 1048576;
+    console.log(`ok ${installerName(appVersion, targetId)} (${size.toFixed(1)} MB)`);
+    made.push(installerName(appVersion, targetId));
+  }
+  return made;
 }
 
 /**

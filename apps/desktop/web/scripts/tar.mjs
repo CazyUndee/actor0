@@ -120,7 +120,7 @@ function walk(dir, base, out) {
  * top-level directory, which a user extracting a tarball expects and which
  * cannot be added afterwards without rewriting the archive.
  */
-export async function createTarGz(srcDir, outFile, { executable = () => false, mtime, prefix = "" } = {}) {
+export async function createTarGz(srcDir, outFile, { executable = () => false, mtime, prefix = "", level = 9 } = {}) {
   const root = prefix.replace(/\/+$/, "");
   const entries = [];
   walk(srcDir, srcDir, entries);
@@ -129,7 +129,7 @@ export async function createTarGz(srcDir, outFile, { executable = () => false, m
     entry.mode = executable(entry.rel) ? 0o755 : 0o644;
   }
 
-  const gzip = createGzip({ level: 9 });
+  const gzip = createGzip({ level });
   const out = createWriteStream(outFile);
   gzip.pipe(out);
   let fatal;

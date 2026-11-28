@@ -42,7 +42,7 @@ for node in "$appdir"/runtime/*/node; do
   [ -f "$node" ] && chmod +x "$node"
 done
 
-ln -sf "$appdir/actor0" "$bindir/actor0"
+ln -sf "$appdir/actor0" "$bindir/actor0-desktop"
 
 cat > "$appsdir/actor0.desktop" <<EOF
 [Desktop Entry]
@@ -61,4 +61,4 @@ if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$appsdir" >/dev/null 2>&1 || true
 fi
 
-printf 'installed actor0 in %s\nrun: %s/actor0\n' "$appdir" "$bindir"
+printf 'installed actor0 in %s\nrun: %s/actor0-desktop\n' "$appdir" "$bindir"

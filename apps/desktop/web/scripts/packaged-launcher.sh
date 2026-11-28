@@ -38,7 +38,7 @@ set -u
 # In the .app this script is Contents/Resources/run.sh, launched by the Mach-O
 # stub in Contents/MacOS, which exports the executable directory. Everywhere
 # else (the Linux tarball) the script's own directory is the app directory.
-# install.sh also links $PREFIX/bin/actor0 to this file; resolve that link
+# install.sh also links $PREFIX/bin/actor0-desktop to this file; resolve that link
 # first, or the app directory would look like $PREFIX/bin.
 script=$0
 while [ -h "$script" ]; do

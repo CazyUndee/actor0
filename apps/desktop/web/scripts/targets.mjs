@@ -115,9 +115,9 @@ export const TARGETS = {
     flavours: ["darwin-x64", "darwin-arm64"],
     archive: "zip",
   },
-  linux_x64: { os: "linux", arch: "x64", slug: "linux-x64", flavour: "linux-x64", archive: "tar.gz" },
-  linux_arm64: { os: "linux", arch: "arm64", slug: "linux-arm64", flavour: "linux-arm64", archive: "tar.gz" },
-  linux_armhf: { os: "linux", arch: "armhf", slug: "linux-armhf", flavour: "linux-armv7l", archive: "tar.gz" },
+  linux_x64: { os: "linux", arch: "x64", slug: "linux-x64", flavour: "linux-x64", archive: "tar.gz", deb: "amd64" },
+  linux_arm64: { os: "linux", arch: "arm64", slug: "linux-arm64", flavour: "linux-arm64", archive: "tar.gz", deb: "arm64" },
+  linux_armhf: { os: "linux", arch: "armhf", slug: "linux-armhf", flavour: "linux-armv7l", archive: "tar.gz", deb: "armhf" },
 };
 
 /** The Node flavours a target bundles — two for the universal macOS build. */
@@ -163,4 +163,19 @@ export function stagedBinaryName(version, targetId) {
 export function artifactName(version, targetId) {
   const ext = archiveKind(targetId) === "tar.gz" ? "tar.gz" : "zip";
   return `actor0-desktop-${version}-${targetId}.${ext}`;
+}
+
+/**
+ * The platform-native installer beside the archive.
+ *
+ * Debian names are package_version_architecture.deb (underscores, no target
+ * id); the other two keep the target id so a download page can match an
+ * installer to the archive it replaces.
+ */
+export function installerName(version, targetId) {
+  const target = TARGETS[targetId];
+  if (!target) throw new Error(`unknown target "${targetId}"`);
+  if (target.os === "win32") return `actor0-desktop-${version}-${targetId}-setup.exe`;
+  if (target.os === "darwin") return `actor0-desktop-${version}-${targetId}.dmg`;
+  return `actor0-desktop_${version}_${target.deb}.deb`;
 }
