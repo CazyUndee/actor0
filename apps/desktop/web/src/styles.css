@@ -497,7 +497,12 @@ button, input, textarea { font: inherit; color: inherit; }
    (the shift-cmd-k convention every desktop app converged on). */
 .slash-modal {
   position: fixed; inset: 38px 0 0 0; z-index: 50;
-  display: flex; align-items: center; justify-content: center;
+  /* Top-anchored, like every other menu. Centred, the card re-centred itself
+     every time the query narrowed the list, so the row under the pointer — and
+     the row under the arrow keys — moved while being read. A list whose length
+     is a function of what you are typing cannot also be positioned by its
+     length. `padding-top` keeps it clear of the bar. */
+  display: flex; align-items: flex-start; justify-content: center; padding-top: 28px;
   background: rgba(10, 10, 10, 0.45);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
@@ -509,8 +514,11 @@ button, input, textarea { font: inherit; color: inherit; }
   transform-origin: top center;
   animation: push-open 0.25s cubic-bezier(0.22, 0.9, 0.24, 1.06);
 }
+/* No rule between rows: the other panels separate groups with `.panel-divider`
+   and individual rows with the hover wash, and this one had a 2px line between
+   every command, which made the palette look like a different component from
+   the menus it is opened from. */
 .slash-item { padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
-.slash-item + .slash-item { border-top: 2px solid var(--border-subtle); }
 .slash-item.selected { background: var(--hl); }
 .slash-name { color: var(--accent-text); font-size: 14px; }
 .slash-desc { color: var(--muted); font-size: 13.5px; }
